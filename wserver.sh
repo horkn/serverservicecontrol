@@ -631,21 +631,762 @@ EOF
 
 install_mysql() {
     print_info "MySQL/MariaDB kuruluyor..."
-    apt install -y mariadb-server
     
-    # MySQL güvenlik yapılandırması
-    mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; FLUSH PRIVILEGES;"
+    # Eğer MySQL zaten kuruluysa ve hata veriyorsa, temizleme seçeneği
+    if systemctl is-active --quiet mariadb 2>/dev/null || systemctl is-active --quiet mysql 2>/dev/null || \
+       dpkg -l | grep -q "mariadb\|mysql-server" 2>/dev/null; then
+        print_warning "MySQL/MariaDB zaten kurulu görünüyor"
+        if ask_yes_no "Mevcut kurulumu kaldırıp yeniden kurmak ister misiniz? (UYARI: Tüm veriler silinecek!)"; then
+            print_info "Mevcut MySQL/MariaDB kapsamlı temizleme yapılıyor..."
+            
+            # Önce çalışan tüm MySQL/MariaDB process'lerini zorla durdur
+            print_info "Çalışan MySQL/MariaDB process'leri durduruluyor..."
+            pkill -9 mysqld 2>/dev/null || true
+            pkill -9 mariadbd 2>/dev/null || true
+            pkill -9 mysqld_safe 2>/dev/null || true
+            pkill -9 mariadb 2>/dev/null || true
+            sleep 3
+            
+            # Servisleri durdur (systemd varsa)
+            systemctl stop mariadb 2>/dev/null || true
+            systemctl stop mysql 2>/dev/null || true
+            systemctl disable mariadb 2>/dev/null || true
+            systemctl disable mysql 2>/dev/null || true
+            sleep 2
+            
+            # Broken dependencies'i düzelt
+            print_info "Broken dependencies düzeltiliyor..."
+            apt --fix-broken install -y 2>/dev/null || true
+            
+            # Tüm MariaDB/MySQL paketlerini kaldır
+            print_info "MariaDB/MySQL paketleri kaldırılıyor..."
+            
+            # Önce kısmi kurulumları temizle
+            dpkg --remove --force-remove-reinstreq mariadb-server mariadb-client mariadb-common 2>/dev/null || true
+            dpkg --remove --force-remove-reinstreq mysql-server mysql-client mysql-common 2>/dev/null || true
+            
+            # Sonra normal kaldırma
+            apt remove --purge -y \
+                mariadb-server mariadb-client mariadb-common \
+                mysql-server mysql-client mysql-common \
+                mariadb-server-* mariadb-client-* \
+                mysql-server-* mysql-client-* \
+                galera-* 2>/dev/null || true
+            
+            # update-alternatives temizliği
+            print_info "update-alternatives temizleniyor..."
+            update-alternatives --remove-all mysql 2>/dev/null || true
+            update-alternatives --remove-all mysqldump 2>/dev/null || true
+            update-alternatives --remove-all mysqladmin 2>/dev/null || true
+            update-alternatives --remove-all mysqlcheck 2>/dev/null || true
+            
+            # Eksik dosyaları oluştur (dpkg hatasını önlemek için)
+            if [ ! -d "/etc/mysql" ]; then
+                mkdir -p /etc/mysql
+            fi
+            if [ ! -f "/etc/mysql/mariadb.cnf" ]; then
+                touch /etc/mysql/mariadb.cnf
+            fi
+            
+            # dpkg yapılandırmasını düzelt
+            print_info "dpkg yapılandırması düzeltiliyor..."
+            dpkg --configure -a 2>/dev/null || true
+            
+            # Broken dependencies'i tekrar düzelt
+            apt --fix-broken install -y 2>/dev/null || true
+            
+            # Kalan paketleri temizle
+            apt autoremove -y
+            apt autoclean
+            
+            # Eksik bağımlılıkları kur
+            apt-get -f install -y 2>/dev/null || true
+            
+            # dpkg durumunu kontrol et ve düzelt
+            print_info "dpkg durumu kontrol ediliyor..."
+            dpkg --configure -a 2>/dev/null || true
+            
+            # Veri ve yapılandırma dizinlerini temizle
+            print_info "Veri ve yapılandırma dizinleri temizleniyor..."
+            rm -rf /var/lib/mysql
+            rm -rf /etc/mysql
+            rm -rf /var/log/mysql
+            rm -rf /run/mysqld
+            rm -f /etc/init.d/mysql
+            rm -f /etc/init.d/mariadb
+            
+            # Systemd servis dosyalarını temizle
+            rm -f /etc/systemd/system/mariadb.service
+            rm -f /etc/systemd/system/mysql.service
+            rm -f /lib/systemd/system/mariadb.service
+            rm -f /lib/systemd/system/mysql.service
+            systemctl daemon-reload
+            
+            print_success "Kapsamlı temizleme tamamlandı"
+            sleep 2
+        fi
+    fi
     
-    mysql_secure_installation <<EOF
-y
-0
-y
-y
-y
-y
+    # Kurulum öncesi çalışan process kontrolü
+    print_info "Kurulum öncesi kontrol yapılıyor..."
+    
+    # Çalışan MySQL/MariaDB process'lerini kontrol et ve durdur
+    if pgrep -x mysqld > /dev/null 2>&1 || pgrep -x mariadbd > /dev/null 2>&1 || \
+       pgrep -f mysqld_safe > /dev/null 2>&1; then
+        print_warning "Çalışan MySQL/MariaDB process'leri tespit edildi, durduruluyor..."
+        pkill -9 mysqld 2>/dev/null || true
+        pkill -9 mariadbd 2>/dev/null || true
+        pkill -9 mysqld_safe 2>/dev/null || true
+        sleep 2
+    fi
+    
+    # Broken dependencies kontrolü
+    if dpkg -l | grep -q "^..r" 2>/dev/null; then
+        print_info "Broken dependencies tespit edildi, düzeltiliyor..."
+        apt --fix-broken install -y 2>/dev/null || true
+        dpkg --configure -a 2>/dev/null || true
+    fi
+    
+    # Önce eksik dizinleri ve dosyaları oluştur (dpkg hatasını önlemek için)
+    print_info "Gerekli dizinler ve dosyalar oluşturuluyor..."
+    mkdir -p /etc/mysql
+    mkdir -p /var/log/mysql
+    mkdir -p /run/mysqld
+    
+    # /var/lib/mysql dizinini kontrol et ve temizle (InnoDB/Aria hatalarını önlemek için)
+    if [ -d "/var/lib/mysql" ]; then
+        print_info "Mevcut veri dizini kontrol ediliyor..."
+        
+        # Eğer dizin bozuk görünüyorsa (ibdata1 veya mysql klasörü yoksa), temizle
+        if [ ! -f "/var/lib/mysql/ibdata1" ] && [ ! -d "/var/lib/mysql/mysql" ]; then
+            print_warning "Bozuk veri dizini tespit edildi, temizleniyor..."
+            rm -rf /var/lib/mysql/*
+            rm -rf /var/lib/mysql/.* 2>/dev/null || true
+        elif [ -f "/var/lib/mysql/ibdata1" ] && [ ! -d "/var/lib/mysql/mysql" ]; then
+            print_warning "Eksik sistem tabloları tespit edildi, veri dizini temizleniyor..."
+            rm -rf /var/lib/mysql/*
+            rm -rf /var/lib/mysql/.* 2>/dev/null || true
+        fi
+    else
+        mkdir -p /var/lib/mysql
+    fi
+    
+    # Eksik mariadb.cnf dosyasını oluştur (update-alternatives hatasını önlemek için)
+    if [ ! -f "/etc/mysql/mariadb.cnf" ]; then
+        cat > /etc/mysql/mariadb.cnf <<'EOF'
+# MariaDB yapılandırma dosyası
+# Bu dosya update-alternatives için gerekli
+[client-server]
+EOF
+        chmod 644 /etc/mysql/mariadb.cnf
+    fi
+    
+    # dpkg yapılandırmasını düzelt (varsa hatalar)
+    print_info "dpkg yapılandırması kontrol ediliyor..."
+    dpkg --configure -a 2>/dev/null || true
+    
+    # MariaDB kurulumu için debconf ayarları
+    print_info "MariaDB kurulum yapılandırması hazırlanıyor..."
+    
+    # MariaDB için debconf ayarları (non-interactive kurulum)
+    # Tüm MariaDB versiyonları için genel ayarlar
+    debconf-set-selections <<EOF
+mariadb-server-* mariadb-server/root_password password $MYSQL_ROOT_PASSWORD
+mariadb-server-* mariadb-server/root_password_again password $MYSQL_ROOT_PASSWORD
+mariadb-server-* mariadb-server/oneway_migration boolean true
+mariadb-server-* mariadb-server/upgrade_backup boolean false
+mariadb-common mariadb-common/selected-server select mariadb-server
 EOF
     
-    print_success "MySQL kurulumu tamamlandı"
+    # APT paket listesini güncelle
+    print_info "Paket listesi güncelleniyor..."
+    apt update
+    
+    # MariaDB kurulumu (non-interactive)
+    print_info "MariaDB kuruluyor..."
+    
+    # Kurulum öncesi son kontrol
+    if pgrep -x mysqld > /dev/null 2>&1 || pgrep -x mariadbd > /dev/null 2>&1; then
+        print_warning "Hala çalışan process'ler var, zorla durduruluyor..."
+        pkill -9 mysqld 2>/dev/null || true
+        pkill -9 mariadbd 2>/dev/null || true
+        sleep 2
+    fi
+    
+    if ! DEBIAN_FRONTEND=noninteractive apt install -y mariadb-server mariadb-client mariadb-common; then
+        print_warning "MariaDB kurulumunda bazı hatalar oluştu, kapsamlı düzeltme yapılıyor..."
+        
+        # Çalışan process'leri durdur
+        pkill -9 mysqld 2>/dev/null || true
+        pkill -9 mariadbd 2>/dev/null || true
+        pkill -9 mysqld_safe 2>/dev/null || true
+        sleep 2
+        
+        # Broken dependencies'i düzelt
+        print_info "Broken dependencies düzeltiliyor..."
+        apt --fix-broken install -y 2>/dev/null || true
+        
+        # dpkg yapılandırmasını düzelt
+        print_info "dpkg yapılandırması düzeltiliyor..."
+        dpkg --configure -a 2>/dev/null || true
+        
+        # Kısmi kurulumları temizle
+        print_info "Kısmi kurulumlar temizleniyor..."
+        dpkg --remove --force-remove-reinstreq mariadb-server mariadb-client mariadb-common 2>/dev/null || true
+        
+        # Eksik bağımlılıkları kur
+        print_info "Eksik bağımlılıklar kuruluyor..."
+        apt-get -f install -y 2>/dev/null || true
+        
+        # Tekrar kurulum dene
+        print_info "Kurulum tekrar deneniyor..."
+        if ! DEBIAN_FRONTEND=noninteractive apt install -y mariadb-server mariadb-client mariadb-common; then
+            print_error "MariaDB kurulumu başarısız oldu!"
+            print_info "Manuel kurulum için:"
+            echo "  1. sudo pkill -9 mysqld mariadbd mysqld_safe"
+            echo "  2. sudo apt --fix-broken install"
+            echo "  3. sudo apt install -y mariadb-server mariadb-client"
+            return 1
+        fi
+    fi
+    
+    # Veri dizinini kontrol et ve gerekirse initialize et
+    print_info "MariaDB veri dizini kontrol ediliyor..."
+    
+    # MySQL kullanıcısının varlığını kontrol et
+    if ! id mysql &>/dev/null; then
+        print_info "MySQL kullanıcısı oluşturuluyor..."
+        useradd -r -s /bin/false mysql 2>/dev/null || true
+    fi
+    
+    # Dizin izinlerini ayarla
+    chown -R mysql:mysql /var/lib/mysql 2>/dev/null || true
+    chown -R mysql:mysql /var/log/mysql 2>/dev/null || true
+    chown -R mysql:mysql /run/mysqld 2>/dev/null || true
+    
+    # Veri dizini boşsa veya sistem tabloları yoksa initialize et
+    if [ ! -d "/var/lib/mysql/mysql" ] || [ -z "$(ls -A /var/lib/mysql 2>/dev/null)" ]; then
+        print_info "MariaDB veri dizini initialize ediliyor (InnoDB/Aria hatalarını önlemek için)..."
+        
+        # mysql_install_db veya mariadb-install-db komutunu kullan
+        if command -v mariadb-install-db &>/dev/null; then
+            sudo -u mysql mariadb-install-db --datadir=/var/lib/mysql --auth-root-authentication-method=normal --auth-root-socket-user=mysql --skip-test-db 2>&1 | tail -20
+        elif command -v mysql_install_db &>/dev/null; then
+            sudo -u mysql mysql_install_db --datadir=/var/lib/mysql --auth-root-authentication-method=normal --skip-test-db 2>&1 | tail -20
+        else
+            print_warning "mysql_install_db veya mariadb-install-db bulunamadı, servis başlatma ile initialize edilecek"
+        fi
+        
+        # İzinleri tekrar ayarla
+        chown -R mysql:mysql /var/lib/mysql
+        chmod 755 /var/lib/mysql
+    else
+        print_info "Veri dizini zaten mevcut, izinler kontrol ediliyor..."
+        chown -R mysql:mysql /var/lib/mysql
+    fi
+    
+    # Servis dosyasının varlığını kontrol et
+    print_info "MariaDB servis dosyası kontrol ediliyor..."
+    local service_file=""
+    
+    if [ -f "/lib/systemd/system/mariadb.service" ]; then
+        service_file="/lib/systemd/system/mariadb.service"
+    elif [ -f "/etc/systemd/system/mariadb.service" ]; then
+        service_file="/etc/systemd/system/mariadb.service"
+    elif [ -f "/usr/lib/systemd/system/mariadb.service" ]; then
+        service_file="/usr/lib/systemd/system/mariadb.service"
+    fi
+    
+    if [ -z "$service_file" ]; then
+        print_warning "MariaDB servis dosyası bulunamadı, oluşturuluyor..."
+        
+        # Basit bir systemd servis dosyası oluştur
+        cat > /etc/systemd/system/mariadb.service <<'EOF'
+[Unit]
+Description=MariaDB database server
+After=network.target
+
+[Service]
+Type=notify
+User=mysql
+Group=mysql
+ExecStart=/usr/bin/mysqld_safe
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        
+        systemctl daemon-reload
+        service_file="/etc/systemd/system/mariadb.service"
+    fi
+    
+    # Servis başlatma
+    print_info "MariaDB servisi başlatılıyor..."
+    
+    # Systemd daemon'u yeniden yükle
+    systemctl daemon-reload
+    
+    # Servisi etkinleştir
+    systemctl enable mariadb 2>/dev/null || systemctl enable mariadb.service 2>/dev/null || true
+    
+    # Servisi başlat
+    systemctl start mariadb 2>/dev/null || systemctl start mariadb.service 2>/dev/null || true
+    
+    # Alternatif: mysqld_safe ile başlat
+    if ! systemctl is-active --quiet mariadb 2>/dev/null; then
+        print_warning "systemctl ile başlatılamadı, alternatif yöntem deneniyor..."
+        
+        # MySQL kullanıcısının varlığını kontrol et
+        if ! id mysql &>/dev/null; then
+            print_info "MySQL kullanıcısı oluşturuluyor..."
+            useradd -r -s /bin/false mysql 2>/dev/null || true
+        fi
+        
+        # Dizin izinlerini ayarla
+        chown -R mysql:mysql /var/lib/mysql 2>/dev/null || true
+        chown -R mysql:mysql /var/log/mysql 2>/dev/null || true
+        chown -R mysql:mysql /run/mysqld 2>/dev/null || true
+        
+        # mysqld_safe ile başlat
+        sudo -u mysql mysqld_safe --user=mysql > /dev/null 2>&1 &
+        sleep 5
+    fi
+    
+    # Servisin başladığından emin ol
+    local retry_count=0
+    while [ $retry_count -lt 15 ]; do
+        if systemctl is-active --quiet mariadb 2>/dev/null || \
+           pgrep -x mysqld > /dev/null 2>&1 || \
+           pgrep -f mysqld_safe > /dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+        ((retry_count++))
+    done
+    
+    # Servis durumunu kontrol et
+    if systemctl is-active --quiet mariadb 2>/dev/null; then
+        print_success "MariaDB servisi başlatıldı (systemd)"
+    elif pgrep -x mysqld > /dev/null 2>&1 || pgrep -f mysqld_safe > /dev/null 2>&1; then
+        print_success "MariaDB servisi başlatıldı (manuel)"
+    else
+        print_error "MariaDB başlatılamadı!"
+        
+        # Log kontrolü - InnoDB/Aria hatalarını kontrol et
+        local error_log=$(journalctl -u mariadb -n 20 --no-pager 2>/dev/null | grep -i "innodb\|aria\|storage engine" || echo "")
+        
+        if echo "$error_log" | grep -qi "innodb\|aria\|storage engine"; then
+            print_warning "InnoDB/Aria storage engine hatası tespit edildi!"
+            print_info "Veri dizini yeniden initialize ediliyor..."
+            
+            # Servisi durdur
+            systemctl stop mariadb 2>/dev/null || true
+            pkill -9 mysqld 2>/dev/null || true
+            pkill -9 mysqld_safe 2>/dev/null || true
+            sleep 3
+            
+            # Veri dizinini temizle
+            rm -rf /var/lib/mysql/*
+            rm -rf /var/lib/mysql/.* 2>/dev/null || true
+            
+            # Veri dizinini yeniden initialize et
+            if command -v mariadb-install-db &>/dev/null; then
+                sudo -u mysql mariadb-install-db --datadir=/var/lib/mysql --auth-root-authentication-method=normal --auth-root-socket-user=mysql --skip-test-db
+            elif command -v mysql_install_db &>/dev/null; then
+                sudo -u mysql mysql_install_db --datadir=/var/lib/mysql --auth-root-authentication-method=normal --skip-test-db
+            fi
+            
+            # İzinleri ayarla
+            chown -R mysql:mysql /var/lib/mysql
+            chmod 755 /var/lib/mysql
+            
+            # Servisi tekrar başlat
+            systemctl start mariadb
+            sleep 5
+            
+            # Tekrar kontrol et
+            if systemctl is-active --quiet mariadb 2>/dev/null; then
+                print_success "MariaDB servisi başlatıldı (veri dizini yeniden initialize edildi)"
+            else
+                print_error "MariaDB hala başlatılamadı!"
+                print_info "Log kontrolü: journalctl -u mariadb -n 50"
+                print_info "Manuel başlatma: sudo -u mysql mysqld_safe --user=mysql &"
+                return 1
+            fi
+        else
+            print_info "Log kontrolü: journalctl -u mariadb -n 50"
+            print_info "Manuel başlatma: sudo -u mysql mysqld_safe --user=mysql &"
+            return 1
+        fi
+    fi
+    
+    # MariaDB 10.4+ için root şifresi yapılandırması
+    print_info "MySQL root şifresi yapılandırılıyor..."
+    
+    # Önce servis durumunu ve bağlantıyı kontrol et
+    print_info "MariaDB servis durumu kontrol ediliyor..."
+    local service_status=""
+    if systemctl is-active --quiet mariadb 2>/dev/null; then
+        service_status="active"
+        print_info "MariaDB servisi çalışıyor"
+    elif pgrep -x mysqld > /dev/null 2>&1 || pgrep -x mariadbd > /dev/null 2>&1; then
+        service_status="running"
+        print_info "MariaDB process çalışıyor"
+    else
+        print_error "MariaDB servisi çalışmıyor!"
+        print_info "Servis durumunu kontrol edin: systemctl status mariadb"
+        return 1
+    fi
+    
+    # Bağlantı testi
+    print_info "MariaDB bağlantı testi yapılıyor..."
+    local connection_test=false
+    
+    # sudo mysql ile test
+    if sudo mysql -e "SELECT 1;" 2>/dev/null; then
+        connection_test=true
+        print_success "sudo mysql ile bağlantı başarılı"
+    elif mysql -u root -e "SELECT 1;" 2>/dev/null; then
+        connection_test=true
+        print_success "mysql -u root ile bağlantı başarılı"
+    else
+        print_warning "Bağlantı testi başarısız, şifre ayarlama deneniyor..."
+    fi
+    
+    # MariaDB 10.4+ varsayılan olarak unix_socket authentication kullanır
+    # Bu yüzden önce sudo mysql ile erişim sağlayıp şifre ayarlayacağız
+    local password_set=false
+    local max_attempts=3
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ] && [ "$password_set" = false ]; do
+        ((attempt++))
+        print_info "Şifre ayarlama denemesi $attempt/$max_attempts..."
+        
+        # Yöntem 1: sudo mysql ile şifre ayarla (MariaDB 10.4+ için en güvenilir)
+        local sql_result=0
+        local sql_error=""
+        
+        sql_error=$(sudo mysql <<EOF 2>&1
+ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('$MYSQL_ROOT_PASSWORD');
+ALTER USER 'root'@'127.0.0.1' IDENTIFIED VIA mysql_native_password USING PASSWORD('$MYSQL_ROOT_PASSWORD');
+ALTER USER 'root'@'::1' IDENTIFIED VIA mysql_native_password USING PASSWORD('$MYSQL_ROOT_PASSWORD');
+FLUSH PRIVILEGES;
+EOF
+        )
+        sql_result=$?
+        
+        if [ $sql_result -eq 0 ]; then
+            password_set=true
+            print_success "Root şifresi sudo mysql ile ayarlandı (mysql_native_password)"
+            break
+        else
+            # Alternatif: IDENTIFIED BY kullan (eğer VIA çalışmazsa)
+            sql_error=$(sudo mysql <<EOF 2>&1
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+ALTER USER 'root'@'::1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+FLUSH PRIVILEGES;
+EOF
+            )
+            sql_result=$?
+            
+            if [ $sql_result -eq 0 ]; then
+                password_set=true
+                print_success "Root şifresi sudo mysql ile ayarlandı (ALTER USER BY)"
+                break
+            fi
+        fi
+        
+        # Yöntem 2: Normal mysql ile dene (eğer şifresiz erişim varsa)
+        if [ "$password_set" = false ]; then
+            sql_error=$(mysql -u root <<EOF 2>&1
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+FLUSH PRIVILEGES;
+EOF
+            )
+            sql_result=$?
+            
+            if [ $sql_result -eq 0 ]; then
+                password_set=true
+                print_success "Root şifresi normal mysql ile ayarlandı"
+                break
+            fi
+        fi
+        
+        # Hata mesajını göster (debug için)
+        if [ -n "$sql_error" ] && [ $attempt -eq $max_attempts ]; then
+            print_warning "SQL hatası: $sql_error"
+        fi
+        
+        # Kısa bir bekleme ve tekrar dene
+        sleep 2
+    done
+    
+    # Eğer hala şifre ayarlanamadıysa, alternatif yöntemler dene
+    if [ "$password_set" = false ]; then
+        print_info "Standart yöntemlerle şifre ayarlanamadı, alternatif yöntemler deneniyor..."
+        
+        # Yöntem 3: mysqladmin kullan
+        if mysqladmin -u root password "$MYSQL_ROOT_PASSWORD" 2>/dev/null; then
+            password_set=true
+            print_success "Root şifresi mysqladmin ile ayarlandı"
+        # Yöntem 4: sudo mysqladmin kullan
+        elif sudo mysqladmin -u root password "$MYSQL_ROOT_PASSWORD" 2>/dev/null; then
+            password_set=true
+            print_success "Root şifresi sudo mysqladmin ile ayarlandı"
+        fi
+    fi
+    
+    # Eğer hala şifre ayarlanamadıysa, güvenli mod yöntemini kullan
+    if [ "$password_set" = false ]; then
+        print_info "Alternatif yöntemler başarısız, güvenli mod yöntemi deneniyor..."
+        
+        # Servisi durdur
+        systemctl stop mariadb 2>/dev/null || true
+        pkill -9 mysqld 2>/dev/null || true
+        pkill -9 mariadbd 2>/dev/null || true
+        pkill -9 mysqld_safe 2>/dev/null || true
+        sleep 3
+        
+        # MariaDB'yi skip-grant-tables ile başlat
+        print_info "MariaDB güvenli modda başlatılıyor..."
+        sudo -u mysql mysqld_safe --skip-grant-tables --skip-networking --datadir=/var/lib/mysql > /tmp/mysqld_safe.log 2>&1 &
+        local safe_pid=$!
+        
+        # MariaDB'nin başladığından emin ol
+        local safe_retry=0
+        while [ $safe_retry -lt 15 ]; do
+            if mysql -u root -e "SELECT 1;" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+            ((safe_retry++))
+        done
+        
+        if mysql -u root -e "SELECT 1;" 2>/dev/null; then
+            print_info "Güvenli modda bağlantı başarılı, şifre ayarlanıyor..."
+            
+            # Şifreyi ayarla
+            mysql -u root <<EOF 2>/dev/null
+USE mysql;
+UPDATE user SET authentication_string='', plugin='mysql_native_password' WHERE User='root' AND Host='localhost';
+UPDATE user SET authentication_string='', plugin='mysql_native_password' WHERE User='root' AND Host='127.0.0.1';
+UPDATE user SET authentication_string='', plugin='mysql_native_password' WHERE User='root' AND Host='::1';
+FLUSH PRIVILEGES;
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+ALTER USER 'root'@'::1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+FLUSH PRIVILEGES;
+EOF
+            
+            # Güvenli moddaki MariaDB'yi durdur
+            kill $safe_pid 2>/dev/null || true
+            sleep 3
+            pkill -9 mysqld_safe 2>/dev/null || true
+            pkill -9 mysqld 2>/dev/null || true
+            pkill -9 mariadbd 2>/dev/null || true
+            sleep 2
+            
+            # Normal modda başlat
+            systemctl start mariadb
+            sleep 5
+            
+            # Şifre ile test et
+            if mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
+                password_set=true
+                print_success "Root şifresi güvenli mod yöntemi ile ayarlandı"
+            fi
+        else
+            print_warning "Güvenli modda bağlantı kurulamadı"
+            # Güvenli moddaki process'leri temizle
+            kill $safe_pid 2>/dev/null || true
+            pkill -9 mysqld_safe 2>/dev/null || true
+            pkill -9 mysqld 2>/dev/null || true
+            pkill -9 mariadbd 2>/dev/null || true
+            sleep 2
+            systemctl start mariadb 2>/dev/null || true
+        fi
+    fi
+    
+    # Son çare: UPDATE user tablosunu direkt güncelle
+    if [ "$password_set" = false ]; then
+        print_info "Son çare yöntemi deneniyor: Direkt user tablosu güncelleme..."
+        
+        # Servisi durdur
+        systemctl stop mariadb 2>/dev/null || true
+        pkill -9 mysqld 2>/dev/null || true
+        pkill -9 mariadbd 2>/dev/null || true
+        sleep 2
+        
+        # Güvenli modda başlat
+        sudo -u mysql mysqld_safe --skip-grant-tables --skip-networking --datadir=/var/lib/mysql > /tmp/mysqld_safe2.log 2>&1 &
+        local safe_pid2=$!
+        sleep 5
+        
+        if mysql -u root -e "SELECT 1;" 2>/dev/null; then
+            # authentication_string'ı temizle ve ALTER USER kullan
+            mysql -u root <<EOF 2>/dev/null
+USE mysql;
+UPDATE user SET authentication_string='', plugin='mysql_native_password' WHERE User='root' AND Host='localhost';
+UPDATE user SET authentication_string='', plugin='mysql_native_password' WHERE User='root' AND Host='127.0.0.1';
+UPDATE user SET authentication_string='', plugin='mysql_native_password' WHERE User='root' AND Host='::1';
+FLUSH PRIVILEGES;
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+ALTER USER 'root'@'::1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+FLUSH PRIVILEGES;
+EOF
+            
+            # Güvenli moddaki process'leri temizle
+            kill $safe_pid2 2>/dev/null || true
+            sleep 3
+            pkill -9 mysqld_safe 2>/dev/null || true
+            pkill -9 mysqld 2>/dev/null || true
+            pkill -9 mariadbd 2>/dev/null || true
+            sleep 2
+            
+            # Normal modda başlat
+            systemctl start mariadb
+            sleep 5
+            
+            # Şifre ile test et
+            if mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
+                password_set=true
+                print_success "Root şifresi direkt user tablosu güncelleme ile ayarlandı"
+            fi
+        fi
+    fi
+    
+    # Eğer hala şifre ayarlanamadıysa, kurulum başarısız
+    if [ "$password_set" = false ]; then
+        print_error "Root şifresi ayarlanamadı! Tüm yöntemler denendi."
+        print_info "MariaDB servisi çalışıyor ancak şifre ayarlanamadı."
+        print_info "Log dosyaları: /tmp/mysqld_safe.log, /tmp/mysqld_safe2.log"
+        return 1
+    fi
+    
+    # Şifre ile bağlantıyı test et
+    print_info "Şifre doğrulanıyor..."
+    local verify_count=0
+    local verify_success=false
+    
+    while [ $verify_count -lt 10 ] && [ "$verify_success" = false ]; do
+        if mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
+            verify_success=true
+            print_success "MySQL root şifresi doğrulandı"
+            break
+        fi
+        sleep 1
+        ((verify_count++))
+    done
+    
+    if [ "$verify_success" = false ]; then
+        print_error "Şifre doğrulama başarısız!"
+        print_info "Şifre ayarlandı ancak doğrulama başarısız, tekrar ayarlanıyor..."
+        
+        # Şifreyi tekrar ayarla
+        if sudo mysql <<EOF 2>/dev/null; then
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+FLUSH PRIVILEGES;
+EOF
+            sleep 2
+            # Tekrar doğrula
+            if mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
+                verify_success=true
+                print_success "MySQL root şifresi doğrulandı (ikinci deneme)"
+            else
+                print_error "Şifre doğrulama başarısız!"
+                return 1
+            fi
+        else
+            print_error "Şifre tekrar ayarlanamadı!"
+            return 1
+        fi
+    fi
+    
+    # Güvenlik yapılandırması (manuel)
+    print_info "MySQL güvenlik yapılandırması yapılıyor..."
+    
+    local security_success=false
+    
+    # Önce şifre ile dene
+    if [ "$verify_success" = true ]; then
+        if mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF 2>/dev/null; then
+DELETE FROM mysql.user WHERE User='';
+DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+DROP DATABASE IF EXISTS test;
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+FLUSH PRIVILEGES;
+EOF
+            security_success=true
+        fi
+    fi
+    
+    # Eğer şifre ile başarısız olduysa, sudo mysql ile dene
+    if [ "$security_success" = false ]; then
+        if sudo mysql <<EOF 2>/dev/null; then
+DELETE FROM mysql.user WHERE User='';
+DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+DROP DATABASE IF EXISTS test;
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+FLUSH PRIVILEGES;
+EOF
+            security_success=true
+        fi
+    fi
+    
+    if [ "$security_success" = true ]; then
+        print_success "MySQL güvenlik yapılandırması tamamlandı"
+    else
+        print_warning "MySQL güvenlik yapılandırması başarısız, tekrar deneniyor..."
+        
+        # Şifre ile tekrar dene
+        if mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF 2>/dev/null; then
+DELETE FROM mysql.user WHERE User='';
+DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+DROP DATABASE IF EXISTS test;
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+FLUSH PRIVILEGES;
+EOF
+            security_success=true
+            print_success "MySQL güvenlik yapılandırması tamamlandı (ikinci deneme)"
+        else
+            print_error "MySQL güvenlik yapılandırması başarısız!"
+            return 1
+        fi
+    fi
+    
+    # Servis durumunu kontrol et
+    if systemctl is-active --quiet mariadb 2>/dev/null || \
+       pgrep -x mysqld > /dev/null 2>&1 || \
+       pgrep -x mariadbd > /dev/null 2>&1; then
+        print_success "MySQL/MariaDB kurulumu tamamlandı ve çalışıyor"
+        echo -e "${GREEN}MySQL Root Şifresi:${NC} Ayarlanmış ve doğrulandı"
+        
+        if systemctl is-active --quiet mariadb 2>/dev/null; then
+            echo -e "${GREEN}Servis Durumu:${NC} $(systemctl is-active mariadb)"
+        else
+            echo -e "${GREEN}Servis Durumu:${NC} Çalışıyor (process)"
+        fi
+    else
+        print_error "MySQL/MariaDB kuruldu ancak servis çalışmıyor!"
+        print_info "Servisi başlatmaya çalışılıyor..."
+        
+        systemctl start mariadb
+        sleep 5
+        
+        if systemctl is-active --quiet mariadb 2>/dev/null; then
+            print_success "MariaDB servisi başlatıldı"
+        else
+            print_error "MariaDB servisi başlatılamadı!"
+            print_info "Log kontrolü: journalctl -u mariadb -n 50"
+            return 1
+        fi
+    fi
 }
 
 install_nodejs() {
@@ -668,9 +1409,58 @@ install_nodejs() {
 
 install_redis() {
     print_info "Redis kuruluyor..."
-    apt install -y redis-server
-    systemctl enable redis
-    print_success "Redis kurulumu tamamlandı"
+    
+    # APT paket listesini güncelle
+    print_info "Paket listesi güncelleniyor..."
+    apt update
+    
+    # Universe repository'sini etkinleştir (Redis genellikle universe'de)
+    if ! grep -q "^deb.*universe" /etc/apt/sources.list 2>/dev/null && \
+       ! grep -q "^deb.*universe" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+        print_info "Universe repository etkinleştiriliyor..."
+        add-apt-repository -y universe 2>/dev/null || \
+        sed -i 's/^# deb \(.*\) universe$/deb \1 universe/' /etc/apt/sources.list || true
+        apt update
+    fi
+    
+    # Redis kurulumu
+    if ! apt install -y redis-server; then
+        print_warning "Redis kurulumunda hata oluştu, düzeltme deneniyor..."
+        
+        # Broken dependencies düzelt
+        apt --fix-broken install -y 2>/dev/null || true
+        
+        # Paket listesini tekrar güncelle
+        apt update
+        
+        # Tekrar kurulum dene
+        if ! apt install -y redis-server; then
+            print_error "Redis kurulumu başarısız oldu!"
+            print_info "Manuel kurulum için:"
+            echo "  sudo apt update"
+            echo "  sudo apt install -y redis-server"
+            return 1
+        fi
+    fi
+    
+    # Redis servisini başlat ve etkinleştir
+    print_info "Redis servisi başlatılıyor..."
+    systemctl start redis-server 2>/dev/null || systemctl start redis 2>/dev/null || true
+    systemctl enable redis-server 2>/dev/null || systemctl enable redis 2>/dev/null || true
+    
+    # Servis durumunu kontrol et
+    sleep 2
+    if systemctl is-active --quiet redis-server 2>/dev/null || \
+       systemctl is-active --quiet redis 2>/dev/null || \
+       pgrep -x redis-server > /dev/null 2>&1; then
+        print_success "Redis kurulumu tamamlandı ve servis başlatıldı"
+        echo -e "${GREEN}Redis Versiyonu:${NC} $(redis-server --version 2>/dev/null | cut -d' ' -f3 || echo "Kuruldu")"
+        echo -e "${GREEN}Servis Durumu:${NC} $(systemctl is-active redis-server 2>/dev/null || systemctl is-active redis 2>/dev/null || echo "Çalışıyor")"
+    else
+        print_warning "Redis kuruldu ancak servis başlatılamadı"
+        print_info "Servis durumunu kontrol edin: systemctl status redis-server"
+        print_info "Manuel başlatma: sudo systemctl start redis-server"
+    fi
 }
 
 install_composer() {
@@ -1531,6 +2321,1453 @@ optimize_all_services() {
     echo "• Değişikliklerin tam etkili olması için servisler yeniden başlatıldı"
     echo "• Sistem limitleri için oturum kapatıp açmanız gerekebilir"
     echo "• Performansı izlemek için: htop, iotop, nginx -V"
+}
+
+install_openvpn() {
+    print_header "OpenVPN Server Kurulumu"
+    
+    if systemctl is-active --quiet openvpn@server 2>/dev/null || systemctl is-active --quiet openvpn 2>/dev/null; then
+        print_warning "OpenVPN zaten kurulu ve çalışıyor"
+        if ! ask_yes_no "Yeniden kurmak istiyor musunuz?"; then
+            return 0
+        fi
+    fi
+    
+    # OpenVPN ve Easy-RSA kurulumu
+    print_info "OpenVPN ve gerekli paketler kuruluyor..."
+    apt update
+    apt install -y openvpn easy-rsa ufw
+    
+    # Easy-RSA dizinini oluştur
+    local easyrsa_dir="/etc/openvpn/easy-rsa"
+    mkdir -p $easyrsa_dir
+    
+    # Easy-RSA 3.x için
+    if [ -d "/usr/share/easy-rsa" ]; then
+        cp -r /usr/share/easy-rsa/* $easyrsa_dir/ 2>/dev/null || true
+    fi
+    
+    # Easy-RSA paketini kur
+    apt install -y easy-rsa
+    
+    # Easy-RSA'yı tekrar kopyala
+    if [ -d "/usr/share/easy-rsa" ]; then
+        cp -r /usr/share/easy-rsa/* $easyrsa_dir/ 2>/dev/null || true
+    fi
+    
+    cd $easyrsa_dir
+    
+    # Easy-RSA 3.x için vars dosyası
+    if [ ! -f "vars" ] && [ -f "vars.example" ]; then
+        cp vars.example vars
+    fi
+    
+    # Vars dosyasını düzenle
+    if [ -f "vars" ]; then
+        sed -i 's/^set_var EASYRSA_REQ_COUNTRY.*/set_var EASYRSA_REQ_COUNTRY\t"TR"/' vars 2>/dev/null || \
+        echo 'set_var EASYRSA_REQ_COUNTRY     "TR"' >> vars
+        sed -i 's/^set_var EASYRSA_REQ_PROVINCE.*/set_var EASYRSA_REQ_PROVINCE\t"Istanbul"/' vars 2>/dev/null || \
+        echo 'set_var EASYRSA_REQ_PROVINCE    "Istanbul"' >> vars
+        sed -i 's/^set_var EASYRSA_REQ_CITY.*/set_var EASYRSA_REQ_CITY\t\t"Istanbul"/' vars 2>/dev/null || \
+        echo 'set_var EASYRSA_REQ_CITY         "Istanbul"' >> vars
+        sed -i 's/^set_var EASYRSA_REQ_ORG.*/set_var EASYRSA_REQ_ORG\t\t"OpenVPN-CA"/' vars 2>/dev/null || \
+        echo 'set_var EASYRSA_REQ_ORG          "OpenVPN-CA"' >> vars
+        sed -i 's/^set_var EASYRSA_REQ_EMAIL.*/set_var EASYRSA_REQ_EMAIL\t"admin@example.com"/' vars 2>/dev/null || \
+        echo 'set_var EASYRSA_REQ_EMAIL        "admin@example.com"' >> vars
+        sed -i 's/^set_var EASYRSA_REQ_OU.*/set_var EASYRSA_REQ_OU\t\t"OpenVPN"/' vars 2>/dev/null || \
+        echo 'set_var EASYRSA_REQ_OU           "OpenVPN"' >> vars
+    else
+        # Vars dosyası yoksa oluştur
+        cat > vars <<'EOF'
+set_var EASYRSA_REQ_COUNTRY     "TR"
+set_var EASYRSA_REQ_PROVINCE    "Istanbul"
+set_var EASYRSA_REQ_CITY         "Istanbul"
+set_var EASYRSA_REQ_ORG          "OpenVPN-CA"
+set_var EASYRSA_REQ_EMAIL        "admin@example.com"
+set_var EASYRSA_REQ_OU           "OpenVPN"
+set_var EASYRSA_KEY_SIZE         2048
+set_var EASYRSA_ALGO             rsa
+set_var EASYRSA_CA_EXPIRE        3650
+set_var EASYRSA_CERT_EXPIRE      3650
+EOF
+    fi
+    
+    # PKI dizinini oluştur (eğer yoksa)
+    if [ ! -d "pki" ]; then
+        print_info "CA (Certificate Authority) oluşturuluyor..."
+        ./easyrsa init-pki
+        ./easyrsa build-ca nopass
+    else
+        print_info "Mevcut CA kullanılıyor"
+    fi
+    
+    # Server sertifikası oluştur (eğer yoksa)
+    if [ ! -f "pki/issued/server.crt" ]; then
+        print_info "OpenVPN server sertifikası oluşturuluyor..."
+        ./easyrsa gen-req server nopass
+        ./easyrsa sign-req server server
+    else
+        print_info "Mevcut server sertifikası kullanılıyor"
+    fi
+    
+    # Diffie-Hellman parametreleri oluştur (eğer yoksa)
+    if [ ! -f "pki/dh.pem" ]; then
+        print_info "Diffie-Hellman parametreleri oluşturuluyor (bu işlem birkaç dakika sürebilir)..."
+        ./easyrsa gen-dh
+    else
+        print_info "Mevcut DH parametreleri kullanılıyor"
+    fi
+    
+    # HMAC imza oluştur (eğer yoksa)
+    if [ ! -f "pki/ta.key" ]; then
+        openvpn --genkey --secret pki/ta.key
+    else
+        print_info "Mevcut HMAC imza kullanılıyor"
+    fi
+    
+    # CRL (Certificate Revocation List) oluştur
+    if [ ! -f "pki/crl.pem" ]; then
+        ./easyrsa gen-crl
+    fi
+    cp pki/crl.pem /etc/openvpn/crl.pem 2>/dev/null || true
+    
+    # OpenVPN yapılandırma dosyası oluştur
+    local server_ip=$(hostname -I | awk '{print $1}')
+    local openvpn_port=1194
+    local openvpn_proto="udp"
+    
+    read -p "OpenVPN port (varsayılan: 1194) [1194]: " input_port
+    openvpn_port=${input_port:-1194}
+    
+    echo "Protokol seçin:"
+    echo "1) UDP (Önerilen, daha hızlı)"
+    echo "2) TCP (Daha güvenilir)"
+    read -p "Seçiminiz (1-2) [1]: " proto_choice
+    case $proto_choice in
+        2) openvpn_proto="tcp";;
+        *) openvpn_proto="udp";;
+    esac
+    
+    # OpenVPN server yapılandırması
+    local openvpn_conf="/etc/openvpn/server.conf"
+    
+    # Mevcut yapılandırma varsa yedekle
+    if [ -f "$openvpn_conf" ]; then
+        cp $openvpn_conf ${openvpn_conf}.backup.$(date +%Y%m%d_%H%M%S)
+    fi
+    
+    cat > $openvpn_conf <<EOF
+port $openvpn_port
+proto $openvpn_proto
+dev tun
+
+ca $easyrsa_dir/pki/ca.crt
+cert $easyrsa_dir/pki/issued/server.crt
+key $easyrsa_dir/pki/private/server.key
+dh $easyrsa_dir/pki/dh.pem
+tls-auth $easyrsa_dir/pki/ta.key 0
+crl-verify /etc/openvpn/crl.pem
+
+server 10.8.0.0 255.255.255.0
+
+ifconfig-pool-persist /var/log/openvpn/ipp.txt
+
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS 8.8.8.8"
+push "dhcp-option DNS 8.8.4.4"
+
+keepalive 10 120
+cipher AES-256-GCM
+auth SHA256
+user nobody
+group nogroup
+persist-key
+persist-tun
+comp-lzo
+
+status /var/log/openvpn/openvpn-status.log
+log /var/log/openvpn/openvpn.log
+verb 3
+
+# Güvenlik ayarları
+tls-version-min 1.2
+EOF
+    
+    # Log dizinini oluştur
+    mkdir -p /var/log/openvpn
+    touch /var/log/openvpn/openvpn-status.log
+    touch /var/log/openvpn/openvpn.log
+    chown nobody:nogroup /var/log/openvpn/*
+    
+    # IP forwarding etkinleştir
+    sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+    sysctl -p > /dev/null 2>&1
+    
+    # Firewall kuralları
+    if systemctl is-active --quiet ufw; then
+        ufw allow $openvpn_port/$openvpn_proto comment 'OpenVPN'
+        print_info "UFW firewall kuralı eklendi"
+    fi
+    
+    # OpenVPN servisini başlat
+    # Ubuntu 24.04'te systemd service adı
+    if [ -f "/etc/systemd/system/multi-user.target.wants/openvpn.service" ] || \
+       [ -f "/lib/systemd/system/openvpn.service" ]; then
+        systemctl enable openvpn
+        systemctl start openvpn
+        sleep 2
+        
+        if systemctl is-active --quiet openvpn; then
+            print_success "OpenVPN server başarıyla kuruldu ve başlatıldı"
+            echo -e "${GREEN}OpenVPN Port:${NC} $openvpn_port/$openvpn_proto"
+            echo -e "${GREEN}Server IP:${NC} $server_ip"
+            echo -e "${GREEN}VPN Network:${NC} 10.8.0.0/24"
+            echo ""
+            print_info "İstemci sertifikaları oluşturmak için: Ana Menü > OpenVPN İstemci Yönetimi"
+        else
+            print_error "OpenVPN başlatılamadı!"
+            print_info "Log kontrolü: journalctl -u openvpn -n 50"
+            print_info "Yapılandırma kontrolü: openvpn --config $openvpn_conf --verb 4"
+            return 1
+        fi
+    else
+        # Alternatif: openvpn@server service
+        systemctl enable openvpn@server
+        systemctl start openvpn@server
+        sleep 2
+        
+        if systemctl is-active --quiet openvpn@server; then
+            print_success "OpenVPN server başarıyla kuruldu ve başlatıldı"
+            echo -e "${GREEN}OpenVPN Port:${NC} $openvpn_port/$openvpn_proto"
+            echo -e "${GREEN}Server IP:${NC} $server_ip"
+            echo -e "${GREEN}VPN Network:${NC} 10.8.0.0/24"
+            echo ""
+            print_info "İstemci sertifikaları oluşturmak için: Ana Menü > OpenVPN İstemci Yönetimi"
+        else
+            print_error "OpenVPN başlatılamadı!"
+            print_info "Log kontrolü: journalctl -u openvpn@server -n 50"
+            print_info "Yapılandırma kontrolü: openvpn --config $openvpn_conf --verb 4"
+            return 1
+        fi
+    fi
+}
+
+install_openvpn_web_admin() {
+    print_header "OpenVPN Web Yönetim Paneli Kurulumu"
+    
+    # Web panel seçimi
+    echo -e "${CYAN}Web Yönetim Paneli Seçenekleri:${NC}"
+    echo "1) OpenVPN-Admin (PHP tabanlı, basit)"
+    echo "2) Pritunl (Profesyonel, MongoDB gerekli)"
+    echo "3) Pritunl için MongoDB Kurulumu/Yapılandırması (Pritunl zaten kuruluysa)"
+    echo "4) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz (1-4) [1]: " panel_choice
+    case $panel_choice in
+        2)
+            install_pritunl
+            ;;
+        3)
+            install_mongodb_for_pritunl
+            ;;
+        4)
+            return 0
+            ;;
+        *)
+            install_openvpn_admin
+            ;;
+    esac
+}
+
+install_openvpn_admin() {
+    print_info "OpenVPN-Admin kuruluyor..."
+    
+    # Gereksinimler kontrolü
+    if ! command -v php &> /dev/null; then
+        print_error "PHP kurulu değil! Önce PHP kurulumu yapın."
+        return 1
+    fi
+    
+    if ! command -v nginx &> /dev/null; then
+        print_error "Nginx kurulu değil! Önce Nginx kurulumu yapın."
+        return 1
+    fi
+    
+    # Domain bilgisi
+    local admin_domain=""
+    ask_input "OpenVPN-Admin için domain/subdomain adını girin (örn: vpn.ornek.com)" admin_domain
+    
+    # Git ve Composer kontrolü
+    if ! command -v git &> /dev/null; then
+        apt install -y git
+    fi
+    
+    if ! command -v composer &> /dev/null; then
+        print_info "Composer kuruluyor..."
+        curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+    fi
+    
+    # OpenVPN-Admin dizini
+    local admin_dir="/var/www/$admin_domain"
+    mkdir -p $admin_dir
+    
+    # OpenVPN-Admin'i klonla
+    print_info "OpenVPN-Admin indiriliyor..."
+    if [ -d "$admin_dir/.git" ]; then
+        cd $admin_dir
+        git pull
+    else
+        git clone https://github.com/Chocobozzz/OpenVPN-Admin.git $admin_dir
+    fi
+    
+    cd $admin_dir
+    
+    # Composer bağımlılıklarını kur
+    print_info "Bağımlılıklar kuruluyor..."
+    composer install --no-dev --optimize-autoloader
+    
+    # Yapılandırma dosyası
+    if [ ! -f ".env" ]; then
+        cp .env.example .env
+        php artisan key:generate
+    fi
+    
+    # Veritabanı yapılandırması
+    if systemctl is-active --quiet mariadb || systemctl is-active --quiet mysql; then
+        if ask_yes_no "MySQL/MariaDB için veritabanı oluşturulsun mu?"; then
+            local db_name="openvpn_admin"
+            local db_user="openvpn_admin"
+            local db_password=""
+            
+            ask_password "Veritabanı kullanıcı şifresini belirleyin" db_password
+            
+            if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+                ask_password "MySQL root şifresini girin" MYSQL_ROOT_PASSWORD
+            fi
+            
+            mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF
+CREATE DATABASE IF NOT EXISTS $db_name;
+CREATE USER IF NOT EXISTS '$db_user'@'localhost' IDENTIFIED BY '$db_password';
+GRANT ALL PRIVILEGES ON $db_name.* TO '$db_user'@'localhost';
+FLUSH PRIVILEGES;
+EOF
+            
+            # .env dosyasını güncelle
+            sed -i "s/DB_DATABASE=.*/DB_DATABASE=$db_name/" .env
+            sed -i "s/DB_USERNAME=.*/DB_USERNAME=$db_user/" .env
+            sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$db_password/" .env
+            
+            # Migration çalıştır
+            php artisan migrate --force
+        fi
+    fi
+    
+    # Dosya izinleri
+    chown -R www-data:www-data $admin_dir
+    chmod -R 755 $admin_dir
+    chmod -R 775 $admin_dir/storage
+    chmod -R 775 $admin_dir/bootstrap/cache
+    
+    # Nginx yapılandırması
+    local nginx_config="/etc/nginx/sites-available/$admin_domain"
+    cat > $nginx_config <<EOF
+server {
+    listen 80;
+    server_name $admin_domain;
+    root $admin_dir/public;
+    index index.php index.html;
+
+    access_log /var/log/nginx/${admin_domain}_access.log;
+    error_log /var/log/nginx/${admin_domain}_error.log;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php\$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/var/run/php/php$(php -v | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+}
+EOF
+    
+    ln -sf $nginx_config /etc/nginx/sites-enabled/
+    nginx -t && systemctl reload nginx
+    
+    # SSL sorusu
+    if ask_yes_no "OpenVPN-Admin için SSL sertifikası kurulsun mu?"; then
+        if [ -z "$EMAIL" ]; then
+            ask_input "E-posta adresinizi girin" EMAIL
+        fi
+        
+        if command -v certbot &> /dev/null; then
+            certbot --nginx --agree-tos --redirect --hsts --staple-ocsp --email $EMAIL -d $admin_domain --non-interactive
+        else
+            print_warning "Certbot bulunamadı, SSL kurulumu atlandı"
+        fi
+    fi
+    
+    print_success "OpenVPN-Admin kurulumu tamamlandı!"
+    echo -e "${GREEN}Erişim:${NC} http://$admin_domain"
+    echo -e "${GREEN}Varsayılan Kullanıcı:${NC} admin"
+    echo -e "${GREEN}Varsayılan Şifre:${NC} admin"
+    echo -e "${YELLOW}UYARI:${NC} İlk girişte şifreyi değiştirin!"
+}
+
+install_pritunl() {
+    print_header "Pritunl VPN Kurulumu"
+    
+    print_info "Pritunl, MongoDB gerektirir ve daha profesyonel bir çözümdür."
+    
+    if ! ask_yes_no "Pritunl kurulumuna devam etmek istiyor musunuz?"; then
+        return 0
+    fi
+    
+    # MongoDB kurulumu (Ubuntu 24.04 için resmi repository)
+    print_info "MongoDB kurulumu başlatılıyor..."
+    
+    # MongoDB zaten kurulu mu kontrol et
+    local mongodb_installed=false
+    local mongodb_running=false
+    
+    if systemctl is-active --quiet mongod 2>/dev/null; then
+        mongodb_installed=true
+        mongodb_running=true
+        print_success "MongoDB zaten kurulu ve çalışıyor (mongod)"
+    elif systemctl is-active --quiet mongodb 2>/dev/null; then
+        mongodb_installed=true
+        mongodb_running=true
+        print_success "MongoDB zaten kurulu ve çalışıyor (mongodb)"
+    elif command -v mongod &>/dev/null || dpkg -l | grep -q mongodb-org; then
+        mongodb_installed=true
+        print_info "MongoDB kurulu görünüyor, servis başlatılıyor..."
+        systemctl start mongod 2>/dev/null || systemctl start mongodb 2>/dev/null || true
+        systemctl enable mongod 2>/dev/null || systemctl enable mongodb 2>/dev/null || true
+        sleep 5
+        if systemctl is-active --quiet mongod 2>/dev/null || systemctl is-active --quiet mongodb 2>/dev/null; then
+            mongodb_running=true
+            print_success "MongoDB servisi başlatıldı"
+        else
+            print_warning "MongoDB servisi başlatılamadı, yeniden kurulum yapılacak"
+        fi
+    fi
+    
+    # MongoDB kurulu değilse veya çalışmıyorsa kur
+    if [ "$mongodb_installed" = false ] || [ "$mongodb_running" = false ]; then
+        if [ "$mongodb_installed" = true ] && [ "$mongodb_running" = false ]; then
+            print_info "MongoDB kurulu ancak çalışmıyor, yeniden kurulum yapılıyor..."
+            # Eski MongoDB'yi kaldır
+            systemctl stop mongod 2>/dev/null || systemctl stop mongodb 2>/dev/null || true
+            apt remove --purge -y mongodb-org* mongodb* 2>/dev/null || true
+            rm -rf /etc/apt/sources.list.d/mongodb*.list 2>/dev/null || true
+            apt update
+        fi
+        
+        print_info "MongoDB 8.0 resmi repository'sinden kuruluyor..."
+        
+        # Gerekli paketler
+        if ! command -v gpg &>/dev/null; then
+            apt install -y gnupg
+        fi
+        
+        if ! command -v curl &>/dev/null; then
+            apt install -y curl
+        fi
+        
+        # GPG anahtarı ekle
+        print_info "MongoDB GPG anahtarı ekleniyor..."
+        mkdir -p /usr/share/keyrings
+        
+        if [ ! -f "/usr/share/keyrings/mongodb-server-8.0.gpg" ]; then
+            if ! curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | \
+                gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg 2>/dev/null; then
+                print_error "MongoDB GPG anahtarı eklenemedi!"
+                return 1
+            fi
+            print_success "MongoDB GPG anahtarı eklendi"
+        else
+            print_info "MongoDB GPG anahtarı zaten mevcut"
+        fi
+        
+        # MongoDB repository ekle
+        print_info "MongoDB repository ekleniyor..."
+        local ubuntu_codename="noble"
+        if command -v lsb_release &>/dev/null; then
+            ubuntu_codename=$(lsb_release -cs)
+        elif [ -f /etc/os-release ]; then
+            ubuntu_codename=$(grep VERSION_CODENAME /etc/os-release | cut -d'=' -f2 | tr -d '"')
+        fi
+        
+        # Ubuntu 24.04 için noble kullan
+        if [ -z "$ubuntu_codename" ] || [ "$ubuntu_codename" = "" ]; then
+            ubuntu_codename="noble"
+        fi
+        
+        cat > /etc/apt/sources.list.d/mongodb-org.list <<EOF
+deb [ signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu ${ubuntu_codename}/mongodb-org/8.0 multiverse
+EOF
+        
+        # APT güncelle
+        apt update
+        
+        # MongoDB kurulumu
+        print_info "MongoDB-org paketleri kuruluyor..."
+        if ! DEBIAN_FRONTEND=noninteractive apt install -y mongodb-org; then
+            print_error "MongoDB kurulumu başarısız oldu!"
+            return 1
+        fi
+        
+        # MongoDB servisini başlat ve etkinleştir
+        print_info "MongoDB servisi başlatılıyor..."
+        systemctl daemon-reload
+        systemctl enable mongod
+        
+        # MongoDB veri dizinini oluştur ve izinleri ayarla
+        if [ ! -d "/var/lib/mongodb" ]; then
+            mkdir -p /var/lib/mongodb
+        fi
+        if [ ! -d "/var/log/mongodb" ]; then
+            mkdir -p /var/log/mongodb
+        fi
+        
+        # MongoDB kullanıcısını kontrol et
+        if ! id mongodb &>/dev/null; then
+            useradd -r -s /bin/false mongodb 2>/dev/null || true
+        fi
+        
+        # Dizin izinlerini ayarla
+        chown -R mongodb:mongodb /var/lib/mongodb 2>/dev/null || true
+        chown -R mongodb:mongodb /var/log/mongodb 2>/dev/null || true
+        
+        # Servisi başlat
+        systemctl start mongod
+        
+        # Servis durumunu kontrol et (retry mekanizması)
+        local mongodb_start_retry=0
+        while [ $mongodb_start_retry -lt 15 ]; do
+            if systemctl is-active --quiet mongod 2>/dev/null; then
+                mongodb_running=true
+                break
+            fi
+            sleep 2
+            ((mongodb_start_retry++))
+        done
+        
+        if [ "$mongodb_running" = false ]; then
+            print_error "MongoDB servisi başlatılamadı!"
+            print_info "Log kontrolü: journalctl -u mongod -n 50"
+            print_info "Manuel başlatma: sudo systemctl start mongod"
+            return 1
+        fi
+        
+        print_success "MongoDB başarıyla kuruldu ve başlatıldı"
+    fi
+    
+    # MongoDB yapılandırması (Pritunl için) - ZORUNLU
+    print_info "MongoDB yapılandırması yapılıyor (Pritunl için)..."
+    
+    # MongoDB'nin çalıştığından kesinlikle emin ol
+    if ! systemctl is-active --quiet mongod 2>/dev/null; then
+        print_info "MongoDB servisi başlatılıyor..."
+        systemctl start mongod
+        sleep 5
+    fi
+    
+    # MongoDB servis durumunu kontrol et (retry mekanizması)
+    local mongodb_retry=0
+    while [ $mongodb_retry -lt 15 ]; do
+        if systemctl is-active --quiet mongod 2>/dev/null; then
+            mongodb_running=true
+            break
+        fi
+        sleep 2
+        ((mongodb_retry++))
+    done
+    
+    if ! systemctl is-active --quiet mongod 2>/dev/null; then
+        print_error "MongoDB servisi başlatılamadı! Pritunl için MongoDB zorunludur!"
+        print_info "Log kontrolü: journalctl -u mongod -n 50"
+        print_info "Manuel başlatma: sudo systemctl start mongod"
+        return 1
+    fi
+    
+    print_success "MongoDB servisi çalışıyor"
+    
+    # MongoDB bağlantı testi
+    print_info "MongoDB bağlantı testi yapılıyor..."
+    local mongodb_connected=false
+    
+    # mongosh ile test (MongoDB 8.0 için)
+    if command -v mongosh &>/dev/null; then
+        if mongosh --eval "db.adminCommand('ping')" --quiet 2>/dev/null; then
+            mongodb_connected=true
+            print_success "MongoDB bağlantı testi başarılı (mongosh)"
+        fi
+    fi
+    
+    # mongo ile test (eski versiyonlar için)
+    if [ "$mongodb_connected" = false ] && command -v mongo &>/dev/null; then
+        if mongo --eval "db.adminCommand('ping')" --quiet 2>/dev/null; then
+            mongodb_connected=true
+            print_success "MongoDB bağlantı testi başarılı (mongo)"
+        fi
+    fi
+    
+    if [ "$mongodb_connected" = false ]; then
+        print_warning "MongoDB bağlantı testi başarısız, ancak devam ediliyor..."
+        print_info "MongoDB servisi çalışıyor, bağlantı zaman alabilir"
+    fi
+    
+    # Pritunl için MongoDB veritabanı oluştur (opsiyonel)
+    print_info "Pritunl için MongoDB veritabanı hazırlanıyor..."
+    if command -v mongosh &>/dev/null; then
+        mongosh --eval "use pritunl; db.createCollection('test'); db.test.drop();" --quiet 2>/dev/null || true
+    elif command -v mongo &>/dev/null; then
+        mongo --eval "use pritunl; db.createCollection('test'); db.test.drop();" --quiet 2>/dev/null || true
+    fi
+    
+    # Pritunl repository ekle
+    print_info "Pritunl repository ekleniyor..."
+    
+    # GPG anahtarı ekle
+    if [ ! -f "/usr/share/keyrings/pritunl.gpg" ]; then
+        print_info "Pritunl GPG anahtarı ekleniyor..."
+        curl -fsSL https://raw.githubusercontent.com/pritunl/pgp/master/pritunl_repo_pub.asc | \
+            gpg --dearmor -o /usr/share/keyrings/pritunl.gpg 2>/dev/null || {
+            print_warning "Pritunl GPG anahtarı eklenemedi, alternatif yöntem deneniyor..."
+            apt-key adv --keyserver hkp://keyserver.ubuntu.com --recv-keys 7568D9BB55FF9E5287D586017AE645C0CF8E292A 2>/dev/null || true
+        }
+    fi
+    
+    # Repository ekle
+    local ubuntu_codename="noble"
+    if command -v lsb_release &>/dev/null; then
+        ubuntu_codename=$(lsb_release -cs)
+    elif [ -f /etc/os-release ]; then
+        ubuntu_codename=$(grep VERSION_CODENAME /etc/os-release | cut -d'=' -f2 | tr -d '"')
+    fi
+    
+    # Ubuntu 24.04 için noble kullan
+    if [ -z "$ubuntu_codename" ] || [ "$ubuntu_codename" = "" ]; then
+        ubuntu_codename="noble"
+    fi
+    
+    cat > /etc/apt/sources.list.d/pritunl.list <<EOF
+deb [ signed-by=/usr/share/keyrings/pritunl.gpg ] https://repo.pritunl.com/stable/apt ${ubuntu_codename} main
+EOF
+    
+    # APT güncelle
+    apt update
+    
+    # Pritunl kurulumu
+    print_info "Pritunl paketleri kuruluyor..."
+    if ! DEBIAN_FRONTEND=noninteractive apt install -y pritunl; then
+        print_error "Pritunl kurulumu başarısız oldu!"
+        return 1
+    fi
+    
+    # Pritunl yapılandırması (MongoDB bağlantısı) - ZORUNLU
+    print_info "Pritunl yapılandırması yapılıyor (MongoDB bağlantısı)..."
+    
+    # MongoDB bağlantı string'ini ayarla (varsayılan: mongodb://localhost:27017/pritunl)
+    local pritunl_conf="/etc/pritunl.conf"
+    local mongodb_uri="mongodb://localhost:27017/pritunl"
+    
+    # Yapılandırma dosyasını kontrol et ve düzelt
+    if [ ! -f "$pritunl_conf" ]; then
+        # Yeni JSON yapılandırma dosyası oluştur
+        cat > "$pritunl_conf" <<EOF
+{
+  "mongodb_uri": "$mongodb_uri"
+}
+EOF
+        chmod 644 "$pritunl_conf"
+        print_success "Pritunl yapılandırma dosyası oluşturuldu (JSON formatında)"
+    else
+        # Mevcut dosyayı kontrol et - JSON formatında mı?
+        local is_json=false
+        if head -1 "$pritunl_conf" | grep -q "^{"; then
+            is_json=true
+        fi
+        
+        if [ "$is_json" = true ]; then
+            # JSON formatında güncelle
+            print_info "Mevcut yapılandırma JSON formatında, güncelleniyor..."
+            
+            # Python ile JSON güncelleme (eğer python3 varsa)
+            if command -v python3 &>/dev/null; then
+                python3 <<PYTHON_SCRIPT
+import json
+import sys
+
+try:
+    with open('$pritunl_conf', 'r') as f:
+        config = json.load(f)
+    
+    config['mongodb_uri'] = '$mongodb_uri'
+    
+    with open('$pritunl_conf', 'w') as f:
+        json.dump(config, f, indent=2)
+    
+    print("MongoDB URI güncellendi")
+except Exception as e:
+    print(f"Hata: {e}")
+    sys.exit(1)
+PYTHON_SCRIPT
+                if [ $? -eq 0 ]; then
+                    print_success "MongoDB URI JSON formatında güncellendi: $mongodb_uri"
+                else
+                    print_warning "Python ile güncelleme başarısız, manuel düzenleme gerekebilir"
+                fi
+            else
+                # Python yoksa, dosyayı yedekle ve yeniden oluştur
+                print_warning "Python3 bulunamadı, yapılandırma dosyası yeniden oluşturuluyor..."
+                cp "$pritunl_conf" "${pritunl_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+                cat > "$pritunl_conf" <<EOF
+{
+  "mongodb_uri": "$mongodb_uri"
+}
+EOF
+                print_success "Yapılandırma dosyası yeniden oluşturuldu (JSON formatında)"
+            fi
+        else
+            # Python config formatında ise, JSON'a dönüştür
+            print_info "Mevcut yapılandırma Python formatında, JSON'a dönüştürülüyor..."
+            cp "$pritunl_conf" "${pritunl_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+            
+            # Mevcut ayarları oku (varsa)
+            local existing_uri=$(grep -E "^mongodb_uri" "$pritunl_conf" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "")
+            if [ -z "$existing_uri" ]; then
+                existing_uri="$mongodb_uri"
+            fi
+            
+            # JSON formatında yeni dosya oluştur
+            cat > "$pritunl_conf" <<EOF
+{
+  "mongodb_uri": "$existing_uri"
+}
+EOF
+            print_success "Yapılandırma dosyası JSON formatına dönüştürüldü"
+        fi
+    fi
+    
+    # MongoDB bağlantı testi (Pritunl için)
+    print_info "MongoDB bağlantı testi yapılıyor (Pritunl için)..."
+    local mongodb_test_success=false
+    
+    # mongosh ile test
+    if command -v mongosh &>/dev/null; then
+        if mongosh --eval "db.adminCommand('ping')" --quiet 2>/dev/null; then
+            mongodb_test_success=true
+            print_success "MongoDB bağlantı testi başarılı (mongosh)"
+        fi
+    fi
+    
+    # mongo ile test
+    if [ "$mongodb_test_success" = false ] && command -v mongo &>/dev/null; then
+        if mongo --eval "db.adminCommand('ping')" --quiet 2>/dev/null; then
+            mongodb_test_success=true
+            print_success "MongoDB bağlantı testi başarılı (mongo)"
+        fi
+    fi
+    
+    if [ "$mongodb_test_success" = false ]; then
+        print_warning "MongoDB bağlantı testi başarısız, ancak devam ediliyor..."
+        print_info "MongoDB servisi çalışıyor, bağlantı zaman alabilir"
+    fi
+    
+    # Pritunl için MongoDB veritabanı hazırla
+    print_info "Pritunl için MongoDB veritabanı hazırlanıyor..."
+    if command -v mongosh &>/dev/null; then
+        mongosh --eval "use pritunl; db.createCollection('test'); db.test.drop();" --quiet 2>/dev/null || true
+    elif command -v mongo &>/dev/null; then
+        mongo --eval "use pritunl; db.createCollection('test'); db.test.drop();" --quiet 2>/dev/null || true
+    fi
+    
+    print_success "Pritunl yapılandırması tamamlandı"
+    
+    # MongoDB'nin çalıştığından kesinlikle emin ol (Pritunl için zorunlu)
+    print_info "MongoDB servis durumu kontrol ediliyor (Pritunl için zorunlu)..."
+    if ! systemctl is-active --quiet mongod 2>/dev/null; then
+        print_error "MongoDB servisi çalışmıyor! Pritunl için MongoDB zorunludur!"
+        systemctl start mongod
+        sleep 5
+        if ! systemctl is-active --quiet mongod 2>/dev/null; then
+            print_error "MongoDB servisi başlatılamadı!"
+            return 1
+        fi
+    fi
+    print_success "MongoDB servisi çalışıyor"
+    
+    # Pritunl servisini başlat
+    print_info "Pritunl servisi başlatılıyor..."
+    systemctl daemon-reload
+    systemctl enable pritunl
+    systemctl start pritunl
+    
+    # Servis durumunu kontrol et (retry mekanizması)
+    local pritunl_start_retry=0
+    while [ $pritunl_start_retry -lt 15 ]; do
+        if systemctl is-active --quiet pritunl 2>/dev/null; then
+            break
+        fi
+        sleep 2
+        ((pritunl_start_retry++))
+    done
+    
+    if systemctl is-active --quiet pritunl 2>/dev/null; then
+        print_success "Pritunl başarıyla kuruldu ve başlatıldı!"
+        
+        # Setup key'i al
+        local setup_key=""
+        local retry_count=0
+        while [ $retry_count -lt 10 ] && [ -z "$setup_key" ]; do
+            setup_key=$(pritunl default-key 2>/dev/null | grep -oE '[a-f0-9]{32}' | head -1)
+            if [ -z "$setup_key" ]; then
+                sleep 2
+                ((retry_count++))
+            fi
+        done
+        
+        local server_ip=$(hostname -I | awk '{print $1}')
+        
+        print_info "Pritunl kurulum bilgileri:"
+        echo -e "${GREEN}MongoDB Durumu:${NC} $(systemctl is-active mongod)"
+        echo -e "${GREEN}MongoDB URI:${NC} mongodb://localhost:27017/pritunl"
+        if [ -n "$setup_key" ]; then
+            echo -e "${GREEN}Setup Key:${NC} $setup_key"
+        else
+            echo -e "${YELLOW}Setup Key:${NC} Henüz oluşturulmadı, birkaç saniye bekleyin"
+        fi
+        echo -e "${GREEN}Web Arayüzü:${NC} https://$server_ip"
+        echo ""
+        echo -e "${YELLOW}ÖNEMLİ:${NC}"
+        echo "1. Tarayıcıda https://$server_ip adresine gidin"
+        if [ -n "$setup_key" ]; then
+            echo "2. Setup Key'i girin: $setup_key"
+        else
+            echo "2. Setup Key'i almak için: pritunl default-key"
+        fi
+        echo "3. Admin kullanıcısı oluşturun"
+    else
+        print_error "Pritunl başlatılamadı!"
+        print_info "Log kontrolü: journalctl -u pritunl -n 50"
+        print_info "MongoDB durumu: systemctl status mongod"
+        print_info "MongoDB log: journalctl -u mongod -n 50"
+        print_info ""
+        print_info "Pritunl yapılandırması kontrol ediliyor..."
+        if [ -f "$pritunl_conf" ]; then
+            echo "Mevcut yapılandırma:"
+            cat "$pritunl_conf" | grep -E "mongodb_uri|mongodb_servers" || echo "MongoDB ayarları bulunamadı!"
+        fi
+        return 1
+    fi
+}
+
+install_mongodb_for_pritunl() {
+    print_header "Pritunl için MongoDB Kurulumu ve Yapılandırması"
+    
+    # Pritunl kurulu mu kontrol et
+    if ! command -v pritunl &>/dev/null && ! systemctl list-units --type=service | grep -q pritunl; then
+        print_error "Pritunl kurulu değil!"
+        print_info "Önce Pritunl kurulumu yapmanız gerekiyor."
+        if ask_yes_no "Pritunl kurulumuna devam etmek ister misiniz?"; then
+            install_pritunl
+            return $?
+        else
+            return 1
+        fi
+    fi
+    
+    print_info "Pritunl kurulu tespit edildi"
+    
+    # MongoDB zaten kurulu mu kontrol et
+    local mongodb_installed=false
+    local mongodb_running=false
+    
+    if systemctl is-active --quiet mongod 2>/dev/null; then
+        mongodb_installed=true
+        mongodb_running=true
+        print_success "MongoDB zaten kurulu ve çalışıyor"
+        
+        # Pritunl yapılandırmasını kontrol et
+        local pritunl_conf="/etc/pritunl.conf"
+        if [ -f "$pritunl_conf" ]; then
+            # JSON formatında mı kontrol et
+            local is_json=false
+            if head -1 "$pritunl_conf" | grep -q "^{"; then
+                is_json=true
+            fi
+            
+            if [ "$is_json" = true ]; then
+                # JSON formatında kontrol
+                if python3 -c "import json; json.load(open('$pritunl_conf'))" 2>/dev/null && \
+                   python3 -c "import json; data=json.load(open('$pritunl_conf')); 'mongodb_uri' in data" 2>/dev/null; then
+                    print_success "Pritunl MongoDB yapılandırması mevcut (JSON formatında)"
+                    local existing_uri=$(python3 -c "import json; print(json.load(open('$pritunl_conf')).get('mongodb_uri', ''))" 2>/dev/null || echo "")
+                    if [ -n "$existing_uri" ]; then
+                        echo -e "${GREEN}MongoDB URI:${NC} $existing_uri"
+                    fi
+                else
+                    print_warning "Pritunl yapılandırması bozuk, düzeltiliyor..."
+                    # JSON formatında düzelt
+                    if command -v python3 &>/dev/null; then
+                        python3 <<PYTHON_SCRIPT
+import json
+config = {"mongodb_uri": "mongodb://localhost:27017/pritunl"}
+with open('$pritunl_conf', 'w') as f:
+    json.dump(config, f, indent=2)
+PYTHON_SCRIPT
+                        systemctl restart pritunl
+                        print_success "Pritunl yapılandırması düzeltildi (JSON formatında)"
+                    fi
+                fi
+            else
+                # Python formatında ise JSON'a dönüştür
+                print_warning "Pritunl yapılandırması eski formatta, JSON'a dönüştürülüyor..."
+                cp "$pritunl_conf" "${pritunl_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+                if command -v python3 &>/dev/null; then
+                    python3 <<PYTHON_SCRIPT
+import json
+config = {"mongodb_uri": "mongodb://localhost:27017/pritunl"}
+with open('$pritunl_conf', 'w') as f:
+    json.dump(config, f, indent=2)
+PYTHON_SCRIPT
+                    systemctl restart pritunl
+                    print_success "Pritunl yapılandırması JSON formatına dönüştürüldü"
+                fi
+            fi
+        fi
+        
+        return 0
+    elif command -v mongod &>/dev/null || dpkg -l | grep -q mongodb-org; then
+        mongodb_installed=true
+        print_info "MongoDB kurulu görünüyor, servis başlatılıyor..."
+        systemctl start mongod 2>/dev/null || true
+        systemctl enable mongod 2>/dev/null || true
+        sleep 5
+        if systemctl is-active --quiet mongod 2>/dev/null; then
+            mongodb_running=true
+            print_success "MongoDB servisi başlatıldı"
+        fi
+    fi
+    
+    # MongoDB kurulu değilse veya çalışmıyorsa kur
+    if [ "$mongodb_installed" = false ] || [ "$mongodb_running" = false ]; then
+        print_info "MongoDB 8.0 resmi repository'sinden kuruluyor..."
+        
+        # Gerekli paketler
+        if ! command -v gpg &>/dev/null; then
+            apt install -y gnupg
+        fi
+        
+        if ! command -v curl &>/dev/null; then
+            apt install -y curl
+        fi
+        
+        # GPG anahtarı ekle
+        print_info "MongoDB GPG anahtarı ekleniyor..."
+        mkdir -p /usr/share/keyrings
+        
+        if [ ! -f "/usr/share/keyrings/mongodb-server-8.0.gpg" ]; then
+            if ! curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | \
+                gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg 2>/dev/null; then
+                print_error "MongoDB GPG anahtarı eklenemedi!"
+                return 1
+            fi
+            print_success "MongoDB GPG anahtarı eklendi"
+        fi
+        
+        # MongoDB repository ekle
+        print_info "MongoDB repository ekleniyor..."
+        local ubuntu_codename="noble"
+        if command -v lsb_release &>/dev/null; then
+            ubuntu_codename=$(lsb_release -cs)
+        elif [ -f /etc/os-release ]; then
+            ubuntu_codename=$(grep VERSION_CODENAME /etc/os-release | cut -d'=' -f2 | tr -d '"')
+        fi
+        
+        if [ -z "$ubuntu_codename" ] || [ "$ubuntu_codename" = "" ]; then
+            ubuntu_codename="noble"
+        fi
+        
+        cat > /etc/apt/sources.list.d/mongodb-org.list <<EOF
+deb [ signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu ${ubuntu_codename}/mongodb-org/8.0 multiverse
+EOF
+        
+        # APT güncelle
+        apt update
+        
+        # MongoDB kurulumu
+        print_info "MongoDB-org paketleri kuruluyor..."
+        if ! DEBIAN_FRONTEND=noninteractive apt install -y mongodb-org; then
+            print_error "MongoDB kurulumu başarısız oldu!"
+            return 1
+        fi
+        
+        # MongoDB servisini başlat ve etkinleştir
+        print_info "MongoDB servisi başlatılıyor..."
+        systemctl daemon-reload
+        systemctl enable mongod
+        
+        # MongoDB veri dizinini oluştur ve izinleri ayarla
+        if [ ! -d "/var/lib/mongodb" ]; then
+            mkdir -p /var/lib/mongodb
+        fi
+        if [ ! -d "/var/log/mongodb" ]; then
+            mkdir -p /var/log/mongodb
+        fi
+        
+        # MongoDB kullanıcısını kontrol et
+        if ! id mongodb &>/dev/null; then
+            useradd -r -s /bin/false mongodb 2>/dev/null || true
+        fi
+        
+        # Dizin izinlerini ayarla
+        chown -R mongodb:mongodb /var/lib/mongodb 2>/dev/null || true
+        chown -R mongodb:mongodb /var/log/mongodb 2>/dev/null || true
+        
+        # Servisi başlat
+        systemctl start mongod
+        
+        # Servis durumunu kontrol et
+        local mongodb_start_retry=0
+        while [ $mongodb_start_retry -lt 15 ]; do
+            if systemctl is-active --quiet mongod 2>/dev/null; then
+                mongodb_running=true
+                break
+            fi
+            sleep 2
+            ((mongodb_start_retry++))
+        done
+        
+        if [ "$mongodb_running" = false ]; then
+            print_error "MongoDB servisi başlatılamadı!"
+            print_info "Log kontrolü: journalctl -u mongod -n 50"
+            return 1
+        fi
+        
+        print_success "MongoDB başarıyla kuruldu ve başlatıldı"
+    fi
+    
+    # MongoDB bağlantı testi
+    print_info "MongoDB bağlantı testi yapılıyor..."
+    local mongodb_connected=false
+    
+    if command -v mongosh &>/dev/null; then
+        if mongosh --eval "db.adminCommand('ping')" --quiet 2>/dev/null; then
+            mongodb_connected=true
+            print_success "MongoDB bağlantı testi başarılı"
+        fi
+    elif command -v mongo &>/dev/null; then
+        if mongo --eval "db.adminCommand('ping')" --quiet 2>/dev/null; then
+            mongodb_connected=true
+            print_success "MongoDB bağlantı testi başarılı"
+        fi
+    fi
+    
+    # Pritunl yapılandırması (JSON formatında)
+    print_info "Pritunl yapılandırması güncelleniyor (JSON formatında)..."
+    local pritunl_conf="/etc/pritunl.conf"
+    local mongodb_uri="mongodb://localhost:27017/pritunl"
+    
+    # Yapılandırma dosyasını kontrol et ve düzelt
+    if [ ! -f "$pritunl_conf" ]; then
+        # Yeni JSON yapılandırma dosyası oluştur
+        if command -v python3 &>/dev/null; then
+            python3 <<PYTHON_SCRIPT
+import json
+config = {"mongodb_uri": "$mongodb_uri"}
+with open('$pritunl_conf', 'w') as f:
+    json.dump(config, f, indent=2)
+PYTHON_SCRIPT
+            chmod 644 "$pritunl_conf"
+            print_success "Pritunl yapılandırma dosyası oluşturuldu (JSON formatında)"
+        else
+            # Python yoksa basit JSON oluştur
+            cat > "$pritunl_conf" <<EOF
+{
+  "mongodb_uri": "$mongodb_uri"
+}
+EOF
+            chmod 644 "$pritunl_conf"
+            print_success "Pritunl yapılandırma dosyası oluşturuldu (JSON formatında)"
+        fi
+    else
+        # Mevcut dosyayı kontrol et - JSON formatında mı?
+        local is_json=false
+        if head -1 "$pritunl_conf" | grep -q "^{"; then
+            is_json=true
+        fi
+        
+        if [ "$is_json" = true ]; then
+            # JSON formatında güncelle
+            print_info "Mevcut yapılandırma JSON formatında, güncelleniyor..."
+            
+            if command -v python3 &>/dev/null; then
+                python3 <<PYTHON_SCRIPT
+import json
+import sys
+
+try:
+    with open('$pritunl_conf', 'r') as f:
+        config = json.load(f)
+    
+    config['mongodb_uri'] = '$mongodb_uri'
+    
+    with open('$pritunl_conf', 'w') as f:
+        json.dump(config, f, indent=2)
+    
+    print("MongoDB URI güncellendi")
+except json.JSONDecodeError as e:
+    print(f"JSON hatası: {e}")
+    # Bozuk JSON'u düzelt
+    config = {"mongodb_uri": "$mongodb_uri"}
+    with open('$pritunl_conf', 'w') as f:
+        json.dump(config, f, indent=2)
+    print("Yapılandırma dosyası düzeltildi")
+except Exception as e:
+    print(f"Hata: {e}")
+    sys.exit(1)
+PYTHON_SCRIPT
+                if [ $? -eq 0 ]; then
+                    print_success "MongoDB URI JSON formatında güncellendi: $mongodb_uri"
+                else
+                    print_warning "Python ile güncelleme başarısız, dosya yeniden oluşturuluyor..."
+                    cp "$pritunl_conf" "${pritunl_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+                    cat > "$pritunl_conf" <<EOF
+{
+  "mongodb_uri": "$mongodb_uri"
+}
+EOF
+                    print_success "Yapılandırma dosyası yeniden oluşturuldu (JSON formatında)"
+                fi
+            else
+                # Python yoksa, dosyayı yedekle ve yeniden oluştur
+                print_warning "Python3 bulunamadı, yapılandırma dosyası yeniden oluşturuluyor..."
+                cp "$pritunl_conf" "${pritunl_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+                cat > "$pritunl_conf" <<EOF
+{
+  "mongodb_uri": "$mongodb_uri"
+}
+EOF
+                print_success "Yapılandırma dosyası yeniden oluşturuldu (JSON formatında)"
+            fi
+        else
+            # Python config formatında ise, JSON'a dönüştür
+            print_info "Mevcut yapılandırma Python formatında, JSON'a dönüştürülüyor..."
+            cp "$pritunl_conf" "${pritunl_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+            
+            # Mevcut ayarları oku (varsa)
+            local existing_uri=$(grep -E "^mongodb_uri" "$pritunl_conf" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "")
+            if [ -z "$existing_uri" ]; then
+                existing_uri="$mongodb_uri"
+            fi
+            
+            # JSON formatında yeni dosya oluştur
+            cat > "$pritunl_conf" <<EOF
+{
+  "mongodb_uri": "$existing_uri"
+}
+EOF
+            print_success "Yapılandırma dosyası JSON formatına dönüştürüldü"
+        fi
+    fi
+    
+    # Pritunl için MongoDB veritabanı hazırla
+    print_info "Pritunl için MongoDB veritabanı hazırlanıyor..."
+    if command -v mongosh &>/dev/null; then
+        mongosh --eval "use pritunl; db.createCollection('test'); db.test.drop();" --quiet 2>/dev/null || true
+    elif command -v mongo &>/dev/null; then
+        mongo --eval "use pritunl; db.createCollection('test'); db.test.drop();" --quiet 2>/dev/null || true
+    fi
+    
+    # Pritunl servisini yeniden başlat
+    print_info "Pritunl servisi yeniden başlatılıyor..."
+    systemctl restart pritunl
+    
+    sleep 5
+    
+    # Servis durumunu kontrol et
+    if systemctl is-active --quiet pritunl 2>/dev/null; then
+        print_success "Pritunl MongoDB yapılandırması tamamlandı!"
+        echo ""
+        echo -e "${GREEN}MongoDB Durumu:${NC} $(systemctl is-active mongod)"
+        echo -e "${GREEN}MongoDB URI:${NC} $mongodb_uri"
+        echo -e "${GREEN}Pritunl Durumu:${NC} $(systemctl is-active pritunl)"
+        echo ""
+        print_info "Pritunl artık MongoDB'ye bağlı ve çalışıyor"
+    else
+        print_warning "Pritunl servisi başlatılamadı!"
+        print_info "Log kontrolü: journalctl -u pritunl -n 50"
+        print_info "MongoDB durumu: systemctl status mongod"
+    fi
+}
+
+create_openvpn_client() {
+    print_header "OpenVPN İstemci Sertifikası Oluşturma"
+    
+    # OpenVPN servis kontrolü
+    local openvpn_running=false
+    if systemctl is-active --quiet openvpn 2>/dev/null || systemctl is-active --quiet openvpn@server 2>/dev/null; then
+        openvpn_running=true
+    fi
+    
+    if [ "$openvpn_running" = false ]; then
+        print_error "OpenVPN server çalışmıyor!"
+        return 1
+    fi
+    
+    local easyrsa_dir="/etc/openvpn/easy-rsa"
+    if [ ! -d "$easyrsa_dir/pki" ]; then
+        print_error "OpenVPN CA bulunamadı! Önce OpenVPN server kurulumu yapın."
+        return 1
+    fi
+    
+    cd $easyrsa_dir
+    
+    local client_name=""
+    ask_input "İstemci adını girin (örn: kullanici1, laptop)" client_name
+    
+    if [ -z "$client_name" ]; then
+        print_error "İstemci adı boş olamaz!"
+        return 1
+    fi
+    
+    # İstemci sertifikası oluştur
+    print_info "İstemci sertifikası oluşturuluyor: $client_name"
+    ./easyrsa gen-req $client_name nopass
+    ./easyrsa sign-req client $client_name
+    
+    # İstemci yapılandırma dosyası oluştur
+    local server_ip=$(hostname -I | awk '{print $1}')
+    local openvpn_port=$(grep "^port" /etc/openvpn/server.conf 2>/dev/null | awk '{print $2}' || echo "1194")
+    local openvpn_proto=$(grep "^proto" /etc/openvpn/server.conf 2>/dev/null | awk '{print $2}' || echo "udp")
+    
+    local client_config_dir="/etc/openvpn/clients"
+    mkdir -p $client_config_dir
+    
+    local client_config="$client_config_dir/${client_name}.ovpn"
+    cat > $client_config <<EOF
+client
+dev tun
+proto $openvpn_proto
+remote $server_ip $openvpn_port
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+ca [inline]
+cert [inline]
+key [inline]
+tls-auth [inline] 1
+cipher AES-256-CBC
+auth SHA256
+verb 3
+EOF
+    
+    # Sertifikaları dosyaya ekle
+    echo "<ca>" >> $client_config
+    cat $easyrsa_dir/pki/ca.crt >> $client_config
+    echo "</ca>" >> $client_config
+    
+    echo "<cert>" >> $client_config
+    cat $easyrsa_dir/pki/issued/${client_name}.crt >> $client_config
+    echo "</cert>" >> $client_config
+    
+    echo "<key>" >> $client_config
+    cat $easyrsa_dir/pki/private/${client_name}.key >> $client_config
+    echo "</key>" >> $client_config
+    
+    echo "<tls-auth>" >> $client_config
+    cat $easyrsa_dir/pki/ta.key >> $client_config
+    echo "</tls-auth>" >> $client_config
+    
+    chmod 600 $client_config
+    
+    print_success "İstemci sertifikası oluşturuldu!"
+    echo -e "${GREEN}İstemci Dosyası:${NC} $client_config"
+    echo -e "${GREEN}İndirme:${NC} scp root@$server_ip:$client_config ./${client_name}.ovpn"
+    echo ""
+    print_info "Bu dosyayı OpenVPN istemcisine (Windows/Mac/Linux/Android/iOS) yükleyerek bağlanabilirsiniz"
+}
+
+list_openvpn_clients() {
+    print_header "OpenVPN İstemci Listesi"
+    
+    local easyrsa_dir="/etc/openvpn/easy-rsa"
+    local client_config_dir="/etc/openvpn/clients"
+    
+    if [ ! -d "$easyrsa_dir/pki/issued" ]; then
+        print_warning "Henüz istemci sertifikası oluşturulmamış"
+        return 0
+    fi
+    
+    echo -e "${CYAN}Oluşturulan İstemci Sertifikaları:${NC}"
+    echo ""
+    
+    local count=1
+    for cert_file in $easyrsa_dir/pki/issued/*.crt; do
+        if [ -f "$cert_file" ]; then
+            local client_name=$(basename "$cert_file" .crt)
+            if [ "$client_name" != "server" ]; then
+                local client_ovpn="$client_config_dir/${client_name}.ovpn"
+                local status=""
+                if [ -f "$client_ovpn" ]; then
+                    status="${GREEN}[Hazır]${NC}"
+                else
+                    status="${YELLOW}[Sertifika var, config yok]${NC}"
+                fi
+                
+                echo "$count) $client_name $status"
+                ((count++))
+            fi
+        fi
+    done
+    
+    if [ $count -eq 1 ]; then
+        print_info "Henüz istemci sertifikası oluşturulmamış"
+    fi
+}
+
+revoke_openvpn_client() {
+    print_header "OpenVPN İstemci Sertifikası İptal Etme"
+    
+    # OpenVPN servis kontrolü
+    local openvpn_running=false
+    if systemctl is-active --quiet openvpn 2>/dev/null || systemctl is-active --quiet openvpn@server 2>/dev/null; then
+        openvpn_running=true
+    fi
+    
+    if [ "$openvpn_running" = false ]; then
+        print_error "OpenVPN server çalışmıyor!"
+        return 1
+    fi
+    
+    local easyrsa_dir="/etc/openvpn/easy-rsa"
+    if [ ! -d "$easyrsa_dir/pki" ]; then
+        print_error "OpenVPN CA bulunamadı!"
+        return 1
+    fi
+    
+    # İstemci listesi göster
+    list_openvpn_clients
+    echo ""
+    
+    local client_name=""
+    ask_input "İptal edilecek istemci adını girin" client_name
+    
+    if [ -z "$client_name" ]; then
+        print_error "İstemci adı boş olamaz!"
+        return 1
+    fi
+    
+    if [ ! -f "$easyrsa_dir/pki/issued/${client_name}.crt" ]; then
+        print_error "İstemci sertifikası bulunamadı: $client_name"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}UYARI:${NC} Bu işlem istemci sertifikasını iptal edecek ve bağlantıyı kesilecek!"
+    if ! ask_yes_no "Devam etmek istiyor musunuz?"; then
+        print_info "İşlem iptal edildi"
+        return 0
+    fi
+    
+    cd $easyrsa_dir
+    ./easyrsa revoke $client_name
+    
+    # CRL'yi güncelle
+    ./easyrsa gen-crl
+    
+    # CRL dosyasını OpenVPN dizinine kopyala
+    cp $easyrsa_dir/pki/crl.pem /etc/openvpn/crl.pem 2>/dev/null || true
+    
+    # OpenVPN'i yeniden başlat
+    if systemctl is-active --quiet openvpn 2>/dev/null; then
+        systemctl restart openvpn
+    elif systemctl is-active --quiet openvpn@server 2>/dev/null; then
+        systemctl restart openvpn@server
+    fi
+    
+    # İstemci dosyalarını sil
+    rm -f /etc/openvpn/clients/${client_name}.ovpn
+    
+    print_success "İstemci sertifikası iptal edildi: $client_name"
+}
+
+openvpn_management_menu() {
+    while true; do
+        clear
+        print_header "OpenVPN Yönetim Paneli"
+        
+        echo -e "${CYAN}OpenVPN Yönetim Seçenekleri:${NC}"
+        echo "1) İstemci Sertifikası Oluştur"
+        echo "2) İstemci Listesi"
+        echo "3) İstemci Sertifikası İptal Et"
+        echo "4) OpenVPN Durumu"
+        echo "5) Geri Dön"
+        echo ""
+        
+        read -p "Seçiminizi yapın (1-5): " choice
+        
+        case $choice in
+            1)
+                create_openvpn_client
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            2)
+                list_openvpn_clients
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            3)
+                revoke_openvpn_client
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            4)
+                print_header "OpenVPN Durumu"
+                local openvpn_running=false
+                if systemctl is-active --quiet openvpn 2>/dev/null; then
+                    openvpn_running=true
+                    print_success "OpenVPN server çalışıyor (openvpn service)"
+                elif systemctl is-active --quiet openvpn@server 2>/dev/null; then
+                    openvpn_running=true
+                    print_success "OpenVPN server çalışıyor (openvpn@server service)"
+                fi
+                
+                if [ "$openvpn_running" = true ]; then
+                    echo ""
+                    echo -e "${CYAN}Servis Bilgileri:${NC}"
+                    systemctl status openvpn 2>/dev/null | head -10 || systemctl status openvpn@server 2>/dev/null | head -10
+                    echo ""
+                    echo -e "${CYAN}Bağlı İstemciler:${NC}"
+                    if [ -f "/var/log/openvpn/openvpn-status.log" ]; then
+                        cat /var/log/openvpn/openvpn-status.log
+                    elif [ -f "/etc/openvpn/openvpn-status.log" ]; then
+                        cat /etc/openvpn/openvpn-status.log
+                    else
+                        echo "Henüz bağlı istemci yok veya log dosyası bulunamadı"
+                    fi
+                else
+                    print_error "OpenVPN server çalışmıyor"
+                fi
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            5)
+                return 0
+                ;;
+            *)
+                print_error "Geçersiz seçim"
+                sleep 2
+                ;;
+        esac
+    done
 }
 
 install_phpmyadmin() {
@@ -2945,7 +5182,232 @@ install_individual_service() {
             fi
             ;;
         3)
-            if systemctl is-active --quiet mariadb || systemctl is-active --quiet mysql; then
+            # MySQL/MariaDB durum kontrolü
+            local mysql_running=false
+            local mysql_error=false
+            
+            if systemctl is-active --quiet mariadb 2>/dev/null || systemctl is-active --quiet mysql 2>/dev/null; then
+                mysql_running=true
+                print_info "MySQL/MariaDB servisi çalışıyor"
+                
+                # Şifre ile bağlantı testi
+                if [ -n "$MYSQL_ROOT_PASSWORD" ]; then
+                    if ! mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
+                        mysql_error=true
+                        print_error "MySQL root şifresi hatalı veya bağlantı hatası!"
+                        print_info "Hata: Access denied veya servis hatası tespit edildi"
+                    fi
+                else
+                    # Şifresiz bağlantı testi
+                    if ! mysql -u root -e "SELECT 1;" 2>/dev/null && ! sudo mysql -u root -e "SELECT 1;" 2>/dev/null; then
+                        mysql_error=true
+                        print_error "MySQL bağlantı hatası tespit edildi!"
+                    fi
+                fi
+            else
+                # Servis çalışmıyor ama kurulu olabilir
+                if command -v mysql &> /dev/null || command -v mariadb &> /dev/null; then
+                    print_warning "MySQL/MariaDB kurulu görünüyor ancak servis çalışmıyor"
+                    mysql_error=true
+                fi
+            fi
+            
+            # Hata durumunda temizleme seçeneği
+            if [ "$mysql_error" = true ]; then
+                print_warning "MySQL/MariaDB'de sorun tespit edildi!"
+                echo ""
+                echo "Seçenekler:"
+                echo "1) Mevcut kurulumu kaldırıp yeniden kur (Önerilen)"
+                echo "2) Şifreyi manuel olarak ayarla ve tekrar dene"
+                echo "3) İptal et"
+                echo ""
+                read -p "Seçiminiz (1-3) [1]: " fix_choice
+                
+                case $fix_choice in
+                    2)
+                        print_info "Manuel şifre ayarlama..."
+                        if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+                            ask_password "MySQL root şifresini belirleyin" MYSQL_ROOT_PASSWORD
+                        fi
+                        
+                        # Servisi başlatmayı dene
+                        systemctl start mariadb 2>/dev/null || systemctl start mysql 2>/dev/null
+                        sleep 3
+                        
+                        # Servisin başladığından emin ol
+                        local retry_count=0
+                        while [ $retry_count -lt 10 ]; do
+                            if systemctl is-active --quiet mariadb 2>/dev/null || systemctl is-active --quiet mysql 2>/dev/null; then
+                                break
+                            fi
+                            sleep 1
+                            ((retry_count++))
+                        done
+                        
+                        # Şifre ayarlamayı dene (birden fazla yöntem)
+                        local manual_password_set=false
+                        local max_attempts=3
+                        local attempt=0
+                        
+                        while [ $attempt -lt $max_attempts ] && [ "$manual_password_set" = false ]; do
+                            ((attempt++))
+                            print_info "Şifre ayarlama denemesi $attempt/$max_attempts..."
+                            
+                            # Yöntem 1: sudo mysql (MariaDB 10.4+ için en güvenilir)
+                            if sudo mysql <<EOF 2>/dev/null; then
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+ALTER USER 'root'@'::1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+FLUSH PRIVILEGES;
+EOF
+                                manual_password_set=true
+                                print_success "Şifre sudo mysql ile ayarlandı"
+                                break
+                            # Yöntem 2: Normal mysql (eğer şifresiz erişim varsa)
+                            elif mysql -u root <<EOF 2>/dev/null; then
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
+FLUSH PRIVILEGES;
+EOF
+                                manual_password_set=true
+                                print_success "Şifre normal mysql ile ayarlandı"
+                                break
+                            # Yöntem 3: mysqladmin
+                            elif mysqladmin -u root password "$MYSQL_ROOT_PASSWORD" 2>/dev/null; then
+                                manual_password_set=true
+                                print_success "Şifre mysqladmin ile ayarlandı"
+                                break
+                            else
+                                sleep 2
+                            fi
+                        done
+                        
+                        if [ "$manual_password_set" = true ]; then
+                            # Şifre ile bağlantı testi
+                            sleep 2
+                            local verify_count=0
+                            local verify_success=false
+                            
+                            while [ $verify_count -lt 5 ] && [ "$verify_success" = false ]; do
+                                if mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
+                                    verify_success=true
+                                    print_success "MySQL bağlantısı başarılı!"
+                                    break
+                                fi
+                                sleep 1
+                                ((verify_count++))
+                            done
+                            
+                            if [ "$verify_success" = false ]; then
+                                print_warning "Şifre ayarlandı ancak bağlantı testi başarısız"
+                                print_info "Manuel test için: mysql -u root -p"
+                            fi
+                        else
+                            print_error "Manuel şifre ayarlama başarısız, temizleme önerilir"
+                        fi
+                        ;;
+                    3)
+                        print_info "İşlem iptal edildi"
+                        ;;
+                    *)
+                        # Temizleme ve yeniden kurulum
+                        print_info "MySQL/MariaDB kapsamlı temizleme yapılıyor..."
+                        
+                        # Önce çalışan tüm MySQL/MariaDB process'lerini zorla durdur
+                        print_info "Çalışan MySQL/MariaDB process'leri durduruluyor..."
+                        pkill -9 mysqld 2>/dev/null || true
+                        pkill -9 mariadbd 2>/dev/null || true
+                        pkill -9 mysqld_safe 2>/dev/null || true
+                        pkill -9 mariadb 2>/dev/null || true
+                        sleep 3
+                        
+                        # Servisleri durdur (systemd varsa)
+                        systemctl stop mariadb 2>/dev/null || true
+                        systemctl stop mysql 2>/dev/null || true
+                        systemctl disable mariadb 2>/dev/null || true
+                        systemctl disable mysql 2>/dev/null || true
+                        sleep 2
+                        
+                        # Broken dependencies'i düzelt
+                        print_info "Broken dependencies düzeltiliyor..."
+                        apt --fix-broken install -y 2>/dev/null || true
+                        
+                        # Tüm MariaDB/MySQL paketlerini kaldır
+                        print_info "MariaDB/MySQL paketleri kaldırılıyor..."
+                        
+                        # Önce kısmi kurulumları temizle
+                        dpkg --remove --force-remove-reinstreq mariadb-server mariadb-client mariadb-common 2>/dev/null || true
+                        dpkg --remove --force-remove-reinstreq mysql-server mysql-client mysql-common 2>/dev/null || true
+                        
+                        # Sonra normal kaldırma
+                        apt remove --purge -y \
+                            mariadb-server mariadb-client mariadb-common \
+                            mysql-server mysql-client mysql-common \
+                            mariadb-server-* mariadb-client-* \
+                            mysql-server-* mysql-client-* \
+                            galera-* 2>/dev/null || true
+                        
+                        # update-alternatives temizliği
+                        print_info "update-alternatives temizleniyor..."
+                        update-alternatives --remove-all mysql 2>/dev/null || true
+                        update-alternatives --remove-all mysqldump 2>/dev/null || true
+                        update-alternatives --remove-all mysqladmin 2>/dev/null || true
+                        update-alternatives --remove-all mysqlcheck 2>/dev/null || true
+                        
+                        # Eksik dosyaları oluştur (dpkg hatasını önlemek için)
+                        if [ ! -d "/etc/mysql" ]; then
+                            mkdir -p /etc/mysql
+                        fi
+                        if [ ! -f "/etc/mysql/mariadb.cnf" ]; then
+                            touch /etc/mysql/mariadb.cnf
+                        fi
+                        
+                        # dpkg yapılandırmasını düzelt
+                        print_info "dpkg yapılandırması düzeltiliyor..."
+                        dpkg --configure -a 2>/dev/null || true
+                        
+                        # Broken dependencies'i tekrar düzelt
+                        apt --fix-broken install -y 2>/dev/null || true
+                        
+                        # Kalan paketleri temizle
+                        apt autoremove -y
+                        apt autoclean
+                        
+                        # Eksik bağımlılıkları kur
+                        apt-get -f install -y 2>/dev/null || true
+                        
+                        # dpkg durumunu kontrol et ve düzelt
+                        print_info "dpkg durumu kontrol ediliyor..."
+                        dpkg --configure -a 2>/dev/null || true
+                        
+                        # Veri ve yapılandırma dizinlerini temizle
+                        print_info "Veri ve yapılandırma dizinleri temizleniyor..."
+                        rm -rf /var/lib/mysql
+                        rm -rf /etc/mysql
+                        rm -rf /var/log/mysql
+                        rm -rf /run/mysqld
+                        rm -f /etc/init.d/mysql
+                        rm -f /etc/init.d/mariadb
+                        
+                        # Systemd servis dosyalarını temizle
+                        rm -f /etc/systemd/system/mariadb.service
+                        rm -f /etc/systemd/system/mysql.service
+                        rm -f /lib/systemd/system/mariadb.service
+                        rm -f /lib/systemd/system/mysql.service
+                        systemctl daemon-reload
+                        
+                        print_success "Kapsamlı temizleme tamamlandı"
+                        sleep 2
+                        
+                        if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+                            ask_password "MySQL root şifresini belirleyin" MYSQL_ROOT_PASSWORD
+                        fi
+                        
+                        install_mysql
+                        ;;
+                esac
+            elif [ "$mysql_running" = true ]; then
+                # MySQL çalışıyor, yeniden kurulum seçeneği
                 print_warning "MySQL/MariaDB zaten kurulu ve çalışıyor"
                 if ask_yes_no "Yeniden kurmak istiyor musunuz? (UYARI: Veriler silinebilir!)"; then
                     if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
@@ -2954,6 +5416,7 @@ install_individual_service() {
                     install_mysql
                 fi
             else
+                # MySQL kurulu değil, normal kurulum
                 if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
                     ask_password "MySQL root şifresini belirleyin" MYSQL_ROOT_PASSWORD
                 fi
@@ -3142,11 +5605,14 @@ main_menu() {
         echo "15) Database Geri Yükleme"
         echo "16) Docker Kurulumu"
         echo "17) Log Dosyaları Görüntüle"
-        echo "18) Servis Optimizasyonu (Performans & Güvenlik)"
-        echo "19) Çıkış"
+        echo "18) OpenVPN Server Kurulumu"
+        echo "19) OpenVPN Web Yönetim Paneli"
+        echo "20) OpenVPN İstemci Yönetimi"
+        echo "21) Servis Optimizasyonu (Performans & Güvenlik)"
+        echo "22) Çıkış"
         echo ""
         
-        read -p "Seçiminizi yapın (1-19): " choice
+        read -p "Seçiminizi yapın (1-22): " choice
         
         case $choice in
             1)
@@ -3218,15 +5684,26 @@ main_menu() {
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             18)
-                optimize_services_menu
+                install_openvpn
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             19)
+                install_openvpn_web_admin
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            20)
+                openvpn_management_menu
+                ;;
+            21)
+                optimize_services_menu
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            22)
                 print_success "Çıkılıyor..."
                 exit 0
                 ;;
             *)
-                print_error "Geçersiz seçim. Lütfen 1-19 arasında bir sayı girin."
+                print_error "Geçersiz seçim. Lütfen 1-22 arasında bir sayı girin."
                 sleep 2
                 ;;
         esac
