@@ -5833,18 +5833,26 @@ add_nginx_domains_to_dns() {
 update_zone_soa_values() {
     print_header "Zone Dosyalarını RFC Uyumlu Hale Getirme"
     
-    # Zone dosyalarını bul
-    local zone_files=$(find /etc/bind -name "db.*" -type f 2>/dev/null | grep -v ".backup")
+    # Zone dosyalarını bul (sadece domain zone dosyaları, sistem zone dosyaları değil)
+    local zone_files=$(find /etc/bind -name "db.*" -type f 2>/dev/null | grep -v ".backup" | grep -vE "(db\.127|db\.0|db\.255|db\.empty|db\.local|db\.root)")
     
     if [ -z "$zone_files" ]; then
-        print_warning "Zone dosyası bulunamadı!"
+        print_warning "Domain zone dosyası bulunamadı!"
+        print_info "Sistem zone dosyaları (db.127, db.local, vb.) atlanıyor."
         return 1
     fi
     
-    print_info "Zone dosyaları güncelleniyor..."
+    print_info "Domain zone dosyaları güncelleniyor..."
     
     for zone_file in $zone_files; do
         if [ ! -f "$zone_file" ]; then
+            continue
+        fi
+        
+        # Sistem zone dosyalarını atla
+        local zone_basename=$(basename "$zone_file")
+        if [[ "$zone_basename" =~ ^db\.(127|0|255|empty|local|root)$ ]]; then
+            print_info "Sistem zone dosyası atlanıyor: $zone_file"
             continue
         fi
         
@@ -5867,27 +5875,65 @@ try:
         content = f.read()
     
     # TTL değerini güncelle (604800 -> 3600)
-    content = re.sub(r'\\\$TTL\s+604800', '\$TTL    3600', content)
-    content = re.sub(r'\\\$TTL\s+10800', '\$TTL    3600', content)
+    content = re.sub(r'\$TTL\s+604800', '$TTL    3600', content)
+    content = re.sub(r'\$TTL\s+10800', '$TTL    3600', content)
     
-    # SOA kaydını güncelle
+    # SOA kaydını güncelle - basit ve güvenli yaklaşım
     # REFRESH: 604800 -> 3600
-    content = re.sub(r'(\d{8,})\s*;\s*Serial\s*\n\s*)604800(\s*;\s*Refresh)', r'\g<1>3600\g<2>', content)
-    content = re.sub(r'(\d{8,})\s*;\s*Serial\s*\n\s*)\d+(\s*;\s*Refresh\s*\n\s*)\d+(\s*;\s*Retry)', 
-                     lambda m: m.group(1) + '3600' + m.group(2) + '600' + m.group(3), content)
+    def update_refresh(match):
+        return match.group(1) + '        ; Serial\n                          3600' + match.group(2)
+    content = re.sub(r'(\d{8,})\s*;\s*Serial\s*\n\s*604800(\s*;\s*Refresh)', update_refresh, content)
     
     # RETRY: 86400 -> 600
-    content = re.sub(r'(\d+)\s*;\s*Refresh\s*\n\s*)86400(\s*;\s*Retry)', r'\g<1>600\g<2>', content)
-    content = re.sub(r'(\d+)\s*;\s*Refresh\s*\n\s*)\d+(\s*;\s*Retry\s*\n\s*)\d+(\s*;\s*Expire)', 
-                     lambda m: m.group(1) + m.group(2) + '600' + m.group(3), content)
+    def update_retry(match):
+        return match.group(1) + '         ; Refresh\n                          600' + match.group(2)
+    content = re.sub(r'(\d+)\s*;\s*Refresh\s*\n\s*86400(\s*;\s*Retry)', update_retry, content)
+    
+    # RETRY: diğer yüksek değerleri de kontrol et
+    def update_retry_other(match):
+        try:
+            retry_val = int(match.group(2))
+            if retry_val > 600:
+                return match.group(1) + '600' + match.group(3)
+            else:
+                return match.group(0)
+        except:
+            return match.group(0)
+    content = re.sub(r'(\d+)\s*;\s*Refresh\s*\n\s*)(\d+)(\s*;\s*Retry)', update_retry_other, content)
     
     # EXPIRE: 2419200 -> 604800 (28 gün -> 7 gün)
-    content = re.sub(r'(\d+)\s*;\s*Retry\s*\n\s*)2419200(\s*;\s*Expire)', r'\g<1>604800\g<2>', content)
+    def update_expire(match):
+        return match.group(1) + '           ; Retry\n                          604800' + match.group(2)
+    content = re.sub(r'(\d+)\s*;\s*Retry\s*\n\s*2419200(\s*;\s*Expire)', update_expire, content)
+    
+    # EXPIRE: diğer yüksek değerleri de kontrol et
+    def update_expire_other(match):
+        try:
+            expire_val = int(match.group(2))
+            if expire_val > 604800:
+                return match.group(1) + '604800' + match.group(3)
+            else:
+                return match.group(0)
+        except:
+            return match.group(0)
+    content = re.sub(r'(\d+)\s*;\s*Retry\s*\n\s*)(\d+)(\s*;\s*Expire)', update_expire_other, content)
     
     # MINIMUM TTL: 604800 -> 3600
-    content = re.sub(r'(\d+)\s*;\s*Expire\s*\n\s*)604800(\s*\)\s*;\s*(Negative Cache TTL|Minimum TTL))', r'\g<1>3600\g<2>', content)
-    content = re.sub(r'(\d+)\s*;\s*Expire\s*\n\s*)\d+(\s*\)\s*;\s*(Negative Cache TTL|Minimum TTL))', 
-                     lambda m: m.group(1) + '3600' + m.group(2), content)
+    def update_minimum_ttl(match):
+        return match.group(1) + '        ; Expire\n                          3600' + match.group(2)
+    content = re.sub(r'(\d+)\s*;\s*Expire\s*\n\s*604800(\s*\)\s*;\s*(?:Negative Cache TTL|Minimum TTL))', update_minimum_ttl, content)
+    
+    # MINIMUM TTL: diğer yüksek değerleri de kontrol et
+    def update_minimum_ttl_other(match):
+        try:
+            ttl_val = int(match.group(2))
+            if ttl_val > 3600:
+                return match.group(1) + '3600' + match.group(3)
+            else:
+                return match.group(0)
+        except:
+            return match.group(0)
+    content = re.sub(r'(\d+)\s*;\s*Expire\s*\n\s*)(\d+)(\s*\)\s*;\s*(?:Negative Cache TTL|Minimum TTL))', update_minimum_ttl_other, content)
     
     # Serial numarasını güncelle (bugünün tarihi)
     today_serial = datetime.now().strftime('%Y%m%d') + '01'
