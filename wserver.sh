@@ -5582,6 +5582,769 @@ view_logs() {
     fi
 }
 
+# Nginx'teki domain'leri tespit et
+get_nginx_domains() {
+    local domains=()
+    
+    if [ ! -d "/etc/nginx/sites-available" ]; then
+        return 1
+    fi
+    
+    # Nginx yapılandırma dosyalarından server_name'leri çıkar
+    for config_file in /etc/nginx/sites-available/*; do
+        if [ -f "$config_file" ] && [ "$(basename "$config_file")" != "default" ]; then
+            # server_name direktiflerini bul
+            local server_names=$(grep -E "^\s*server_name\s+" "$config_file" 2>/dev/null | \
+                sed 's/server_name//' | sed 's/;//' | tr -s ' ' | tr ' ' '\n' | \
+                grep -v "^$" | grep -v "default_server" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+            
+            if [ -n "$server_names" ]; then
+                while IFS= read -r domain; do
+                    if [ -n "$domain" ] && [[ ! " ${domains[@]} " =~ " ${domain} " ]]; then
+                        domains+=("$domain")
+                    fi
+                done <<< "$server_names"
+            fi
+        fi
+    done
+    
+    # Domain'leri yazdır
+    printf '%s\n' "${domains[@]}"
+}
+
+# Nginx domain'lerini DNS kayıtlarına ekle (BIND9)
+add_nginx_domains_to_bind9() {
+    local forward_zone=$1
+    local server_ip=$2
+    
+    if [ ! -f "$forward_zone" ]; then
+        return 1
+    fi
+    
+    print_info "Nginx'teki domain'ler DNS kayıtlarına ekleniyor..."
+    
+    local nginx_domains=($(get_nginx_domains))
+    local added_count=0
+    
+    if [ ${#nginx_domains[@]} -eq 0 ]; then
+        print_warning "Nginx'te yapılandırılmış domain bulunamadı"
+        return 0
+    fi
+    
+    # Zone dosyasını yedekle
+    cp "$forward_zone" "${forward_zone}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    for domain in "${nginx_domains[@]}"; do
+        # Domain'i parse et (subdomain ve ana domain)
+        local subdomain=""
+        local main_domain=""
+        
+        if [[ "$domain" =~ ^([^.]+)\.(.+)$ ]]; then
+            subdomain="${BASH_REMATCH[1]}"
+            main_domain="${BASH_REMATCH[2]}"
+        else
+            main_domain="$domain"
+        fi
+        
+        # Zone dosyasının domain'i ile eşleşiyor mu kontrol et
+        local zone_domain=$(basename "$forward_zone" | sed 's/^db\.//')
+        
+        if [ "$main_domain" = "$zone_domain" ]; then
+            # Subdomain kaydı ekle
+            if [ -n "$subdomain" ] && [ "$subdomain" != "www" ]; then
+                if ! grep -q "^$subdomain[[:space:]]" "$forward_zone" 2>/dev/null; then
+                    # Zone dosyasının sonuna ekle (SOA kaydından önce değil)
+                    sed -i "/^@[[:space:]]*IN[[:space:]]*MX/a\\$subdomain     IN      A       $server_ip" "$forward_zone"
+                    print_success "DNS kaydı eklendi: $subdomain.$main_domain -> $server_ip"
+                    ((added_count++))
+                fi
+            fi
+        fi
+    done
+    
+    if [ $added_count -gt 0 ]; then
+        # Serial numarasını güncelle
+        local current_serial=$(grep -E "^\s*[0-9]+\s*;" "$forward_zone" | head -1 | awk '{print $1}')
+        local new_serial=$(date +%Y%m%d01)
+        if [ -n "$current_serial" ] && [ "$new_serial" -gt "$current_serial" ]; then
+            sed -i "s/^[[:space:]]*$current_serial[[:space:]]*;/$new_serial        ;/" "$forward_zone"
+        fi
+        
+        print_success "$added_count Nginx domain'i DNS kayıtlarına eklendi"
+        
+        # Zone dosyasını kontrol et
+        local zone_domain=$(basename "$forward_zone" | sed 's/^db\.//')
+        if named-checkzone "$zone_domain" "$forward_zone" 2>/dev/null; then
+            print_success "Zone dosyası geçerli"
+            systemctl reload named 2>/dev/null || systemctl restart named
+        else
+            print_warning "Zone dosyasında hata olabilir, kontrol edin: named-checkzone $zone_domain $forward_zone"
+        fi
+    else
+        print_info "Eklenmesi gereken yeni domain bulunamadı"
+    fi
+}
+
+# Nginx domain'lerini DNS kayıtlarına ekle (dnsmasq)
+add_nginx_domains_to_dnsmasq() {
+    local dnsmasq_hosts=$1
+    local server_ip=$2
+    
+    if [ ! -f "$dnsmasq_hosts" ]; then
+        return 1
+    fi
+    
+    print_info "Nginx'teki domain'ler DNS kayıtlarına ekleniyor..."
+    
+    local nginx_domains=($(get_nginx_domains))
+    local added_count=0
+    
+    if [ ${#nginx_domains[@]} -eq 0 ]; then
+        print_warning "Nginx'te yapılandırılmış domain bulunamadı"
+        return 0
+    fi
+    
+    # Hosts dosyasını yedekle
+    cp "$dnsmasq_hosts" "${dnsmasq_hosts}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    for domain in "${nginx_domains[@]}"; do
+        # Domain kaydı var mı kontrol et
+        if ! grep -qE "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[[:space:]]+$domain" "$dnsmasq_hosts" 2>/dev/null; then
+            echo "$server_ip    $domain" >> "$dnsmasq_hosts"
+            print_success "DNS kaydı eklendi: $domain -> $server_ip"
+            ((added_count++))
+        fi
+    done
+    
+    if [ $added_count -gt 0 ]; then
+        print_success "$added_count Nginx domain'i DNS kayıtlarına eklendi"
+        systemctl restart dnsmasq
+        print_success "dnsmasq servisi yeniden başlatıldı"
+    else
+        print_info "Eklenmesi gereken yeni domain bulunamadı"
+    fi
+}
+
+add_nginx_domains_to_dns() {
+    print_header "Nginx Domain'lerini DNS'e Ekleme"
+    
+    # Nginx kontrolü
+    if ! command -v nginx &>/dev/null || [ ! -d "/etc/nginx/sites-available" ]; then
+        print_error "Nginx kurulu değil veya yapılandırma dizini bulunamadı!"
+        return 1
+    fi
+    
+    # Nginx domain'lerini tespit et
+    local nginx_domains=($(get_nginx_domains))
+    
+    if [ ${#nginx_domains[@]} -eq 0 ]; then
+        print_warning "Nginx'te yapılandırılmış domain bulunamadı!"
+        return 1
+    fi
+    
+    print_info "Nginx'te tespit edilen domain'ler:"
+    for domain in "${nginx_domains[@]}"; do
+        echo "  - $domain"
+    done
+    echo ""
+    
+    # DNS sunucusu kontrolü
+    local dns_type=""
+    local server_ip=$(hostname -I | awk '{print $1}')
+    
+    if systemctl is-active --quiet named 2>/dev/null; then
+        dns_type="bind9"
+        print_success "BIND9 DNS sunucusu aktif"
+    elif systemctl is-active --quiet dnsmasq 2>/dev/null; then
+        dns_type="dnsmasq"
+        print_success "dnsmasq DNS sunucusu aktif"
+    else
+        print_error "Aktif DNS sunucusu bulunamadı!"
+        print_info "Önce DNS sunucusu kurulumu yapmanız gerekiyor."
+        if ask_yes_no "DNS sunucusu kurulumuna gitmek ister misiniz?"; then
+            install_dns_server
+            return $?
+        else
+            return 1
+        fi
+    fi
+    
+    # Sunucu IP'sini al
+    ask_input "DNS sunucusu IP adresi" server_ip "$server_ip"
+    
+    # BIND9 için
+    if [ "$dns_type" = "bind9" ]; then
+        print_info "BIND9 için domain'ler ekleniyor..."
+        
+        # Domain'leri grupla (ana domain'e göre)
+        declare -A domain_groups
+        for domain in "${nginx_domains[@]}"; do
+            local main_domain=""
+            if [[ "$domain" =~ ^([^.]+)\.(.+)$ ]]; then
+                main_domain="${BASH_REMATCH[2]}"
+            else
+                main_domain="$domain"
+            fi
+            
+            if [ -z "${domain_groups[$main_domain]}" ]; then
+                domain_groups[$main_domain]="$domain"
+            else
+                domain_groups[$main_domain]="${domain_groups[$main_domain]} $domain"
+            fi
+        done
+        
+        # Her ana domain için zone dosyası bul ve ekle
+        local added_count=0
+        for main_domain in "${!domain_groups[@]}"; do
+            local forward_zone="/etc/bind/db.$main_domain"
+            
+            if [ -f "$forward_zone" ]; then
+                print_info "Zone dosyası bulundu: $forward_zone"
+                add_nginx_domains_to_bind9 "$forward_zone" "$server_ip"
+                ((added_count++))
+            else
+                print_warning "Zone dosyası bulunamadı: $forward_zone"
+                print_info "Bu domain için önce BIND9 zone oluşturmanız gerekiyor."
+            fi
+        done
+        
+        if [ $added_count -gt 0 ]; then
+            print_success "Nginx domain'leri BIND9 DNS kayıtlarına eklendi!"
+        fi
+        
+    # dnsmasq için
+    elif [ "$dns_type" = "dnsmasq" ]; then
+        print_info "dnsmasq için domain'ler ekleniyor..."
+        
+        local dnsmasq_hosts="/etc/dnsmasq.hosts"
+        
+        if [ ! -f "$dnsmasq_hosts" ]; then
+            print_warning "dnsmasq hosts dosyası bulunamadı: $dnsmasq_hosts"
+            print_info "dnsmasq yapılandırmasını kontrol edin."
+            return 1
+        fi
+        
+        add_nginx_domains_to_dnsmasq "$dnsmasq_hosts" "$server_ip"
+        print_success "Nginx domain'leri dnsmasq DNS kayıtlarına eklendi!"
+    fi
+}
+
+install_dns_server() {
+    print_header "DNS Sunucusu Kurulumu"
+    
+    echo -e "${CYAN}DNS Sunucusu Seçenekleri:${NC}"
+    echo "1) BIND9 (Profesyonel, tam özellikli DNS sunucusu)"
+    echo "2) dnsmasq (Hafif, küçük ağlar için)"
+    echo "3) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz (1-3) [1]: " dns_choice
+    dns_choice=${dns_choice:-1}
+    
+    case $dns_choice in
+        1)
+            install_bind9
+            ;;
+        2)
+            install_dnsmasq
+            ;;
+        3)
+            return 0
+            ;;
+        *)
+            print_error "Geçersiz seçim!"
+            return 1
+            ;;
+    esac
+}
+
+install_bind9() {
+    print_header "BIND9 DNS Sunucusu Kurulumu"
+    
+    # BIND9 zaten kurulu mu?
+    if command -v named &>/dev/null || systemctl list-units --type=service | grep -q "bind9\|named"; then
+        print_warning "BIND9 zaten kurulu görünüyor"
+        if ! ask_yes_no "Yeniden kurmak istiyor musunuz?"; then
+            return 0
+        fi
+    fi
+    
+    print_info "BIND9 kuruluyor..."
+    apt update
+    apt install -y bind9 bind9utils bind9-doc dnsutils
+    
+    if [ $? -ne 0 ]; then
+        print_error "BIND9 kurulumu başarısız!"
+        return 1
+    fi
+    
+    print_success "BIND9 başarıyla kuruldu"
+    
+    # BIND9 yapılandırması
+    print_info "BIND9 yapılandırması yapılıyor..."
+    
+    # Ana domain bilgisi
+    local domain_name=""
+    local server_ip=""
+    
+    ask_input "DNS sunucusu için ana domain adını girin (örn: example.com)" domain_name
+    
+    # Sunucu IP'sini otomatik tespit et
+    server_ip=$(hostname -I | awk '{print $1}')
+    ask_input "DNS sunucusu IP adresi" server_ip "$server_ip"
+    
+    # Forward zone dosyası oluştur
+    local forward_zone="/etc/bind/db.$domain_name"
+    local reverse_zone=""
+    
+    # Reverse zone için IP'yi parse et
+    local ip_octets=($(echo $server_ip | tr '.' ' '))
+    if [ ${#ip_octets[@]} -eq 4 ]; then
+        reverse_zone="/etc/bind/db.${ip_octets[2]}.${ip_octets[1]}.${ip_octets[0]}"
+    fi
+    
+    # Forward zone dosyası oluştur
+    print_info "Forward zone dosyası oluşturuluyor..."
+    cat > "$forward_zone" <<EOF
+\$TTL    604800
+@       IN      SOA     ns1.$domain_name. admin.$domain_name. (
+                          $(date +%Y%m%d01)        ; Serial
+                          604800         ; Refresh
+                          86400          ; Retry
+                          2419200        ; Expire
+                          604800 )       ; Negative Cache TTL
+;
+@       IN      NS      ns1.$domain_name.
+@       IN      NS      ns2.$domain_name.
+@       IN      A       $server_ip
+ns1     IN      A       $server_ip
+ns2     IN      A       $server_ip
+www     IN      A       $server_ip
+mail    IN      A       $server_ip
+@       IN      MX      10 mail.$domain_name.
+EOF
+    
+    chmod 644 "$forward_zone"
+    print_success "Forward zone dosyası oluşturuldu: $forward_zone"
+    
+    # Reverse zone dosyası oluştur (opsiyonel)
+    if [ -n "$reverse_zone" ] && ask_yes_no "Reverse DNS zone dosyası oluşturulsun mu?"; then
+        print_info "Reverse zone dosyası oluşturuluyor..."
+        local reverse_network="${ip_octets[0]}.${ip_octets[1]}.${ip_octets[2]}.0"
+        local reverse_ptr="${ip_octets[3]}.${ip_octets[2]}.${ip_octets[1]}.${ip_octets[0]}.in-addr.arpa"
+        
+        cat > "$reverse_zone" <<EOF
+\$TTL    604800
+@       IN      SOA     ns1.$domain_name. admin.$domain_name. (
+                          $(date +%Y%m%d01)        ; Serial
+                          604800         ; Refresh
+                          86400          ; Retry
+                          2419200        ; Expire
+                          604800 )       ; Negative Cache TTL
+;
+@       IN      NS      ns1.$domain_name.
+@       IN      NS      ns2.$domain_name.
+${ip_octets[3]}      IN      PTR     ns1.$domain_name.
+${ip_octets[3]}      IN      PTR     $domain_name.
+EOF
+        
+        chmod 644 "$reverse_zone"
+        print_success "Reverse zone dosyası oluşturuldu: $reverse_zone"
+    fi
+    
+    # named.conf.local yapılandırması
+    print_info "BIND9 named.conf.local yapılandırması yapılıyor..."
+    
+    local named_conf_local="/etc/bind/named.conf.local"
+    
+    # Forward zone tanımı
+    if ! grep -q "zone \"$domain_name\"" "$named_conf_local" 2>/dev/null; then
+        cat >> "$named_conf_local" <<EOF
+
+// Forward zone for $domain_name
+zone "$domain_name" {
+    type master;
+    file "$forward_zone";
+    allow-update { none; };
+};
+EOF
+        print_success "Forward zone tanımı eklendi"
+    fi
+    
+    # Reverse zone tanımı (varsa)
+    if [ -n "$reverse_zone" ] && [ -f "$reverse_zone" ]; then
+        local reverse_network="${ip_octets[0]}.${ip_octets[1]}.${ip_octets[2]}.0"
+        if ! grep -q "zone \"${ip_octets[2]}.${ip_octets[1]}.${ip_octets[0]}.in-addr.arpa\"" "$named_conf_local" 2>/dev/null; then
+            cat >> "$named_conf_local" <<EOF
+
+// Reverse zone for $reverse_network
+zone "${ip_octets[2]}.${ip_octets[1]}.${ip_octets[0]}.in-addr.arpa" {
+    type master;
+    file "$reverse_zone";
+    allow-update { none; };
+};
+EOF
+            print_success "Reverse zone tanımı eklendi"
+        fi
+    fi
+    
+    # named.conf.options yapılandırması
+    print_info "BIND9 named.conf.options yapılandırması yapılıyor..."
+    
+    local named_conf_options="/etc/bind/named.conf.options"
+    
+    # Yedekleme
+    cp "$named_conf_options" "${named_conf_options}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Forwarders ve recursion ayarlarını kontrol et
+    local has_forwarders=false
+    local has_recursion=false
+    
+    if grep -q "forwarders" "$named_conf_options" 2>/dev/null; then
+        has_forwarders=true
+    fi
+    
+    if grep -q "allow-recursion" "$named_conf_options" 2>/dev/null; then
+        has_recursion=true
+    fi
+    
+        # Forwarders ekle (Google DNS, Cloudflare DNS)
+        if [ "$has_forwarders" = false ]; then
+            # options bloğunun içine forwarders ekle
+            local local_network=$(echo $server_ip | cut -d'.' -f1-3)
+            
+            # Python ile güvenli ekleme
+            if command -v python3 &>/dev/null; then
+                python3 <<PYTHON_SCRIPT
+import re
+import sys
+
+local_network = '$local_network'
+config_file = '$named_conf_options'
+
+try:
+    with open(config_file, 'r') as f:
+        content = f.read()
+    
+    # options bloğunu bul
+    if 'options {' in content:
+        # options bloğunun sonuna forwarders ve recursion ekle
+        pattern = r'(options \{)(.*?)(\};)'
+        
+        def add_forwarders(match):
+            options_start = match.group(1)
+            options_content = match.group(2)
+            options_end = match.group(3)
+            
+            # Forwarders ve recursion ekle
+            additions = '''
+        forwarders {
+                8.8.8.8;
+                8.8.4.4;
+                1.1.1.1;
+                1.0.0.1;
+        };
+        allow-recursion { localhost; ''' + local_network + '''.0/24; };'''
+            
+            return options_start + options_content + additions + options_end
+        
+        content = re.sub(pattern, add_forwarders, content, flags=re.DOTALL)
+        
+        with open(config_file, 'w') as f:
+            f.write(content)
+        
+        print("Forwarders ve recursion eklendi")
+        sys.exit(0)
+    else:
+        print("options bloğu bulunamadı")
+        sys.exit(1)
+except Exception as e:
+    print(f"Hata: {e}")
+    sys.exit(1)
+PYTHON_SCRIPT
+            if [ $? -eq 0 ]; then
+                print_success "Forwarders eklendi (Google DNS, Cloudflare DNS)"
+                print_success "Recursion izni eklendi"
+            else
+                # Python başarısız olursa manuel ekleme
+                print_warning "Python ile ekleme başarısız, manuel ekleme deneniyor..."
+                local temp_file=$(mktemp)
+                local in_options=false
+                while IFS= read -r line; do
+                    echo "$line" >> "$temp_file"
+                    if echo "$line" | grep -q "options {"; then
+                        in_options=true
+                    fi
+                    if [ "$in_options" = true ] && echo "$line" | grep -q "};"; then
+                        echo "        forwarders {" >> "$temp_file"
+                        echo "                8.8.8.8;" >> "$temp_file"
+                        echo "                8.8.4.4;" >> "$temp_file"
+                        echo "                1.1.1.1;" >> "$temp_file"
+                        echo "                1.0.0.1;" >> "$temp_file"
+                        echo "        };" >> "$temp_file"
+                        echo "        allow-recursion { localhost; $local_network.0/24; };" >> "$temp_file"
+                        in_options=false
+                    fi
+                done < "$named_conf_options"
+                mv "$temp_file" "$named_conf_options"
+                print_success "Forwarders ve recursion manuel olarak eklendi"
+            fi
+        else
+            # Python yoksa basit sed ile ekleme
+            local local_network=$(echo $server_ip | cut -d'.' -f1-3)
+            # options bloğunun sonuna ekle
+            awk -v local_net="$local_network" '
+            /options \{/ { in_options=1; print; next }
+            in_options && /^[[:space:]]*\};/ {
+                print "        forwarders {"
+                print "                8.8.8.8;"
+                print "                8.8.4.4;"
+                print "                1.1.1.1;"
+                print "                1.0.0.1;"
+                print "        };"
+                print "        allow-recursion { localhost; " local_net ".0/24; };"
+                in_options=0
+            }
+            { print }
+            ' "$named_conf_options" > "${named_conf_options}.tmp" && mv "${named_conf_options}.tmp" "$named_conf_options"
+            print_success "Forwarders ve recursion eklendi"
+        fi
+    elif [ "$has_recursion" = false ]; then
+        # Sadece recursion ekle
+        local local_network=$(echo $server_ip | cut -d'.' -f1-3)
+        if grep -q "forwarders {" "$named_conf_options" 2>/dev/null; then
+            sed -i "/forwarders {/,/};/a\        allow-recursion { localhost; $local_network.0/24; };" "$named_conf_options"
+            print_success "Recursion izni eklendi"
+        fi
+    else
+        print_info "Forwarders ve recursion zaten yapılandırılmış"
+    fi
+    
+    # Yapılandırma kontrolü
+    print_info "BIND9 yapılandırması kontrol ediliyor..."
+    if named-checkconf 2>/dev/null; then
+        print_success "BIND9 yapılandırması geçerli"
+    else
+        print_warning "BIND9 yapılandırmasında hata olabilir, kontrol edin: named-checkconf"
+    fi
+    
+    # Zone dosyalarını kontrol et
+    if named-checkzone "$domain_name" "$forward_zone" 2>/dev/null; then
+        print_success "Forward zone dosyası geçerli"
+    else
+        print_warning "Forward zone dosyasında hata olabilir: named-checkzone $domain_name $forward_zone"
+    fi
+    
+    # BIND9 servisini başlat
+    print_info "BIND9 servisi başlatılıyor..."
+    systemctl enable named
+    systemctl restart named
+    
+    sleep 2
+    
+    if systemctl is-active --quiet named; then
+        print_success "BIND9 servisi başarıyla başlatıldı"
+    else
+        print_error "BIND9 servisi başlatılamadı!"
+        print_info "Log kontrolü: journalctl -u named -n 50"
+        return 1
+    fi
+    
+    # Firewall kuralları
+    if command -v ufw &>/dev/null; then
+        if ask_yes_no "UFW firewall için DNS portlarını (53) açmak ister misiniz?"; then
+            ufw allow 53/tcp
+            ufw allow 53/udp
+            print_success "DNS portları firewall'da açıldı"
+        fi
+    fi
+    
+    # Test
+    print_info "DNS çözümleme testi yapılıyor..."
+    if dig @127.0.0.1 $domain_name +short 2>/dev/null | grep -q "$server_ip"; then
+        print_success "DNS çözümleme testi başarılı!"
+    else
+        print_warning "DNS çözümleme testi başarısız, yapılandırmayı kontrol edin"
+    fi
+    
+    # Nginx'teki domain'leri otomatik ekle
+    if command -v nginx &>/dev/null && [ -d "/etc/nginx/sites-available" ]; then
+        local nginx_domains=($(get_nginx_domains))
+        if [ ${#nginx_domains[@]} -gt 0 ]; then
+            echo ""
+            print_info "Nginx'te yapılandırılmış domain'ler tespit edildi:"
+            for domain in "${nginx_domains[@]}"; do
+                echo "  - $domain"
+            done
+            
+            if ask_yes_no "Nginx'teki domain'leri DNS kayıtlarına otomatik eklemek ister misiniz?"; then
+                add_nginx_domains_to_bind9 "$forward_zone" "$server_ip"
+            fi
+        fi
+    fi
+    
+    print_header "BIND9 Kurulumu Tamamlandı!"
+    echo -e "${GREEN}Domain:${NC} $domain_name"
+    echo -e "${GREEN}DNS Server IP:${NC} $server_ip"
+    echo -e "${GREEN}Forward Zone:${NC} $forward_zone"
+    [ -f "$reverse_zone" ] && echo -e "${GREEN}Reverse Zone:${NC} $reverse_zone"
+    echo ""
+    echo -e "${CYAN}Yararlı Komutlar:${NC}"
+    echo "• DNS test: ${GREEN}dig @$server_ip $domain_name${NC}"
+    echo "• Reverse DNS test: ${GREEN}dig @$server_ip -x $server_ip${NC}"
+    echo "• Zone dosyası düzenle: ${GREEN}nano $forward_zone${NC}"
+    echo "• Yapılandırma kontrolü: ${GREEN}named-checkconf${NC}"
+    echo "• Servis durumu: ${GREEN}systemctl status named${NC}"
+    echo "• Servis yeniden başlat: ${GREEN}systemctl restart named${NC}"
+    echo "• Log görüntüle: ${GREEN}journalctl -u named -f${NC}"
+    echo ""
+    echo -e "${YELLOW}NOT:${NC} Nginx'te yeni domain eklediğinizde, DNS kayıtlarını manuel olarak eklemeniz gerekebilir."
+    echo "   Veya 'Nginx Domain'lerini DNS'e Ekle' seçeneğini kullanabilirsiniz."
+}
+
+install_dnsmasq() {
+    print_header "dnsmasq DNS Sunucusu Kurulumu"
+    
+    # dnsmasq zaten kurulu mu?
+    if command -v dnsmasq &>/dev/null || systemctl list-units --type=service | grep -q dnsmasq; then
+        print_warning "dnsmasq zaten kurulu görünüyor"
+        if ! ask_yes_no "Yeniden kurmak istiyor musunuz?"; then
+            return 0
+        fi
+    fi
+    
+    print_info "dnsmasq kuruluyor..."
+    apt update
+    apt install -y dnsmasq
+    
+    if [ $? -ne 0 ]; then
+        print_error "dnsmasq kurulumu başarısız!"
+        return 1
+    fi
+    
+    print_success "dnsmasq başarıyla kuruldu"
+    
+    # dnsmasq yapılandırması
+    print_info "dnsmasq yapılandırması yapılıyor..."
+    
+    local dnsmasq_conf="/etc/dnsmasq.conf"
+    
+    # Yedekleme
+    cp "$dnsmasq_conf" "${dnsmasq_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Domain bilgisi
+    local domain_name=""
+    local server_ip=""
+    
+    ask_input "DNS sunucusu için ana domain adını girin (örn: example.com)" domain_name
+    
+    # Sunucu IP'sini otomatik tespit et
+    server_ip=$(hostname -I | awk '{print $1}')
+    ask_input "DNS sunucusu IP adresi" server_ip "$server_ip"
+    
+    # dnsmasq yapılandırması
+    print_info "dnsmasq yapılandırma dosyası düzenleniyor..."
+    
+    # Temel ayarlar
+    if ! grep -q "^domain=" "$dnsmasq_conf" 2>/dev/null; then
+        echo "domain=$domain_name" >> "$dnsmasq_conf"
+    fi
+    
+    if ! grep -q "^listen-address=" "$dnsmasq_conf" 2>/dev/null; then
+        echo "listen-address=127.0.0.1,$server_ip" >> "$dnsmasq_conf"
+    fi
+    
+    # DNS kayıtları için hosts dosyası kullan
+    if ! grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
+        echo "addn-hosts=/etc/dnsmasq.hosts" >> "$dnsmasq_conf"
+    fi
+    
+    # DNS kayıtları dosyası oluştur
+    local dnsmasq_hosts="/etc/dnsmasq.hosts"
+    if [ ! -f "$dnsmasq_hosts" ]; then
+        cat > "$dnsmasq_hosts" <<EOF
+$server_ip    $domain_name
+$server_ip    www.$domain_name
+$server_ip    ns1.$domain_name
+$server_ip    mail.$domain_name
+EOF
+        chmod 644 "$dnsmasq_hosts"
+        print_success "DNS kayıtları dosyası oluşturuldu: $dnsmasq_hosts"
+    fi
+    
+    # Yapılandırma kontrolü
+    print_info "dnsmasq yapılandırması kontrol ediliyor..."
+    if dnsmasq --test 2>/dev/null; then
+        print_success "dnsmasq yapılandırması geçerli"
+    else
+        print_warning "dnsmasq yapılandırmasında hata olabilir"
+    fi
+    
+    # dnsmasq servisini başlat
+    print_info "dnsmasq servisi başlatılıyor..."
+    systemctl enable dnsmasq
+    systemctl restart dnsmasq
+    
+    sleep 2
+    
+    if systemctl is-active --quiet dnsmasq; then
+        print_success "dnsmasq servisi başarıyla başlatıldı"
+    else
+        print_error "dnsmasq servisi başlatılamadı!"
+        print_info "Log kontrolü: journalctl -u dnsmasq -n 50"
+        return 1
+    fi
+    
+    # Firewall kuralları
+    if command -v ufw &>/dev/null; then
+        if ask_yes_no "UFW firewall için DNS portlarını (53) açmak ister misiniz?"; then
+            ufw allow 53/tcp
+            ufw allow 53/udp
+            print_success "DNS portları firewall'da açıldı"
+        fi
+    fi
+    
+    # Test
+    print_info "DNS çözümleme testi yapılıyor..."
+    if dig @127.0.0.1 $domain_name +short 2>/dev/null | grep -q "$server_ip"; then
+        print_success "DNS çözümleme testi başarılı!"
+    else
+        print_warning "DNS çözümleme testi başarısız, yapılandırmayı kontrol edin"
+    fi
+    
+    # Nginx'teki domain'leri otomatik ekle
+    if command -v nginx &>/dev/null && [ -d "/etc/nginx/sites-available" ]; then
+        local nginx_domains=($(get_nginx_domains))
+        if [ ${#nginx_domains[@]} -gt 0 ]; then
+            echo ""
+            print_info "Nginx'te yapılandırılmış domain'ler tespit edildi:"
+            for domain in "${nginx_domains[@]}"; do
+                echo "  - $domain"
+            done
+            
+            if ask_yes_no "Nginx'teki domain'leri DNS kayıtlarına otomatik eklemek ister misiniz?"; then
+                add_nginx_domains_to_dnsmasq "$dnsmasq_hosts" "$server_ip"
+            fi
+        fi
+    fi
+    
+    print_header "dnsmasq Kurulumu Tamamlandı!"
+    echo -e "${GREEN}Domain:${NC} $domain_name"
+    echo -e "${GREEN}DNS Server IP:${NC} $server_ip"
+    echo -e "${GREEN}Hosts Dosyası:${NC} $dnsmasq_hosts"
+    echo ""
+    echo -e "${CYAN}Yararlı Komutlar:${NC}"
+    echo "• DNS test: ${GREEN}dig @$server_ip $domain_name${NC}"
+    echo "• Hosts dosyası düzenle: ${GREEN}nano $dnsmasq_hosts${NC}"
+    echo "• Yapılandırma düzenle: ${GREEN}nano $dnsmasq_conf${NC}"
+    echo "• Servis durumu: ${GREEN}systemctl status dnsmasq${NC}"
+    echo "• Servis yeniden başlat: ${GREEN}systemctl restart dnsmasq${NC}"
+    echo "• Log görüntüle: ${GREEN}journalctl -u dnsmasq -f${NC}"
+    echo ""
+    echo -e "${YELLOW}NOT:${NC} Nginx'te yeni domain eklediğinizde, DNS kayıtlarını manuel olarak eklemeniz gerekebilir."
+    echo "   Veya 'Nginx Domain'lerini DNS'e Ekle' seçeneğini kullanabilirsiniz."
+}
+
 main_menu() {
     while true; do
         clear
@@ -5609,10 +6372,12 @@ main_menu() {
         echo "19) OpenVPN Web Yönetim Paneli"
         echo "20) OpenVPN İstemci Yönetimi"
         echo "21) Servis Optimizasyonu (Performans & Güvenlik)"
-        echo "22) Çıkış"
+        echo "22) DNS Sunucusu Kurulumu"
+        echo "23) Nginx Domain'lerini DNS'e Ekle"
+        echo "24) Çıkış"
         echo ""
         
-        read -p "Seçiminizi yapın (1-22): " choice
+        read -p "Seçiminizi yapın (1-24): " choice
         
         case $choice in
             1)
@@ -5699,11 +6464,19 @@ main_menu() {
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             22)
+                install_dns_server
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            23)
+                add_nginx_domains_to_dns
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            24)
                 print_success "Çıkılıyor..."
                 exit 0
                 ;;
             *)
-                print_error "Geçersiz seçim. Lütfen 1-22 arasında bir sayı girin."
+                print_error "Geçersiz seçim. Lütfen 1-24 arasında bir sayı girin."
                 sleep 2
                 ;;
         esac
