@@ -5829,16 +5829,141 @@ add_nginx_domains_to_dns() {
     fi
 }
 
+# BIND9 yapılandırma hatasını düzelt
+fix_bind9_config() {
+    print_header "BIND9 Yapılandırma Hatası Düzeltme"
+    
+    local named_conf_options="/etc/bind/named.conf.options"
+    
+    if [ ! -f "$named_conf_options" ]; then
+        print_error "named.conf.options dosyası bulunamadı!"
+        return 1
+    fi
+    
+    print_info "Duplicate kayıtlar temizleniyor..."
+    
+    # Yedekleme
+    cp "$named_conf_options" "${named_conf_options}.backup.fix.$(date +%Y%m%d_%H%M%S)"
+    
+    if command -v python3 &>/dev/null; then
+        python3 <<PYTHON_FIX
+import re
+import sys
+
+config_file = '$named_conf_options'
+
+try:
+    with open(config_file, 'r') as f:
+        content = f.read()
+    
+    # allow-recursion duplicate'lerini temizle (sadece ilkini tut)
+    lines = content.split('\n')
+    cleaned_lines = []
+    seen_forwarders_block = False
+    seen_recursion = False
+    in_forwarders = False
+    in_recursion = False
+    brace_count = 0
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        
+        # forwarders bloğunu tespit et
+        if 'forwarders' in stripped and '{' in stripped:
+            if seen_forwarders_block:
+                # Duplicate forwarders bloğunu atla
+                in_forwarders = True
+                brace_count = stripped.count('{') - stripped.count('}')
+                i += 1
+                while i < len(lines) and (brace_count > 0 or '};' not in lines[i]):
+                    brace_count += lines[i].count('{') - lines[i].count('}')
+                    i += 1
+                in_forwarders = False
+                continue
+            else:
+                seen_forwarders_block = True
+                in_forwarders = True
+                brace_count = stripped.count('{') - stripped.count('}')
+        
+        # allow-recursion satırını tespit et
+        if 'allow-recursion' in stripped:
+            if seen_recursion:
+                # Duplicate allow-recursion'ı atla
+                i += 1
+                continue
+            else:
+                seen_recursion = True
+        
+        # forwarders bloğu içindeysek brace sayısını takip et
+        if in_forwarders:
+            brace_count += line.count('{') - line.count('}')
+            if brace_count <= 0 and '};' in line:
+                in_forwarders = False
+        
+        cleaned_lines.append(line)
+        i += 1
+    
+    # Dosyayı yaz
+    with open(config_file, 'w') as f:
+        f.write('\n'.join(cleaned_lines))
+    
+    print("Duplicate kayıtlar temizlendi")
+    sys.exit(0)
+except Exception as e:
+    print(f"Hata: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+PYTHON_FIX
+        
+        if [ $? -eq 0 ]; then
+            print_success "Yapılandırma dosyası düzeltildi"
+            
+            # Yapılandırmayı kontrol et
+            if named-checkconf 2>/dev/null; then
+                print_success "BIND9 yapılandırması geçerli"
+                
+                # Servisi yeniden başlat
+                systemctl restart named
+                sleep 2
+                
+                if systemctl is-active --quiet named; then
+                    print_success "BIND9 servisi başarıyla başlatıldı"
+                else
+                    print_error "BIND9 servisi başlatılamadı!"
+                    print_info "Log kontrolü: journalctl -u named -n 50"
+                    return 1
+                fi
+            else
+                print_error "Yapılandırma hala geçersiz!"
+                print_info "Kontrol edin: named-checkconf"
+                return 1
+            fi
+        else
+            print_error "Python ile düzeltme başarısız!"
+            return 1
+        fi
+    else
+        print_error "Python3 bulunamadı! Lütfen manuel olarak düzeltin."
+        print_info "Dosya: $named_conf_options"
+        print_info "Hata: 'allow-recursion' duplicate tanımlanmış"
+        return 1
+    fi
+}
+
 install_dns_server() {
     print_header "DNS Sunucusu Kurulumu"
     
     echo -e "${CYAN}DNS Sunucusu Seçenekleri:${NC}"
     echo "1) BIND9 (Profesyonel, tam özellikli DNS sunucusu)"
     echo "2) dnsmasq (Hafif, küçük ağlar için)"
-    echo "3) Geri Dön"
+    echo "3) BIND9 Yapılandırma Hatası Düzelt"
+    echo "4) Geri Dön"
     echo ""
     
-    read -p "Seçiminiz (1-3) [1]: " dns_choice
+    read -p "Seçiminiz (1-4) [1]: " dns_choice
     dns_choice=${dns_choice:-1}
     
     case $dns_choice in
@@ -5849,6 +5974,10 @@ install_dns_server() {
             install_dnsmasq
             ;;
         3)
+            fix_bind9_config
+            read -p "Devam etmek için Enter'a basın..."
+            ;;
+        4)
             return 0
             ;;
         *)
@@ -5996,31 +6125,95 @@ EOF
     # Yedekleme
     cp "$named_conf_options" "${named_conf_options}.backup.$(date +%Y%m%d_%H%M%S)"
     
+    # Önce duplicate kayıtları temizle
+    print_info "Duplicate kayıtlar temizleniyor..."
+    if command -v python3 &>/dev/null; then
+        python3 <<PYTHON_CLEANUP
+import re
+import sys
+
+config_file = '$named_conf_options'
+
+try:
+    with open(config_file, 'r') as f:
+        lines = f.readlines()
+    
+    # allow-recursion ve forwarders duplicate'lerini temizle
+    seen_forwarders = False
+    seen_recursion = False
+    cleaned_lines = []
+    skip_forwarders = False
+    skip_recursion = False
+    brace_count = 0
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        
+        # forwarders bloğunu tespit et
+        if 'forwarders' in line and '{' in line:
+            if seen_forwarders:
+                skip_forwarders = True
+                brace_count = line.count('{') - line.count('}')
+                i += 1
+                while i < len(lines) and (brace_count > 0 or '};' not in lines[i]):
+                    brace_count += lines[i].count('{') - lines[i].count('}')
+                    i += 1
+                skip_forwarders = False
+                continue
+            else:
+                seen_forwarders = True
+        
+        # allow-recursion satırını tespit et
+        if 'allow-recursion' in line:
+            if seen_recursion:
+                # Bu satırı atla
+                i += 1
+                continue
+            else:
+                seen_recursion = True
+        
+        cleaned_lines.append(line)
+        i += 1
+    
+    with open(config_file, 'w') as f:
+        f.writelines(cleaned_lines)
+    
+    print("Duplicate kayıtlar temizlendi")
+    sys.exit(0)
+except Exception as e:
+    print(f"Hata: {e}")
+    sys.exit(1)
+PYTHON_CLEANUP
+        if [ $? -ne 0 ]; then
+            print_warning "Python ile temizleme başarısız, manuel temizleme yapılıyor..."
+        fi
+    fi
+    
     # Forwarders ve recursion ayarlarını kontrol et
     local has_forwarders=false
     local has_recursion=false
     
-    if grep -q "forwarders" "$named_conf_options" 2>/dev/null; then
+    if grep -qE "forwarders\s*{" "$named_conf_options" 2>/dev/null; then
         has_forwarders=true
     fi
     
-    if grep -q "allow-recursion" "$named_conf_options" 2>/dev/null; then
+    if grep -qE "allow-recursion\s*{" "$named_conf_options" 2>/dev/null; then
         has_recursion=true
     fi
     
-        # Forwarders ekle (Google DNS, Cloudflare DNS)
-        if [ "$has_forwarders" = false ]; then
-            # options bloğunun içine forwarders ekle
-            local local_network=$(echo $server_ip | cut -d'.' -f1-3)
-            
-            # Python ile güvenli ekleme
-            if command -v python3 &>/dev/null; then
-                python3 <<PYTHON_SCRIPT
+    local local_network=$(echo $server_ip | cut -d'.' -f1-3)
+    
+    # Python ile güvenli ekleme
+    if command -v python3 &>/dev/null; then
+        python3 <<PYTHON_SCRIPT
 import re
 import sys
 
 local_network = '$local_network'
 config_file = '$named_conf_options'
+has_forwarders = '$has_forwarders' == 'true'
+has_recursion = '$has_recursion' == 'true'
 
 try:
     with open(config_file, 'r') as f:
@@ -6028,32 +6221,42 @@ try:
     
     # options bloğunu bul
     if 'options {' in content:
-        # options bloğunun sonuna forwarders ve recursion ekle
+        # options bloğunun sonunu bul (}; den önce)
         pattern = r'(options \{)(.*?)(\};)'
         
-        def add_forwarders(match):
+        def add_missing_settings(match):
             options_start = match.group(1)
             options_content = match.group(2)
             options_end = match.group(3)
             
-            # Forwarders ve recursion ekle
-            additions = '''
+            additions = ""
+            
+            # Forwarders ekle (yoksa)
+            if not has_forwarders:
+                additions += '''
         forwarders {
                 8.8.8.8;
                 8.8.4.4;
                 1.1.1.1;
                 1.0.0.1;
-        };
+        };'''
+            
+            # Recursion ekle (yoksa)
+            if not has_recursion:
+                additions += '''
         allow-recursion { localhost; ''' + local_network + '''.0/24; };'''
             
             return options_start + options_content + additions + options_end
         
-        content = re.sub(pattern, add_forwarders, content, flags=re.DOTALL)
+        content = re.sub(pattern, add_missing_settings, content, flags=re.DOTALL)
         
         with open(config_file, 'w') as f:
             f.write(content)
         
-        print("Forwarders ve recursion eklendi")
+        if not has_forwarders or not has_recursion:
+            print("Eksik ayarlar eklendi")
+        else:
+            print("Tüm ayarlar mevcut")
         sys.exit(0)
     else:
         print("options bloğu bulunamadı")
@@ -6062,62 +6265,79 @@ except Exception as e:
     print(f"Hata: {e}")
     sys.exit(1)
 PYTHON_SCRIPT
-            if [ $? -eq 0 ]; then
+        if [ $? -eq 0 ]; then
+            if [ "$has_forwarders" = false ]; then
                 print_success "Forwarders eklendi (Google DNS, Cloudflare DNS)"
+            fi
+            if [ "$has_recursion" = false ]; then
                 print_success "Recursion izni eklendi"
-            else
-                # Python başarısız olursa manuel ekleme
-                print_warning "Python ile ekleme başarısız, manuel ekleme deneniyor..."
-                local temp_file=$(mktemp)
-                local in_options=false
-                while IFS= read -r line; do
-                    echo "$line" >> "$temp_file"
-                    if echo "$line" | grep -q "options {"; then
-                        in_options=true
-                    fi
-                    if [ "$in_options" = true ] && echo "$line" | grep -q "};"; then
-                        echo "        forwarders {" >> "$temp_file"
-                        echo "                8.8.8.8;" >> "$temp_file"
-                        echo "                8.8.4.4;" >> "$temp_file"
-                        echo "                1.1.1.1;" >> "$temp_file"
-                        echo "                1.0.0.1;" >> "$temp_file"
-                        echo "        };" >> "$temp_file"
-                        echo "        allow-recursion { localhost; $local_network.0/24; };" >> "$temp_file"
-                        in_options=false
-                    fi
-                done < "$named_conf_options"
-                mv "$temp_file" "$named_conf_options"
-                print_success "Forwarders ve recursion manuel olarak eklendi"
+            fi
+            if [ "$has_forwarders" = true ] && [ "$has_recursion" = true ]; then
+                print_info "Forwarders ve recursion zaten yapılandırılmış"
             fi
         else
-            # Python yoksa basit sed ile ekleme
-            local local_network=$(echo $server_ip | cut -d'.' -f1-3)
-            # options bloğunun sonuna ekle
-            awk -v local_net="$local_network" '
+            # Python başarısız olursa basit awk ile ekleme
+            print_warning "Python ile ekleme başarısız, basit yöntem deneniyor..."
+            if [ "$has_forwarders" = false ] || [ "$has_recursion" = false ]; then
+                # options bloğunun sonuna ekle
+                awk -v local_net="$local_network" -v add_fwd="$has_forwarders" -v add_rec="$has_recursion" '
+                /options \{/ { in_options=1; print; next }
+                in_options && /^[[:space:]]*\};/ {
+                    if (add_fwd == "false") {
+                        print "        forwarders {"
+                        print "                8.8.8.8;"
+                        print "                8.8.4.4;"
+                        print "                1.1.1.1;"
+                        print "                1.0.0.1;"
+                        print "        };"
+                    }
+                    if (add_rec == "false") {
+                        print "        allow-recursion { localhost; " local_net ".0/24; };"
+                    }
+                    in_options=0
+                }
+                { print }
+                ' "$named_conf_options" > "${named_conf_options}.tmp" && mv "${named_conf_options}.tmp" "$named_conf_options"
+                
+                if [ "$has_forwarders" = false ]; then
+                    print_success "Forwarders eklendi"
+                fi
+                if [ "$has_recursion" = false ]; then
+                    print_success "Recursion izni eklendi"
+                fi
+            fi
+        fi
+    else
+        # Python yoksa basit awk ile ekleme
+        if [ "$has_forwarders" = false ] || [ "$has_recursion" = false ]; then
+            awk -v local_net="$local_network" -v add_fwd="$has_forwarders" -v add_rec="$has_recursion" '
             /options \{/ { in_options=1; print; next }
             in_options && /^[[:space:]]*\};/ {
-                print "        forwarders {"
-                print "                8.8.8.8;"
-                print "                8.8.4.4;"
-                print "                1.1.1.1;"
-                print "                1.0.0.1;"
-                print "        };"
-                print "        allow-recursion { localhost; " local_net ".0/24; };"
+                if (add_fwd == "false") {
+                    print "        forwarders {"
+                    print "                8.8.8.8;"
+                    print "                8.8.4.4;"
+                    print "                1.1.1.1;"
+                    print "                1.0.0.1;"
+                    print "        };"
+                }
+                if (add_rec == "false") {
+                    print "        allow-recursion { localhost; " local_net ".0/24; };"
+                }
                 in_options=0
             }
             { print }
             ' "$named_conf_options" > "${named_conf_options}.tmp" && mv "${named_conf_options}.tmp" "$named_conf_options"
-            print_success "Forwarders ve recursion eklendi"
+            
+            if [ "$has_forwarders" = false ]; then
+                print_success "Forwarders eklendi"
+            fi
+            if [ "$has_recursion" = false ]; then
+                print_success "Recursion izni eklendi"
+            fi
+        else
+            print_info "Forwarders ve recursion zaten yapılandırılmış"
         fi
-    elif [ "$has_recursion" = false ]; then
-        # Sadece recursion ekle
-        local local_network=$(echo $server_ip | cut -d'.' -f1-3)
-        if grep -q "forwarders {" "$named_conf_options" 2>/dev/null; then
-            sed -i "/forwarders {/,/};/a\        allow-recursion { localhost; $local_network.0/24; };" "$named_conf_options"
-            print_success "Recursion izni eklendi"
-        fi
-    else
-        print_info "Forwarders ve recursion zaten yapılandırılmış"
     fi
     
     # Yapılandırma kontrolü
@@ -6138,6 +6358,55 @@ PYTHON_SCRIPT
     # BIND9 servisini başlat
     print_info "BIND9 servisi başlatılıyor..."
     systemctl enable named
+    
+    # Yapılandırma kontrolü (duplicate hataları için)
+    if ! named-checkconf 2>/dev/null; then
+        print_warning "BIND9 yapılandırmasında hata tespit edildi, düzeltiliyor..."
+        if command -v python3 &>/dev/null; then
+            python3 <<PYTHON_FIX
+import re
+import sys
+
+config_file = '$named_conf_options'
+
+try:
+    with open(config_file, 'r') as f:
+        content = f.read()
+    
+    # allow-recursion duplicate'lerini temizle
+    lines = content.split('\n')
+    cleaned_lines = []
+    seen_recursion = False
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # allow-recursion satırını tespit et
+        if 'allow-recursion' in stripped:
+            if seen_recursion:
+                # Duplicate allow-recursion'ı atla
+                continue
+            else:
+                seen_recursion = True
+        
+        cleaned_lines.append(line)
+    
+    # Dosyayı yaz
+    with open(config_file, 'w') as f:
+        f.write('\n'.join(cleaned_lines))
+    
+    print("Duplicate allow-recursion temizlendi")
+    sys.exit(0)
+except Exception as e:
+    print(f"Hata: {e}")
+    sys.exit(1)
+PYTHON_FIX
+            if [ $? -eq 0 ]; then
+                print_success "Yapılandırma düzeltildi"
+            fi
+        fi
+    fi
+    
     systemctl restart named
     
     sleep 2
@@ -6146,8 +6415,18 @@ PYTHON_SCRIPT
         print_success "BIND9 servisi başarıyla başlatıldı"
     else
         print_error "BIND9 servisi başlatılamadı!"
-        print_info "Log kontrolü: journalctl -u named -n 50"
-        return 1
+        print_warning "Yapılandırma hatası olabilir, otomatik düzeltme deneniyor..."
+        
+        # Otomatik düzeltme dene
+        if fix_bind9_config; then
+            print_success "BIND9 servisi düzeltme sonrası başlatıldı"
+        else
+            print_error "BIND9 servisi başlatılamadı!"
+            print_info "Log kontrolü: journalctl -u named -n 50"
+            print_info "Yapılandırma kontrolü: named-checkconf"
+            print_info "Manuel düzeltme için: DNS Sunucusu Kurulumu > BIND9 Yapılandırma Hatası Düzelt"
+            return 1
+        fi
     fi
     
     # Firewall kuralları
