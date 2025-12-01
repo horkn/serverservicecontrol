@@ -5829,6 +5829,166 @@ add_nginx_domains_to_dns() {
     fi
 }
 
+# Mevcut zone dosyalarını RFC uyumlu hale getir
+update_zone_soa_values() {
+    print_header "Zone Dosyalarını RFC Uyumlu Hale Getirme"
+    
+    # Zone dosyalarını bul
+    local zone_files=$(find /etc/bind -name "db.*" -type f 2>/dev/null | grep -v ".backup")
+    
+    if [ -z "$zone_files" ]; then
+        print_warning "Zone dosyası bulunamadı!"
+        return 1
+    fi
+    
+    print_info "Zone dosyaları güncelleniyor..."
+    
+    for zone_file in $zone_files; do
+        if [ ! -f "$zone_file" ]; then
+            continue
+        fi
+        
+        print_info "Güncelleniyor: $zone_file"
+        
+        # Yedekleme
+        cp "$zone_file" "${zone_file}.backup.$(date +%Y%m%d_%H%M%S)"
+        
+        # Python ile güvenli güncelleme
+        if command -v python3 &>/dev/null; then
+            python3 <<PYTHON_UPDATE
+import re
+import sys
+from datetime import datetime
+
+zone_file = '$zone_file'
+
+try:
+    with open(zone_file, 'r') as f:
+        content = f.read()
+    
+    # TTL değerini güncelle (604800 -> 3600)
+    content = re.sub(r'\\\$TTL\s+604800', '\$TTL    3600', content)
+    content = re.sub(r'\\\$TTL\s+10800', '\$TTL    3600', content)
+    
+    # SOA kaydını güncelle
+    # REFRESH: 604800 -> 3600
+    content = re.sub(r'(\d{8,})\s*;\s*Serial\s*\n\s*)604800(\s*;\s*Refresh)', r'\g<1>3600\g<2>', content)
+    content = re.sub(r'(\d{8,})\s*;\s*Serial\s*\n\s*)\d+(\s*;\s*Refresh\s*\n\s*)\d+(\s*;\s*Retry)', 
+                     lambda m: m.group(1) + '3600' + m.group(2) + '600' + m.group(3), content)
+    
+    # RETRY: 86400 -> 600
+    content = re.sub(r'(\d+)\s*;\s*Refresh\s*\n\s*)86400(\s*;\s*Retry)', r'\g<1>600\g<2>', content)
+    content = re.sub(r'(\d+)\s*;\s*Refresh\s*\n\s*)\d+(\s*;\s*Retry\s*\n\s*)\d+(\s*;\s*Expire)', 
+                     lambda m: m.group(1) + m.group(2) + '600' + m.group(3), content)
+    
+    # EXPIRE: 2419200 -> 604800 (28 gün -> 7 gün)
+    content = re.sub(r'(\d+)\s*;\s*Retry\s*\n\s*)2419200(\s*;\s*Expire)', r'\g<1>604800\g<2>', content)
+    
+    # MINIMUM TTL: 604800 -> 3600
+    content = re.sub(r'(\d+)\s*;\s*Expire\s*\n\s*)604800(\s*\)\s*;\s*(Negative Cache TTL|Minimum TTL))', r'\g<1>3600\g<2>', content)
+    content = re.sub(r'(\d+)\s*;\s*Expire\s*\n\s*)\d+(\s*\)\s*;\s*(Negative Cache TTL|Minimum TTL))', 
+                     lambda m: m.group(1) + '3600' + m.group(2), content)
+    
+    # Serial numarasını güncelle (bugünün tarihi)
+    today_serial = datetime.now().strftime('%Y%m%d') + '01'
+    content = re.sub(r'(\d{8})\d{2}(\s*;\s*Serial)', today_serial + r'\g<2>', content)
+    
+    # www kaydını kontrol et ve ekle (yoksa)
+    if 'db.' in zone_file and not zone_file.endswith('.backup'):
+        # Domain adını zone dosyası adından çıkar
+        domain_name = zone_file.split('/')[-1].replace('db.', '')
+        # www kaydı var mı kontrol et
+        if not re.search(r'^www\s+IN\s+A\s+', content, re.MULTILINE):
+            # IP adresini al (@ IN A kaydından)
+            ip_match = re.search(r'@\s+IN\s+A\s+([0-9.]+)', content)
+            if ip_match:
+                server_ip = ip_match.group(1)
+                # Son NS kaydından sonra www ekle
+                # Tüm NS kayıtlarını bul ve son NS kaydından sonra www ekle
+                ns_matches = list(re.finditer(r'@\s+IN\s+NS\s+[^\n]+\n', content))
+                if ns_matches:
+                    last_ns_match = ns_matches[-1]
+                    insert_pos = last_ns_match.end()
+                    content = content[:insert_pos] + f'www     IN      A       {server_ip}\n' + content[insert_pos:]
+                    print(f"www kaydı eklendi: www.{domain_name} -> {server_ip}")
+    
+    with open(zone_file, 'w') as f:
+        f.write(content)
+    
+    print("Zone dosyası güncellendi")
+    sys.exit(0)
+except Exception as e:
+    print(f"Hata: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+PYTHON_UPDATE
+            
+            if [ $? -eq 0 ]; then
+                print_success "Zone dosyası güncellendi: $zone_file"
+                
+                # Zone dosyasını kontrol et
+                local zone_name=$(basename "$zone_file" | sed 's/^db\.//')
+                if named-checkzone "$zone_name" "$zone_file" 2>/dev/null; then
+                    print_success "Zone dosyası geçerli: $zone_name"
+                else
+                    print_warning "Zone dosyasında hata olabilir: named-checkzone $zone_name $zone_file"
+                fi
+            else
+                print_warning "Python ile güncelleme başarısız: $zone_file"
+            fi
+        else
+            # Python yoksa sed ile basit güncelleme
+            print_warning "Python3 bulunamadı, basit güncelleme yapılıyor..."
+            
+            # TTL güncelle
+            sed -i 's/^\$TTL[[:space:]]*604800/\$TTL    3600/' "$zone_file"
+            sed -i 's/^\$TTL[[:space:]]*10800/\$TTL    3600/' "$zone_file"
+            
+            # SOA REFRESH güncelle
+            sed -i 's/^[[:space:]]*604800[[:space:]]*;[[:space:]]*Refresh/                          3600         ; Refresh/' "$zone_file"
+            
+            # SOA RETRY güncelle
+            sed -i 's/^[[:space:]]*86400[[:space:]]*;[[:space:]]*Retry/                          600           ; Retry/' "$zone_file"
+            
+            # SOA EXPIRE güncelle
+            sed -i 's/^[[:space:]]*2419200[[:space:]]*;[[:space:]]*Expire/                          604800        ; Expire/' "$zone_file"
+            
+            # SOA MINIMUM TTL güncelle
+            sed -i 's/^[[:space:]]*604800[[:space:]]*)[[:space:]]*;[[:space:]]*Negative Cache TTL/                          3600 )        ; Minimum TTL/' "$zone_file"
+            sed -i 's/^[[:space:]]*604800[[:space:]]*)[[:space:]]*;[[:space:]]*Minimum TTL/                          3600 )        ; Minimum TTL/' "$zone_file"
+            
+            # www kaydını kontrol et ve ekle
+            if ! grep -qE "^www[[:space:]]+IN[[:space:]]+A" "$zone_file" 2>/dev/null; then
+                # IP adresini al
+                local server_ip=$(grep -E "^@[[:space:]]+IN[[:space:]]+A" "$zone_file" | head -1 | awk '{print $4}')
+                if [ -n "$server_ip" ]; then
+                    # NS kayıtlarından sonra www ekle
+                    sed -i "/^@[[:space:]]*IN[[:space:]]*NS/a\\www     IN      A       $server_ip" "$zone_file"
+                    print_success "www kaydı eklendi: www -> $server_ip"
+                fi
+            fi
+            
+            print_success "Zone dosyası güncellendi (basit yöntem): $zone_file"
+        fi
+    done
+    
+    # BIND9 servisini yeniden yükle
+    print_info "BIND9 servisi yeniden yükleniyor..."
+    systemctl reload named 2>/dev/null || systemctl restart named
+    
+    sleep 2
+    
+    if systemctl is-active --quiet named; then
+        print_success "BIND9 servisi başarıyla yeniden yüklendi"
+        print_success "Zone dosyaları RFC uyumlu hale getirildi!"
+    else
+        print_error "BIND9 servisi yeniden yüklenemedi!"
+        print_info "Log kontrolü: journalctl -u named -n 50"
+        return 1
+    fi
+}
+
 # BIND9 yapılandırma hatasını düzelt
 fix_bind9_config() {
     print_header "BIND9 Yapılandırma Hatası Düzeltme"
@@ -5960,10 +6120,11 @@ install_dns_server() {
     echo "1) BIND9 (Profesyonel, tam özellikli DNS sunucusu)"
     echo "2) dnsmasq (Hafif, küçük ağlar için)"
     echo "3) BIND9 Yapılandırma Hatası Düzelt"
-    echo "4) Geri Dön"
+    echo "4) Zone Dosyalarını RFC Uyumlu Hale Getir (SOA değerleri güncelle)"
+    echo "5) Geri Dön"
     echo ""
     
-    read -p "Seçiminiz (1-4) [1]: " dns_choice
+    read -p "Seçiminiz (1-5) [1]: " dns_choice
     dns_choice=${dns_choice:-1}
     
     case $dns_choice in
@@ -5978,6 +6139,10 @@ install_dns_server() {
             read -p "Devam etmek için Enter'a basın..."
             ;;
         4)
+            update_zone_soa_values
+            read -p "Devam etmek için Enter'a basın..."
+            ;;
+        5)
             return 0
             ;;
         *)
@@ -6032,16 +6197,16 @@ install_bind9() {
         reverse_zone="/etc/bind/db.${ip_octets[2]}.${ip_octets[1]}.${ip_octets[0]}"
     fi
     
-    # Forward zone dosyası oluştur
-    print_info "Forward zone dosyası oluşturuluyor..."
+    # Forward zone dosyası oluştur (RFC2308 uyumlu SOA değerleri)
+    print_info "Forward zone dosyası oluşturuluyor (RFC2308 uyumlu)..."
     cat > "$forward_zone" <<EOF
-\$TTL    604800
+\$TTL    3600
 @       IN      SOA     ns1.$domain_name. admin.$domain_name. (
                           $(date +%Y%m%d01)        ; Serial
-                          604800         ; Refresh
-                          86400          ; Retry
-                          2419200        ; Expire
-                          604800 )       ; Negative Cache TTL
+                          3600          ; Refresh (1 saat - RFC önerisi)
+                          600           ; Retry (10 dakika - RFC önerisi)
+                          604800        ; Expire (7 gün)
+                          3600 )        ; Minimum TTL (1 saat - RFC2308 önerisi)
 ;
 @       IN      NS      ns1.$domain_name.
 @       IN      NS      ns2.$domain_name.
@@ -6063,18 +6228,19 @@ EOF
         local reverse_ptr="${ip_octets[3]}.${ip_octets[2]}.${ip_octets[1]}.${ip_octets[0]}.in-addr.arpa"
         
         cat > "$reverse_zone" <<EOF
-\$TTL    604800
+\$TTL    3600
 @       IN      SOA     ns1.$domain_name. admin.$domain_name. (
                           $(date +%Y%m%d01)        ; Serial
-                          604800         ; Refresh
-                          86400          ; Retry
-                          2419200        ; Expire
-                          604800 )       ; Negative Cache TTL
+                          3600          ; Refresh (1 saat - RFC önerisi)
+                          600           ; Retry (10 dakika - RFC önerisi)
+                          604800        ; Expire (7 gün)
+                          3600 )        ; Minimum TTL (1 saat - RFC2308 önerisi)
 ;
 @       IN      NS      ns1.$domain_name.
 @       IN      NS      ns2.$domain_name.
 ${ip_octets[3]}      IN      PTR     ns1.$domain_name.
 ${ip_octets[3]}      IN      PTR     $domain_name.
+${ip_octets[3]}      IN      PTR     www.$domain_name.
 EOF
         
         chmod 644 "$reverse_zone"
