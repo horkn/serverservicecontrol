@@ -5861,7 +5861,7 @@ update_zone_soa_values() {
         # Yedekleme
         cp "$zone_file" "${zone_file}.backup.$(date +%Y%m%d_%H%M%S)"
         
-        # Python ile güvenli güncelleme
+        # Python ile güvenli güncelleme - satır satır işleme
         if command -v python3 &>/dev/null; then
             python3 <<PYTHON_UPDATE
 import re
@@ -5872,94 +5872,98 @@ zone_file = '$zone_file'
 
 try:
     with open(zone_file, 'r') as f:
-        content = f.read()
+        lines = f.readlines()
     
-    # TTL değerini güncelle (604800 -> 3600)
-    content = re.sub(r'\$TTL\s+604800', '$TTL    3600', content)
-    content = re.sub(r'\$TTL\s+10800', '$TTL    3600', content)
+    updated_lines = []
+    has_www = False
+    server_ip = None
+    last_ns_index = -1
     
-    # SOA kaydını güncelle - basit ve güvenli yaklaşım
-    # REFRESH: 604800 -> 3600
-    def update_refresh(match):
-        return match.group(1) + '        ; Serial\n                          3600' + match.group(2)
-    content = re.sub(r'(\d{8,})\s*;\s*Serial\s*\n\s*604800(\s*;\s*Refresh)', update_refresh, content)
+    for i, line in enumerate(lines):
+        original = line
+        
+        # TTL değerini güncelle
+        if line.strip().startswith('$TTL'):
+            line = line.replace('604800', '3600')
+            line = line.replace('10800', '3600')
     
-    # RETRY: 86400 -> 600
-    def update_retry(match):
-        return match.group(1) + '         ; Refresh\n                          600' + match.group(2)
-    content = re.sub(r'(\d+)\s*;\s*Refresh\s*\n\s*86400(\s*;\s*Retry)', update_retry, content)
-    
-    # RETRY: diğer yüksek değerleri de kontrol et
-    def update_retry_other(match):
-        try:
-            retry_val = int(match.group(2))
-            if retry_val > 600:
-                return match.group(1) + '600' + match.group(3)
+        # REFRESH: 604800 -> 3600
+        if 'Refresh' in line and '604800' in line:
+            line = line.replace('604800', '3600')
+        
+        # RETRY: 86400 -> 600
+        if 'Retry' in line:
+            if '86400' in line:
+                line = line.replace('86400', '600')
             else:
-                return match.group(0)
-        except:
-            return match.group(0)
-    content = re.sub(r'(\d+)\s*;\s*Refresh\s*\n\s*)(\d+)(\s*;\s*Retry)', update_retry_other, content)
-    
-    # EXPIRE: 2419200 -> 604800 (28 gün -> 7 gün)
-    def update_expire(match):
-        return match.group(1) + '           ; Retry\n                          604800' + match.group(2)
-    content = re.sub(r'(\d+)\s*;\s*Retry\s*\n\s*2419200(\s*;\s*Expire)', update_expire, content)
-    
-    # EXPIRE: diğer yüksek değerleri de kontrol et
-    def update_expire_other(match):
-        try:
-            expire_val = int(match.group(2))
-            if expire_val > 604800:
-                return match.group(1) + '604800' + match.group(3)
+                # Diğer yüksek değerleri kontrol et
+                match = re.search(r'(\s+)(\d+)(\s*;\s*Retry)', line)
+                if match:
+                    try:
+                        if int(match.group(2)) > 600:
+                            line = re.sub(r'\d+(\s*;\s*Retry)', '600\\1', line)
+                    except:
+                        pass
+        
+        # EXPIRE: 2419200 -> 604800
+        if 'Expire' in line:
+            if '2419200' in line:
+                line = line.replace('2419200', '604800')
             else:
-                return match.group(0)
-        except:
-            return match.group(0)
-    content = re.sub(r'(\d+)\s*;\s*Retry\s*\n\s*)(\d+)(\s*;\s*Expire)', update_expire_other, content)
-    
-    # MINIMUM TTL: 604800 -> 3600
-    def update_minimum_ttl(match):
-        return match.group(1) + '        ; Expire\n                          3600' + match.group(2)
-    content = re.sub(r'(\d+)\s*;\s*Expire\s*\n\s*604800(\s*\)\s*;\s*(?:Negative Cache TTL|Minimum TTL))', update_minimum_ttl, content)
-    
-    # MINIMUM TTL: diğer yüksek değerleri de kontrol et
-    def update_minimum_ttl_other(match):
-        try:
-            ttl_val = int(match.group(2))
-            if ttl_val > 3600:
-                return match.group(1) + '3600' + match.group(3)
+                # Diğer yüksek değerleri kontrol et
+                match = re.search(r'(\s+)(\d+)(\s*;\s*Expire)', line)
+                if match:
+                    try:
+                        if int(match.group(2)) > 604800:
+                            line = re.sub(r'\d+(\s*;\s*Expire)', '604800\\1', line)
+                    except:
+                        pass
+        
+        # MINIMUM TTL: 604800 -> 3600
+        if 'Negative Cache TTL' in line or 'Minimum TTL' in line:
+            if '604800' in line:
+                line = line.replace('604800', '3600')
             else:
-                return match.group(0)
-        except:
-            return match.group(0)
-    content = re.sub(r'(\d+)\s*;\s*Expire\s*\n\s*)(\d+)(\s*\)\s*;\s*(?:Negative Cache TTL|Minimum TTL))', update_minimum_ttl_other, content)
+                # Diğer yüksek değerleri kontrol et
+                match = re.search(r'(\s+)(\d+)(\s*\)\s*;\s*(?:Negative|Minimum))', line)
+                if match:
+                    try:
+                        if int(match.group(2)) > 3600:
+                            line = re.sub(r'\d+(\s*\)\s*;\s*(?:Negative|Minimum))', '3600\\1', line)
+                    except:
+                        pass
+        
+        # Serial numarasını güncelle
+        if 'Serial' in line:
+            today_serial = datetime.now().strftime('%Y%m%d') + '01'
+            line = re.sub(r'(\d{8})\d{2}(\s*;\s*Serial)', today_serial + '\\2', line)
+        
+        # IP adresini al
+        if '@' in line and 'IN' in line and 'A' in line:
+            match = re.search(r'@\s+IN\s+A\s+([0-9.]+)', line)
+            if match:
+                server_ip = match.group(1)
+        
+        # NS kayıtlarını bul
+        if '@' in line and 'IN' in line and 'NS' in line:
+            last_ns_index = len(updated_lines)
+        
+        # www kaydını kontrol et
+        if 'www' in line and 'IN' in line and 'A' in line:
+            has_www = True
+        
+        updated_lines.append(line)
     
-    # Serial numarasını güncelle (bugünün tarihi)
-    today_serial = datetime.now().strftime('%Y%m%d') + '01'
-    content = re.sub(r'(\d{8})\d{2}(\s*;\s*Serial)', today_serial + r'\g<2>', content)
-    
-    # www kaydını kontrol et ve ekle (yoksa)
-    if 'db.' in zone_file and not zone_file.endswith('.backup'):
-        # Domain adını zone dosyası adından çıkar
+    # www kaydı yoksa ekle
+    if not has_www and server_ip and last_ns_index >= 0:
+        www_line = f'www     IN      A       {server_ip}\n'
+        updated_lines.insert(last_ns_index + 1, www_line)
         domain_name = zone_file.split('/')[-1].replace('db.', '')
-        # www kaydı var mı kontrol et
-        if not re.search(r'^www\s+IN\s+A\s+', content, re.MULTILINE):
-            # IP adresini al (@ IN A kaydından)
-            ip_match = re.search(r'@\s+IN\s+A\s+([0-9.]+)', content)
-            if ip_match:
-                server_ip = ip_match.group(1)
-                # Son NS kaydından sonra www ekle
-                # Tüm NS kayıtlarını bul ve son NS kaydından sonra www ekle
-                ns_matches = list(re.finditer(r'@\s+IN\s+NS\s+[^\n]+\n', content))
-                if ns_matches:
-                    last_ns_match = ns_matches[-1]
-                    insert_pos = last_ns_match.end()
-                    content = content[:insert_pos] + f'www     IN      A       {server_ip}\n' + content[insert_pos:]
-                    print(f"www kaydı eklendi: www.{domain_name} -> {server_ip}")
+        print(f"www kaydı eklendi: www.{domain_name} -> {server_ip}")
     
+    # Dosyayı yaz
     with open(zone_file, 'w') as f:
-        f.write(content)
+        f.writelines(updated_lines)
     
     print("Zone dosyası güncellendi")
     sys.exit(0)
