@@ -625,6 +625,7 @@ check_and_install_missing_php_extensions() {
         "tidy" "imap" "gmp" "sodium" "imagick" "openssl" 
         "fileinfo" "exif" "sockets" "pcntl" "gettext" "shmop"
         "phar" "json" "readline" "tokenizer" "iconv" "ctype"
+        "simplexml" "xmlreader" "xmlwriter"
     )
     
     # Kurulu eklentileri al
@@ -685,8 +686,8 @@ check_and_install_missing_php_extensions() {
                     continue
                 fi
                 ;;
-            "fileinfo"|"exif"|"sockets"|"gettext"|"shmop"|"tokenizer"|"iconv"|"ctype")
-                # Bu eklentiler genellikle php-common ile gelir ama etkinleştirilmemiş olabilir
+            "fileinfo"|"exif"|"sockets"|"gettext"|"shmop"|"tokenizer"|"iconv"|"ctype"|"simplexml"|"xmlreader"|"xmlwriter")
+                # Bu eklentiler genellikle php-common veya php-xml ile gelir ama etkinleştirilmemiş olabilir
                 print_info "$ext eklentisi kontrol ediliyor..."
                 
                 # Önce etkinleştirmeyi dene
@@ -699,10 +700,16 @@ check_and_install_missing_php_extensions() {
                     phpenmod -v $version $ext 2>/dev/null || true
                 fi
                 
-                # Hala yoksa php-common'ı yeniden kur
+                # Hala yoksa ilgili paketi yeniden kur
                 if ! php$version -m 2>/dev/null | grep -qi "^$ext$"; then
-                    print_info "php$version-common yeniden kuruluyor ($ext için)..."
-                    apt install --reinstall -y php$version-common 2>/dev/null || true
+                    # simplexml, xmlreader, xmlwriter için php-xml paketi gerekli
+                    if [ "$ext" = "simplexml" ] || [ "$ext" = "xmlreader" ] || [ "$ext" = "xmlwriter" ]; then
+                        print_info "php$version-xml yeniden kuruluyor ($ext için)..."
+                        apt install --reinstall -y php$version-xml 2>/dev/null || true
+                    else
+                        print_info "php$version-common yeniden kuruluyor ($ext için)..."
+                        apt install --reinstall -y php$version-common 2>/dev/null || true
+                    fi
                     ((installed_count++))
                 fi
                 continue
@@ -1918,6 +1925,106 @@ install_redis() {
     fi
 }
 
+fix_git_safe_directory() {
+    print_info "Git safe.directory yapılandırması kontrol ediliyor..."
+    
+    # /var/www altındaki tüm dizinleri safe.directory'e ekle
+    if [ -d "/var/www" ]; then
+        for dir in /var/www/*; do
+            if [ -d "$dir/.git" ]; then
+                local dir_name=$(basename "$dir")
+                print_info "Git safe.directory ekleniyor: $dir"
+                
+                # Root için ekle
+                git config --global --add safe.directory "$dir" 2>/dev/null || true
+                
+                # www-data kullanıcısı için ekle (varsa)
+                if id -u www-data &>/dev/null; then
+                    sudo -u www-data git config --global --add safe.directory "$dir" 2>/dev/null || true
+                fi
+                
+                # Dizin sahipliğini düzelt (www-data:www-data)
+                if [ -d "$dir" ]; then
+                    print_info "Dizin sahipliği düzeltiliyor: $dir"
+                    chown -R www-data:www-data "$dir" 2>/dev/null || true
+                fi
+            fi
+        done
+        
+        print_success "Git safe.directory yapılandırması tamamlandı"
+    fi
+}
+
+quick_fix_php_extensions() {
+    print_header "Eksik PHP Eklentilerini Hızlı Düzeltme"
+    
+    # PHP versiyonunu tespit et
+    local php_version=$(php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+    
+    if [ -z "$php_version" ]; then
+        print_error "PHP kurulu değil veya versiyon tespit edilemedi!"
+        return 1
+    fi
+    
+    print_info "PHP versiyonu: $php_version"
+    print_info "Eksik eklentiler kontrol ediliyor ve kuruluyor..."
+    
+    # Kritik eklentiler listesi (Composer ve Laravel için)
+    local critical_extensions=("simplexml" "xmlreader" "xmlwriter" "fileinfo" "tokenizer" "iconv" "ctype" "phar")
+    local fixed_count=0
+    
+    for ext in "${critical_extensions[@]}"; do
+        if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
+            print_warning "$ext eksik, düzeltiliyor..."
+            
+            # .ini dosyası var mı kontrol et
+            if [ ! -f "/etc/php/$php_version/mods-available/$ext.ini" ]; then
+                # .ini dosyası oluştur
+                echo "; configuration for php $ext module" > "/etc/php/$php_version/mods-available/$ext.ini"
+                echo "extension=$ext.so" >> "/etc/php/$php_version/mods-available/$ext.ini"
+            fi
+            
+            # Eklentiyi etkinleştir
+            phpenmod -v $php_version $ext 2>/dev/null || true
+            
+            # Hala yüklenmemişse paketi yeniden kur
+            if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
+                if [ "$ext" = "simplexml" ] || [ "$ext" = "xmlreader" ] || [ "$ext" = "xmlwriter" ]; then
+                    print_info "php$php_version-xml yeniden kuruluyor..."
+                    apt install --reinstall -y php$php_version-xml 2>/dev/null || true
+                else
+                    print_info "php$php_version-common yeniden kuruluyor..."
+                    apt install --reinstall -y php$php_version-common 2>/dev/null || true
+                fi
+            fi
+            
+            # Tekrar kontrol
+            if php -m 2>/dev/null | grep -qi "^$ext$"; then
+                print_success "$ext başarıyla etkinleştirildi"
+                ((fixed_count++))
+            else
+                print_error "$ext etkinleştirilemedi!"
+            fi
+        else
+            print_success "$ext zaten kurulu"
+        fi
+    done
+    
+    if [ $fixed_count -gt 0 ]; then
+        print_info "PHP-FPM yeniden başlatılıyor..."
+        systemctl restart php$php_version-fpm 2>/dev/null || true
+        
+        print_success "$fixed_count eklenti düzeltildi!"
+        print_info "Kurulu eklentiler:"
+        php -m | grep -E "simplexml|xmlreader|xmlwriter|fileinfo|tokenizer|iconv|ctype|phar" | sort
+    else
+        print_success "Tüm kritik eklentiler zaten kurulu"
+    fi
+    
+    # Git safe.directory'yi de düzelt
+    fix_git_safe_directory
+}
+
 install_composer() {
     print_info "Composer kuruluyor..."
     
@@ -1940,7 +2047,7 @@ install_composer() {
     # Composer için gerekli PHP eklentilerini kontrol et
     print_info "Composer için gerekli PHP eklentileri kontrol ediliyor..."
     
-    local required_for_composer=("phar" "json" "mbstring" "openssl" "curl" "zip" "fileinfo" "tokenizer" "iconv" "ctype")
+    local required_for_composer=("phar" "json" "mbstring" "openssl" "curl" "zip" "fileinfo" "tokenizer" "iconv" "ctype" "simplexml" "xmlreader" "xmlwriter")
     local missing_for_composer=()
     
     for ext in "${required_for_composer[@]}"; do
@@ -1957,8 +2064,8 @@ install_composer() {
         for ext in "${missing_for_composer[@]}"; do
             local pkg="php$php_version-$ext"
             
-            # Özel durum: bazı eklentiler php-common ile gelir
-            if [ "$ext" = "phar" ] || [ "$ext" = "fileinfo" ] || [ "$ext" = "tokenizer" ] || [ "$ext" = "iconv" ] || [ "$ext" = "ctype" ]; then
+            # Özel durum: bazı eklentiler php-common veya php-xml ile gelir
+            if [ "$ext" = "phar" ] || [ "$ext" = "fileinfo" ] || [ "$ext" = "tokenizer" ] || [ "$ext" = "iconv" ] || [ "$ext" = "ctype" ] || [ "$ext" = "simplexml" ] || [ "$ext" = "xmlreader" ] || [ "$ext" = "xmlwriter" ]; then
                 print_info "$ext eklentisi etkinleştiriliyor..."
                 
                 # Eklenti genellikle PHP ile birlikte gelir, sadece etkinleştirmek gerekebilir
@@ -1971,10 +2078,16 @@ install_composer() {
                     phpenmod -v $php_version $ext 2>/dev/null || true
                 fi
                 
-                # Hala yoksa php-common'ı yeniden kur
+                # Hala yoksa ilgili paketi yeniden kur
                 if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
-                    print_info "php$php_version-common yeniden kuruluyor ($ext için)..."
-                    apt install --reinstall -y php$php_version-common 2>/dev/null || true
+                    # simplexml, xmlreader, xmlwriter için php-xml paketi gerekli
+                    if [ "$ext" = "simplexml" ] || [ "$ext" = "xmlreader" ] || [ "$ext" = "xmlwriter" ]; then
+                        print_info "php$php_version-xml yeniden kuruluyor ($ext için)..."
+                        apt install --reinstall -y php$php_version-xml 2>/dev/null || true
+                    else
+                        print_info "php$php_version-common yeniden kuruluyor ($ext için)..."
+                        apt install --reinstall -y php$php_version-common 2>/dev/null || true
+                    fi
                 fi
             else
                 # Diğer eklentiler için normal kurulum
@@ -2052,6 +2165,9 @@ install_composer() {
         print_info "Composer çalışıyor mu test ediliyor..."
         if composer --version &> /dev/null; then
             print_success "Composer başarıyla kuruldu ve çalışıyor!"
+            
+            # Git safe.directory yapılandırmasını düzelt
+            fix_git_safe_directory
         else
             print_error "Composer kurulu ama çalışmıyor!"
             print_info "Eksik eklentileri kontrol edin: php -m"
@@ -7384,10 +7500,11 @@ main_menu() {
         echo "21) Servis Optimizasyonu (Performans & Güvenlik)"
         echo "22) DNS Sunucusu Kurulumu"
         echo "23) Nginx Domain'lerini DNS'e Ekle"
-        echo "24) Çıkış"
+        echo "24) PHP Eklentileri Hızlı Düzeltme (Composer için)"
+        echo "25) Çıkış"
         echo ""
         
-        read -p "Seçiminizi yapın (1-24): " choice
+        read -p "Seçiminizi yapın (1-25): " choice
         
         case $choice in
             1)
@@ -7482,11 +7599,15 @@ main_menu() {
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             24)
+                quick_fix_php_extensions
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            25)
                 print_success "Çıkılıyor..."
                 exit 0
                 ;;
             *)
-                print_error "Geçersiz seçim. Lütfen 1-24 arasında bir sayı girin."
+                print_error "Geçersiz seçim. Lütfen 1-25 arasında bir sayı girin."
                 sleep 2
                 ;;
         esac
