@@ -624,6 +624,7 @@ check_and_install_missing_php_extensions() {
         "zip" "xml" "intl" "opcache" "bcmath" "soap" "xsl" 
         "tidy" "imap" "gmp" "sodium" "imagick" "openssl" 
         "fileinfo" "exif" "sockets" "pcntl" "gettext" "shmop"
+        "phar" "json" "readline"
     )
     
     # Kurulu eklentileri al
@@ -688,6 +689,45 @@ check_and_install_missing_php_extensions() {
                 # Bu eklentiler genellikle php-common ile gelir
                 print_info "$ext zaten php-common ile kurulu olmalı, atlanıyor"
                 continue
+                ;;
+            "phar")
+                # phar genellikle php-common ile gelir ama etkinleştirilmemiş olabilir
+                print_info "phar eklentisi kontrol ediliyor..."
+                
+                if [ -f "/etc/php/$version/mods-available/phar.ini" ]; then
+                    phpenmod -v $version phar 2>/dev/null || true
+                else
+                    # phar.ini yoksa oluştur
+                    echo "; configuration for php phar module" > "/etc/php/$version/mods-available/phar.ini"
+                    echo "extension=phar.so" >> "/etc/php/$version/mods-available/phar.ini"
+                    phpenmod -v $version phar 2>/dev/null || true
+                fi
+                
+                # Hala yoksa php-common'ı yeniden kur
+                if ! php$version -m 2>/dev/null | grep -qi "^phar$"; then
+                    print_info "php$version-common yeniden kuruluyor (phar için)..."
+                    apt install --reinstall -y php$version-common 2>/dev/null || true
+                    ((installed_count++))
+                fi
+                continue
+                ;;
+            "json")
+                # json genellikle php-common ile gelir
+                if apt-cache search "php$version-json" 2>/dev/null | grep -q "php$version-json"; then
+                    pkg_name="php$version-json"
+                else
+                    print_info "json zaten php-common ile kurulu olmalı, atlanıyor"
+                    continue
+                fi
+                ;;
+            "readline")
+                # readline genellikle php-cli ile gelir
+                if apt-cache search "php$version-readline" 2>/dev/null | grep -q "php$version-readline"; then
+                    pkg_name="php$version-readline"
+                else
+                    print_info "readline zaten php-cli ile kurulu olmalı, atlanıyor"
+                    continue
+                fi
                 ;;
         esac
         
@@ -1863,9 +1903,147 @@ install_redis() {
 
 install_composer() {
     print_info "Composer kuruluyor..."
-    curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
-    chmod +x /usr/local/bin/composer
-    print_success "Composer kurulumu tamamlandı"
+    
+    # PHP kurulu mu kontrol et
+    if ! command -v php &> /dev/null; then
+        print_error "PHP kurulu değil! Önce PHP kurulumu yapmanız gerekiyor."
+        return 1
+    fi
+    
+    # PHP versiyonunu tespit et
+    local php_version=$(php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+    
+    if [ -z "$php_version" ]; then
+        print_error "PHP versiyonu tespit edilemedi!"
+        return 1
+    fi
+    
+    print_info "PHP versiyonu: $php_version"
+    
+    # Composer için gerekli PHP eklentilerini kontrol et
+    print_info "Composer için gerekli PHP eklentileri kontrol ediliyor..."
+    
+    local required_for_composer=("phar" "json" "mbstring" "openssl" "curl" "zip")
+    local missing_for_composer=()
+    
+    for ext in "${required_for_composer[@]}"; do
+        if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
+            missing_for_composer+=("$ext")
+        fi
+    done
+    
+    # Eksik eklentileri kur
+    if [ ${#missing_for_composer[@]} -gt 0 ]; then
+        print_warning "Composer için gerekli eklentiler eksik: ${missing_for_composer[*]}"
+        print_info "Eksik eklentiler kuruluyor..."
+        
+        for ext in "${missing_for_composer[@]}"; do
+            local pkg="php$php_version-$ext"
+            
+            # Özel durum: phar genellikle php-common ile gelir
+            if [ "$ext" = "phar" ]; then
+                print_info "phar eklentisi etkinleştiriliyor..."
+                
+                # phar genellikle PHP ile birlikte gelir, sadece etkinleştirmek gerekebilir
+                if [ -f "/etc/php/$php_version/mods-available/phar.ini" ]; then
+                    phpenmod -v $php_version phar 2>/dev/null || true
+                else
+                    # phar.ini yoksa oluştur
+                    echo "; configuration for php phar module" > "/etc/php/$php_version/mods-available/phar.ini"
+                    echo "extension=phar.so" >> "/etc/php/$php_version/mods-available/phar.ini"
+                    phpenmod -v $php_version phar 2>/dev/null || true
+                fi
+                
+                # Hala yoksa php-common'ı yeniden kur
+                if ! php -m 2>/dev/null | grep -qi "^phar$"; then
+                    print_info "php$php_version-common yeniden kuruluyor..."
+                    apt install --reinstall -y php$php_version-common 2>/dev/null || true
+                fi
+            else
+                # Diğer eklentiler için normal kurulum
+                if apt-cache search "$pkg" 2>/dev/null | grep -q "^$pkg "; then
+                    print_info "$pkg kuruluyor..."
+                    apt install -y $pkg 2>/dev/null || true
+                fi
+            fi
+        done
+        
+        # PHP-FPM'i yeniden başlat (varsa)
+        if systemctl is-active --quiet php$php_version-fpm 2>/dev/null; then
+            print_info "PHP-FPM yeniden başlatılıyor..."
+            systemctl restart php$php_version-fpm
+        fi
+        
+        # Tekrar kontrol et
+        print_info "Eklentiler tekrar kontrol ediliyor..."
+        local still_missing=()
+        for ext in "${required_for_composer[@]}"; do
+            if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
+                still_missing+=("$ext")
+            fi
+        done
+        
+        if [ ${#still_missing[@]} -gt 0 ]; then
+            print_error "Bazı eklentiler hala eksik: ${still_missing[*]}"
+            print_warning "Composer çalışmayabilir!"
+        else
+            print_success "Tüm gerekli eklentiler kuruldu"
+        fi
+    else
+        print_success "Tüm gerekli eklentiler mevcut"
+    fi
+    
+    # Mevcut Composer kurulumunu kontrol et
+    if command -v composer &> /dev/null; then
+        local current_version=$(composer --version 2>/dev/null | head -1 || echo "Bilinmiyor")
+        print_info "Composer zaten kurulu: $current_version"
+        
+        if ask_yes_no "Composer'ı güncellemek ister misiniz?"; then
+            print_info "Composer güncelleniyor..."
+            composer self-update 2>/dev/null || {
+                print_warning "Composer güncelleme başarısız, yeniden kurulum yapılıyor..."
+                rm -f /usr/local/bin/composer
+            }
+        else
+            print_info "Composer kurulumu atlandı"
+            return 0
+        fi
+    fi
+    
+    # Composer kurulumu
+    if [ ! -f "/usr/local/bin/composer" ]; then
+        print_info "Composer indiriliyor ve kuruluyor..."
+        
+        # Composer installer'ı indir ve kur
+        if curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer; then
+            chmod +x /usr/local/bin/composer
+            print_success "Composer kurulumu tamamlandı"
+            
+            # Versiyon bilgisi
+            if command -v composer &> /dev/null; then
+                local version=$(composer --version 2>/dev/null | head -1 || echo "Bilinmiyor")
+                echo -e "${GREEN}Composer Versiyonu:${NC} $version"
+            fi
+        else
+            print_error "Composer kurulumu başarısız oldu!"
+            return 1
+        fi
+    fi
+    
+    # Son kontrol
+    if command -v composer &> /dev/null; then
+        print_info "Composer çalışıyor mu test ediliyor..."
+        if composer --version &> /dev/null; then
+            print_success "Composer başarıyla kuruldu ve çalışıyor!"
+        else
+            print_error "Composer kurulu ama çalışmıyor!"
+            print_info "Eksik eklentileri kontrol edin: php -m"
+            return 1
+        fi
+    else
+        print_error "Composer kurulumu başarısız!"
+        return 1
+    fi
 }
 
 install_php_extensions() {
