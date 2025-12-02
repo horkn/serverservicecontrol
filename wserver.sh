@@ -521,94 +521,92 @@ EOF
         fi
     fi
     
-    # Tüm conf.d dizinlerindeki linkleri temizle
-    for conf_dir in "/etc/php/$version/cli/conf.d" "/etc/php/$version/fpm/conf.d"; do
-        if [ -d "$conf_dir" ]; then
-            print_info "Temizleniyor: $conf_dir"
+    # UYARI: Bu fonksiyon eskiden çift yükleme sorunlarına neden oluyordu
+    # Artık fix_php_duplicate_modules kullanılıyor, bu fonksiyon basitleştirildi
+    
+    print_info "PHP eklenti yükleme sırası düzeltiliyor (basitleştirilmiş)..."
+    
+    # PHP mods-available dizini
+    local mods_dir="/etc/php/$version/mods-available"
+    
+    if [ ! -d "$mods_dir" ]; then
+        print_warning "PHP mods dizini bulunamadı: $mods_dir"
+        return 1
+    fi
+    
+    # pdo_mysql.ini içeriğini kontrol et (sorun kaynağı olabilir)
+    if [ -f "$mods_dir/pdo_mysql.ini" ]; then
+        local pdo_mysql_content=$(cat "$mods_dir/pdo_mysql.ini")
+        
+        if echo "$pdo_mysql_content" | grep -q "^extension=pdo_mysql.so"; then
+            print_info "pdo_mysql.ini düzeltiliyor (extension satırını kaldırıyoruz)..."
+            cp "$mods_dir/pdo_mysql.ini" "$mods_dir/pdo_mysql.ini.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
             
-            # Tüm ilgili linkleri kaldır (çift yüklemeyi önlemek için)
-            find "$conf_dir" -type l -name "*mysqlnd*" -delete 2>/dev/null || true
-            find "$conf_dir" -type l -name "*pdo.ini" -delete 2>/dev/null || true
-            find "$conf_dir" -type l -name "*mysqli*" -delete 2>/dev/null || true
-            find "$conf_dir" -type l -name "*pdo_mysql*" -delete 2>/dev/null || true
-            find "$conf_dir" -type l -name "*dom.ini" -delete 2>/dev/null || true
-            find "$conf_dir" -type l -name "*xml.ini" -delete 2>/dev/null || true
-            find "$conf_dir" -type l -name "*xsl*" -delete 2>/dev/null || true
+            cat > "$mods_dir/pdo_mysql.ini" <<'EOF'
+; configuration for php mysql module
+; priority=30
+; Depends: pdo, mysqlnd
+EOF
+            print_info "pdo_mysql devre dışı bırakıldı (mysqli kullanılacak)"
         fi
-    done
+    fi
     
-    # pdo_mysql ve pdo modüllerini önce devre dışı bırak (temiz başlangıç)
-    print_info "Modüller devre dışı bırakılıyor..."
-    phpdismod -v $version pdo_mysql 2>/dev/null || true
-    phpdismod -v $version pdo 2>/dev/null || true
-    phpdismod -v $version mysqli 2>/dev/null || true
-    phpdismod -v $version mysqlnd 2>/dev/null || true
-    phpdismod -v $version dom 2>/dev/null || true
-    phpdismod -v $version xml 2>/dev/null || true
-    phpdismod -v $version xsl 2>/dev/null || true
+    # Kritik modüllerin .ini dosyalarını kontrol et
+    print_info "Kritik modüllerin .ini dosyaları kontrol ediliyor..."
     
-    # Şimdi doğru sırayla etkinleştir
-    print_info "Modüller doğru sırayla etkinleştiriliyor..."
+    # dom.ini
+    if [ ! -f "$mods_dir/dom.ini" ] || ! grep -q "^extension=dom.so" "$mods_dir/dom.ini"; then
+        cat > "$mods_dir/dom.ini" <<'EOF'
+; configuration for php dom module
+; priority=20
+extension=dom.so
+EOF
+        chmod 644 "$mods_dir/dom.ini"
+        print_info "✓ dom.ini düzeltildi"
+    fi
     
-    # 1. mysqlnd (en önce)
+    # xml.ini
+    if [ ! -f "$mods_dir/xml.ini" ] || ! grep -q "^extension=xml.so" "$mods_dir/xml.ini"; then
+        cat > "$mods_dir/xml.ini" <<'EOF'
+; configuration for php xml module
+; priority=15
+extension=xml.so
+EOF
+        chmod 644 "$mods_dir/xml.ini"
+        print_info "✓ xml.ini düzeltildi"
+    fi
+    
+    # simplexml.ini
+    if [ ! -f "$mods_dir/simplexml.ini" ] || ! grep -q "^extension=simplexml.so" "$mods_dir/simplexml.ini"; then
+        cat > "$mods_dir/simplexml.ini" <<'EOF'
+; configuration for php simplexml module
+; priority=20
+extension=simplexml.so
+EOF
+        chmod 644 "$mods_dir/simplexml.ini"
+        print_info "✓ simplexml.ini düzeltildi"
+    fi
+    
+    # Gerekli modülleri etkinleştir (sadece etkinleştir, link oluşturmayı phpenmod'a bırak)
+    print_info "Gerekli modüller etkinleştiriliyor..."
+    
+    # Temel modüller
     phpenmod -v $version mysqlnd 2>/dev/null || true
-    
-    # 2. pdo (mysqlnd'den sonra)
     phpenmod -v $version pdo 2>/dev/null || true
-    
-    # 3. dom ve xml (xsl için)
+    phpenmod -v $version mysqli 2>/dev/null || true
     phpenmod -v $version dom 2>/dev/null || true
     phpenmod -v $version xml 2>/dev/null || true
-    
-    # 4. mysqli (mysqlnd'ye bağımlı)
-    phpenmod -v $version mysqli 2>/dev/null || true
-    
-    # 5. xsl (dom/xml'e bağımlı)
+    phpenmod -v $version simplexml 2>/dev/null || true
+    phpenmod -v $version xmlreader 2>/dev/null || true
+    phpenmod -v $version xmlwriter 2>/dev/null || true
     phpenmod -v $version xsl 2>/dev/null || true
     
-    # 6. pdo_mysql DEVRE DIŞI KALIYOR (sorun kaynağı)
+    # pdo_mysql'i devre dışı bırak (sorun kaynağı)
+    phpdismod -v $version pdo_mysql 2>/dev/null || true
     
-    # Manuel olarak doğru sırayla linkler oluştur (phpenmod bazen yanlış sıralama yapabiliyor)
-    for conf_dir in "/etc/php/$version/cli/conf.d" "/etc/php/$version/fpm/conf.d"; do
-        if [ -d "$conf_dir" ]; then
-            print_info "Yeniden yapılandırılıyor: $conf_dir"
-            
-            # Önce tüm linkleri temizle
-            find "$conf_dir" -type l \( -name "*mysqlnd*" -o -name "*pdo.ini" -o -name "*mysqli*" -o -name "*pdo_mysql*" -o -name "*dom.ini" -o -name "*xml.ini" -o -name "*xsl*" \) -delete 2>/dev/null || true
-            
-            # Doğru sırayla yeniden oluştur
-            if [ -f "$mods_dir/mysqlnd.ini" ]; then
-                ln -sf "$mods_dir/mysqlnd.ini" "$conf_dir/10-mysqlnd.ini"
-            fi
-            
-            if [ -f "$mods_dir/pdo.ini" ]; then
-                ln -sf "$mods_dir/pdo.ini" "$conf_dir/15-pdo.ini"
-            fi
-            
-            if [ -f "$mods_dir/dom.ini" ]; then
-                ln -sf "$mods_dir/dom.ini" "$conf_dir/15-dom.ini"
-            fi
-            
-            if [ -f "$mods_dir/xml.ini" ]; then
-                ln -sf "$mods_dir/xml.ini" "$conf_dir/15-xml.ini"
-            fi
-            
-            if [ -f "$mods_dir/mysqli.ini" ]; then
-                ln -sf "$mods_dir/mysqli.ini" "$conf_dir/20-mysqli.ini"
-            fi
-            
-            if [ -f "$mods_dir/xsl.ini" ]; then
-                ln -sf "$mods_dir/xsl.ini" "$conf_dir/30-xsl.ini"
-            fi
-            
-            # pdo_mysql linklerini KALDIR (varsa)
-            rm -f "$conf_dir"/*pdo_mysql* 2>/dev/null || true
-        fi
-    done
-    
-    print_success "PHP eklenti yükleme sırası düzeltildi"
-    print_info "Etkin modüller: mysqlnd, pdo, dom, xml, mysqli, xsl"
-    print_info "Devre dışı: pdo_mysql (sorun kaynağı, mysqli kullanılacak)"
+    print_success "PHP eklenti yükleme sırası düzeltildi (basitleştirilmiş)"
+    print_info "✓ Etkin: mysqlnd, pdo, mysqli, dom, xml, simplexml, xsl"
+    print_info "✗ Devre dışı: pdo_mysql (mysqli kullanın)"
     
     return 0
 }
@@ -2865,50 +2863,121 @@ install_composer() {
 install_php_extensions() {
     print_header "PHP Eklentileri Kurulumu"
     
-    # PHP kurulu mu kontrol et
-    if ! command -v php &> /dev/null; then
-        print_error "PHP kurulu değil! Önce PHP kurulumu yapmanız gerekiyor."
-        return 1
+    # PHP kurulu mu kontrol et (birden fazla yöntem)
+    local php_version=""
+    local php_binary="php"
+    
+    # Yöntem 1: php -v
+    if command -v php &> /dev/null; then
+        php_version=$(php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+        if [ -n "$php_version" ]; then
+            print_info "PHP CLI'den versiyon tespit edildi: $php_version"
+        fi
     fi
     
-    # PHP versiyonunu tespit et
-    local php_version=$(php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
-    
+    # Yöntem 2: /usr/bin/php* dosyalarından
     if [ -z "$php_version" ]; then
-        # Alternatif yöntem: /usr/bin/php* dosyalarından
-        for php_bin in /usr/bin/php[0-9]* /usr/bin/php[0-9]*.[0-9]*; do
+        print_info "Alternatif PHP binary'leri aranıyor..."
+        for php_bin in /usr/bin/php8.4 /usr/bin/php8.3 /usr/bin/php8.2 /usr/bin/php[0-9]* /usr/bin/php[0-9]*.[0-9]*; do
             if [ -f "$php_bin" ] && [ -x "$php_bin" ]; then
-                php_version=$(basename "$php_bin" | sed 's/php//' | grep -oE "^[0-9]+\.[0-9]+")
+                php_version=$($php_bin -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
                 if [ -n "$php_version" ]; then
+                    php_binary="$php_bin"
+                    print_info "PHP binary bulundu: $php_bin (versiyon: $php_version)"
                     break
                 fi
             fi
         done
     fi
     
+    # Yöntem 3: PHP-FPM servislerinden
     if [ -z "$php_version" ]; then
-        print_error "PHP versiyonu tespit edilemedi!"
-        read -p "PHP versiyonunu manuel olarak girin (örn: 8.3, 8.4): " php_version
-        if [ -z "$php_version" ]; then
-            print_error "PHP versiyonu belirtilmedi, işlem iptal edildi."
+        print_info "PHP-FPM servisleri kontrol ediliyor..."
+        php_version=$(systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\)-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+        if [ -n "$php_version" ]; then
+            php_binary="php$php_version"
+            print_info "PHP-FPM servisinden versiyon tespit edildi: $php_version"
+        fi
+    fi
+    
+    if [ -z "$php_version" ]; then
+        print_error "PHP kurulu değil veya versiyon tespit edilemedi!"
+        
+        if ask_yes_no "PHP kurmak ister misiniz?"; then
+            echo "PHP versiyonu seçin:"
+            echo "1) PHP 8.3 (Önerilen)"
+            echo "2) PHP 8.4"
+            read -p "Seçiminiz (1-2) [1]: " php_choice
+            local selected_version="8.3"
+            case $php_choice in
+                2) selected_version="8.4";;
+                *) selected_version="8.3";;
+            esac
+            
+            install_php $selected_version
+            if [ $? -eq 0 ]; then
+                php_version="$selected_version"
+                php_binary="php$selected_version"
+            else
+                return 1
+            fi
+        else
             return 1
         fi
     fi
     
-    print_info "Tespit edilen PHP versiyonu: $php_version"
+    print_success "PHP versiyonu: $php_version"
+    print_info "PHP binary: $php_binary"
     echo ""
     
-    print_info "Tüm gerekli PHP eklentileri kontrol ediliyor ve eksikler kuruluyor..."
+    # ÖNEMLİ: Önce çift yükleme sorunlarını düzelt (extension kurulumundan önce)
+    print_info "ADIM 1: Mevcut modül yapılandırması temizleniyor..."
+    local has_warnings=$($php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo "")
+    if [ -n "$has_warnings" ]; then
+        print_warning "Çift yükleme uyarıları tespit edildi, düzeltiliyor..."
+        fix_php_duplicate_modules "$php_version"
+    else
+        print_info "Önleyici bakım yapılıyor (çift yükleme sorunlarını önlemek için)..."
+        fix_php_duplicate_modules "$php_version"
+    fi
+    
+    echo ""
+    print_info "ADIM 2: Eksik eklentiler kuruluyor..."
     echo ""
     
     # check_and_install_missing_php_extensions fonksiyonunu çağır
     check_and_install_missing_php_extensions $php_version
     
+    echo ""
+    
     if [ $? -eq 0 ]; then
-        print_success "PHP eklentileri kurulumu tamamlandı!"
+        # Son bir kez daha çift yükleme kontrolü (fix_php_extension_loading_order çift yükleme yapabilir)
+        print_info "ADIM 3: Son kontrol ve temizlik..."
+        local final_warnings=$($php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo "")
+        
+        if [ -n "$final_warnings" ]; then
+            print_warning "Yeni çift yükleme uyarıları tespit edildi, tekrar düzeltiliyor..."
+            fix_php_duplicate_modules "$php_version"
+        fi
+        
         echo ""
-        print_info "Tüm kurulu PHP eklentileri:"
-        php$php_version -m 2>/dev/null | grep -v "^\[" | sort
+        print_success "════════════════════════════════════════"
+        print_success "  PHP Eklentileri Kurulumu Tamamlandı!"
+        print_success "════════════════════════════════════════"
+        echo ""
+        print_info "Kurulu PHP eklentileri:"
+        $php_binary -m 2>/dev/null | grep -v "^\[" | sort
+        echo ""
+        
+        # Composer testi
+        if command -v composer &>/dev/null; then
+            print_info "Composer test ediliyor..."
+            if composer --version &>/dev/null 2>&1; then
+                print_success "✓ Composer çalışıyor!"
+            else
+                print_warning "✗ Composer hata veriyor, tekrar test edin"
+            fi
+        fi
     else
         print_error "PHP eklentileri kurulumunda bazı hatalar oluştu!"
         return 1
