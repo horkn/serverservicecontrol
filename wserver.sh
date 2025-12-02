@@ -2183,26 +2183,152 @@ EOF
 quick_fix_php_extensions() {
     print_header "Eksik PHP Eklentilerini Hızlı Düzeltme"
     
-    # PHP versiyonunu tespit et
-    local php_version=$(php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+    # PHP versiyonunu tespit et (birden fazla yöntem)
+    local php_version=""
+    local php_binary="php"
     
-    if [ -z "$php_version" ]; then
-        print_error "PHP kurulu değil veya versiyon tespit edilemedi!"
-        return 1
+    # Yöntem 1: php -v komutundan versiyon al
+    if command -v php &> /dev/null; then
+        php_version=$(php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+        if [ -n "$php_version" ]; then
+            print_info "PHP CLI'den versiyon tespit edildi: $php_version"
+        fi
     fi
     
-    print_info "PHP versiyonu: $php_version"
+    # Yöntem 2: /usr/bin/php* dosyalarından versiyon bul
+    if [ -z "$php_version" ]; then
+        print_info "Alternatif PHP binary'leri aranıyor..."
+        for php_bin in /usr/bin/php8.4 /usr/bin/php8.3 /usr/bin/php8.2 /usr/bin/php8.1 /usr/bin/php[0-9]* /usr/bin/php[0-9]*.[0-9]*; do
+            if [ -f "$php_bin" ] && [ -x "$php_bin" ]; then
+                php_version=$($php_bin -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+                if [ -n "$php_version" ]; then
+                    php_binary="$php_bin"
+                    print_info "PHP binary bulundu: $php_bin (versiyon: $php_version)"
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    # Yöntem 3: PHP-FPM servislerinden versiyon bul
+    if [ -z "$php_version" ]; then
+        print_info "PHP-FPM servisleri kontrol ediliyor..."
+        local php_fpm_version=$(systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\)-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+        if [ -n "$php_fpm_version" ]; then
+            php_version="$php_fpm_version"
+            php_binary="php$php_version"
+            print_info "PHP-FPM servisinden versiyon tespit edildi: $php_version"
+        fi
+    fi
+    
+    # Yöntem 4: dpkg ile kurulu PHP paketlerini kontrol et
+    if [ -z "$php_version" ]; then
+        print_info "Kurulu PHP paketleri kontrol ediliyor..."
+        local php_package=$(dpkg -l 2>/dev/null | grep -E "^ii.*php[0-9]+\.[0-9]+-fpm" | head -1 | awk '{print $2}' | sed 's/php\([0-9.]*\)-fpm.*/\1/' || echo "")
+        if [ -n "$php_package" ]; then
+            php_version="$php_package"
+            php_binary="php$php_version"
+            print_info "Kurulu paketlerden versiyon tespit edildi: $php_version"
+        fi
+    fi
+    
+    # Hala bulunamadıysa
+    if [ -z "$php_version" ]; then
+        print_error "PHP kurulu değil veya versiyon tespit edilemedi!"
+        echo ""
+        print_info "PHP kurulumu kontrol ediliyor..."
+        
+        # PHP gerçekten kurulu değil mi?
+        if ! dpkg -l 2>/dev/null | grep -qE "^ii.*php[0-9]"; then
+            print_warning "PHP kurulu görünmüyor!"
+            if ask_yes_no "PHP kurmak ister misiniz?"; then
+                echo ""
+                echo "PHP versiyonu seçin:"
+                echo "1) PHP 8.3 (Önerilen)"
+                echo "2) PHP 8.4"
+                read -p "Seçiminiz (1-2) [1]: " php_choice
+                local selected_version="8.3"
+                case $php_choice in
+                    2) selected_version="8.4";;
+                    *) selected_version="8.3";;
+                esac
+                
+                # PHP kurulumu için framework seçeneği (opsiyonel)
+                local temp_framework=""
+                if ask_yes_no "Framework'e özel ek paketler kurulsun mu?"; then
+                    echo "1) Laravel"
+                    echo "2) Symfony"
+                    echo "3) CodeIgniter"
+                    echo "4) Genel"
+                    read -p "Seçiminiz (1-4) [1]: " fw_choice
+                    case $fw_choice in
+                        1) temp_framework="laravel";;
+                        2) temp_framework="symfony";;
+                        3) temp_framework="codeigniter";;
+                        *) temp_framework="";;
+                    esac
+                fi
+                
+                local old_framework="$FRAMEWORK"
+                FRAMEWORK="$temp_framework"
+                
+                install_php $selected_version
+                local install_result=$?
+                
+                FRAMEWORK="$old_framework"
+                
+                if [ $install_result -eq 0 ]; then
+                    php_version="$selected_version"
+                    php_binary="php$selected_version"
+                    print_success "PHP kurulumu tamamlandı, devam ediliyor..."
+                else
+                    print_error "PHP kurulumu başarısız!"
+                    return 1
+                fi
+            else
+                print_info "PHP kurulumu iptal edildi"
+                return 1
+            fi
+        else
+            # PHP kurulu ama versiyonu tespit edilemiyor
+            print_warning "PHP kurulu ancak versiyon tespit edilemedi"
+            read -p "PHP versiyonunu manuel olarak girin (örn: 8.3, 8.4): " manual_version
+            if [ -n "$manual_version" ]; then
+                php_version="$manual_version"
+                php_binary="php$manual_version"
+                print_info "Manuel versiyon kullanılıyor: $php_version"
+            else
+                print_error "Versiyon belirtilmedi, işlem iptal edildi"
+                return 1
+            fi
+        fi
+    fi
+    
+    print_success "PHP versiyonu: $php_version"
+    print_info "PHP binary: $php_binary"
+    echo ""
     
     # Önce çift yükleme sorunlarını düzelt
     print_info "Çift yükleme sorunları kontrol ediliyor..."
-    fix_php_duplicate_modules
+    
+    # PHP-FPM varsa kontrol et
+    if systemctl list-units --type=service | grep -q "php${php_version}-fpm"; then
+        # Logları kontrol et
+        local fpm_warnings=$(journalctl -u php${php_version}-fpm -n 20 --no-pager 2>/dev/null | grep -i "warning.*already loaded" || echo "")
+        if [ -n "$fpm_warnings" ]; then
+            print_warning "PHP-FPM'de çift yükleme uyarıları tespit edildi"
+            fix_php_duplicate_modules
+        else
+            print_success "Çift yükleme sorunu yok"
+        fi
+    fi
     
     echo ""
     
     # Şimdi mevcut durumu göster
     print_info "Mevcut PHP eklentileri kontrol ediliyor..."
     echo "Kurulu eklentiler:"
-    php -m 2>/dev/null | grep -v "^\[" | head -20
+    $php_binary -m 2>/dev/null | grep -v "^\[" | head -20
     echo ""
     
     # Kritik eklentiler listesi (Composer ve Laravel için)
@@ -2211,7 +2337,7 @@ quick_fix_php_extensions() {
     
     print_info "Eksik eklentiler tespit ediliyor..."
     for ext in "${critical_extensions[@]}"; do
-        if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
+        if ! $php_binary -m 2>/dev/null | grep -qi "^$ext$"; then
             missing_extensions+=("$ext")
             print_warning "✗ $ext eksik"
         else
@@ -2313,7 +2439,7 @@ quick_fix_php_extensions() {
     sleep 2
     
     # simplexml özel kontrolü (genellikle php-xml ile gelir ama bazen görünmez)
-    if ! php -m 2>/dev/null | grep -qi "^simplexml$"; then
+    if ! $php_binary -m 2>/dev/null | grep -qi "^simplexml$"; then
         print_warning "simplexml hala görünmüyor, özel düzeltme yapılıyor..."
         
         # libxml2 ve php-xml bağımlılıklarını kontrol et
@@ -2336,7 +2462,7 @@ quick_fix_php_extensions() {
         sleep 2
         
         # Son kontrol
-        if php -m 2>/dev/null | grep -qi "^simplexml$"; then
+        if $php_binary -m 2>/dev/null | grep -qi "^simplexml$"; then
             print_success "simplexml başarıyla yüklendi (özel düzeltme)"
         else
             print_error "simplexml yüklenemedi! php$php_version-xml paketi sorunlu olabilir"
@@ -2350,13 +2476,13 @@ quick_fix_php_extensions() {
     print_info "Düzeltilen eklentiler: $fixed_count / ${#missing_extensions[@]}"
     echo ""
     print_info "Tüm PHP eklentileri:"
-    php -m 2>/dev/null | grep -v "^\[" | sort
+    $php_binary -m 2>/dev/null | grep -v "^\[" | sort
     echo ""
     
     # Kritik eklentileri tekrar kontrol et
     print_info "Kritik eklentiler son kontrol:"
     for ext in "${critical_extensions[@]}"; do
-        if php -m 2>/dev/null | grep -qi "^$ext$"; then
+        if $php_binary -m 2>/dev/null | grep -qi "^$ext$"; then
             print_success "✓ $ext"
         else
             print_error "✗ $ext HALA EKSİK!"
