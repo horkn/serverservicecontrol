@@ -625,7 +625,7 @@ check_and_install_missing_php_extensions() {
         "tidy" "imap" "gmp" "sodium" "imagick" "openssl" 
         "fileinfo" "exif" "sockets" "pcntl" "gettext" "shmop"
         "phar" "json" "readline" "tokenizer" "iconv" "ctype"
-        "simplexml" "xmlreader" "xmlwriter"
+        "simplexml" "xmlreader" "xmlwriter" "redis" "memcached"
     )
     
     # Kurulu eklentileri al
@@ -752,6 +752,14 @@ check_and_install_missing_php_extensions() {
                     print_info "readline zaten php-cli ile kurulu olmalı, atlanıyor"
                     continue
                 fi
+                ;;
+            "redis")
+                # Redis eklentisi ayrı paket olarak kurulur
+                pkg_name="php$version-redis"
+                ;;
+            "memcached")
+                # Memcached eklentisi ayrı paket olarak kurulur
+                pkg_name="php$version-memcached"
                 ;;
         esac
         
@@ -1975,7 +1983,7 @@ quick_fix_php_extensions() {
     echo ""
     
     # Kritik eklentiler listesi (Composer ve Laravel için)
-    local critical_extensions=("simplexml" "xmlreader" "xmlwriter" "fileinfo" "tokenizer" "iconv" "ctype" "phar")
+    local critical_extensions=("simplexml" "xmlreader" "xmlwriter" "fileinfo" "tokenizer" "iconv" "ctype" "phar" "redis" "memcached")
     local missing_extensions=()
     
     print_info "Eksik eklentiler tespit ediliyor..."
@@ -2047,6 +2055,12 @@ quick_fix_php_extensions() {
                 print_info "[$ext] php$php_version-xml paketi yeniden kuruluyor..."
                 apt remove -y php$php_version-xml 2>/dev/null || true
                 apt install -y php$php_version-xml 2>/dev/null || true
+            elif [ "$ext" = "redis" ]; then
+                print_info "[$ext] php$php_version-redis paketi kuruluyor..."
+                apt install -y php$php_version-redis 2>/dev/null || true
+            elif [ "$ext" = "memcached" ]; then
+                print_info "[$ext] php$php_version-memcached paketi kuruluyor..."
+                apt install -y php$php_version-memcached 2>/dev/null || true
             else
                 print_info "[$ext] php$php_version-common paketi yeniden kuruluyor..."
                 apt install --reinstall -y php$php_version-common 2>/dev/null || true
