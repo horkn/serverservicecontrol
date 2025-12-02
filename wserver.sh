@@ -2076,14 +2076,30 @@ fix_git_safe_directory() {
 }
 
 fix_php_duplicate_modules() {
+    local php_version=$1
+    
     print_header "PHP Çift Yükleme Sorunu Düzeltme"
     
-    # PHP versiyonunu tespit et
-    local php_version=$(php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
-    
+    # Eğer parametre verilmediyse tespit et
     if [ -z "$php_version" ]; then
-        print_error "PHP kurulu değil veya versiyon tespit edilemedi!"
-        return 1
+        # Yöntem 1: php -v
+        php_version=$(php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+        
+        # Yöntem 2: PHP-FPM servisleri
+        if [ -z "$php_version" ]; then
+            php_version=$(systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\)-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+        fi
+        
+        # Yöntem 3: dpkg paketleri
+        if [ -z "$php_version" ]; then
+            php_version=$(dpkg -l 2>/dev/null | grep -E "^ii.*php[0-9]+\.[0-9]+-fpm" | head -1 | awk '{print $2}' | sed 's/php\([0-9.]*\)-fpm.*/\1/' || echo "")
+        fi
+        
+        if [ -z "$php_version" ]; then
+            print_error "PHP kurulu değil veya versiyon tespit edilemedi!"
+            print_info "Lütfen PHP versiyonunu parametre olarak verin: fix_php_duplicate_modules 8.3"
+            return 1
+        fi
     fi
     
     print_info "PHP versiyonu: $php_version"
@@ -2168,15 +2184,26 @@ EOF
     
     # Test et
     print_info "PHP modül listesi kontrol ediliyor..."
-    local warnings=$(php -v 2>&1 | grep -i "warning.*already loaded" || echo "")
+    local php_binary="php$php_version"
+    
+    # PHP binary'yi kontrol et
+    if ! command -v $php_binary &> /dev/null; then
+        php_binary="php"
+    fi
+    
+    local warnings=$($php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo "")
     
     if [ -z "$warnings" ]; then
         print_success "Çift yükleme sorunları düzeltildi!"
         echo ""
-        print_info "PHP çalışıyor: $(php -v | head -1)"
+        print_info "PHP çalışıyor: $($php_binary -v 2>&1 | head -1)"
     else
         print_warning "Hala bazı uyarılar var:"
         echo "$warnings"
+        echo ""
+        print_info "Manuel düzeltme gerekebilir. Kontrol edin:"
+        echo "  sudo ls -la /etc/php/$php_version/cli/conf.d/*dom* /etc/php/$php_version/cli/conf.d/*xml*"
+        echo "  sudo ls -la /etc/php/$php_version/fpm/conf.d/*dom* /etc/php/$php_version/fpm/conf.d/*xml*"
     fi
 }
 
@@ -2317,7 +2344,16 @@ quick_fix_php_extensions() {
         local fpm_warnings=$(journalctl -u php${php_version}-fpm -n 20 --no-pager 2>/dev/null | grep -i "warning.*already loaded" || echo "")
         if [ -n "$fpm_warnings" ]; then
             print_warning "PHP-FPM'de çift yükleme uyarıları tespit edildi"
-            fix_php_duplicate_modules
+            fix_php_duplicate_modules "$php_version"
+        else
+            print_success "Çift yükleme sorunu yok"
+        fi
+    else
+        # PHP-FPM servisi yoksa ama dom/xml uyarıları varsa
+        local cli_warnings=$($php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo "")
+        if [ -n "$cli_warnings" ]; then
+            print_warning "PHP CLI'de çift yükleme uyarıları tespit edildi"
+            fix_php_duplicate_modules "$php_version"
         else
             print_success "Çift yükleme sorunu yok"
         fi
@@ -8074,7 +8110,18 @@ main_menu() {
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             25)
-                fix_php_duplicate_modules
+                # PHP versiyonunu tespit et
+                local menu_php_version=""
+                if command -v php &> /dev/null; then
+                    menu_php_version=$(php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+                fi
+                
+                if [ -z "$menu_php_version" ]; then
+                    # PHP-FPM'den tespit et
+                    menu_php_version=$(systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\)-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+                fi
+                
+                fix_php_duplicate_modules "$menu_php_version"
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             26)
