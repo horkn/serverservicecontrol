@@ -492,7 +492,7 @@ install_php() {
 fix_php_extension_loading_order() {
     local version=$1
     
-    print_info "PHP eklenti yükleme sırası düzeltiliyor..."
+    print_info "PHP eklenti .ini dosyaları kontrol ediliyor..."
     
     # PHP mods-available dizini
     local mods_dir="/etc/php/$version/mods-available"
@@ -502,111 +502,57 @@ fix_php_extension_loading_order() {
         return 1
     fi
     
-    # Kritik: Çift yükleme sorununu çöz
-    print_info "Çift yükleme sorunları kontrol ediliyor..."
+    # NOT: Bu fonksiyon SADECE .ini dosyalarını kontrol edip oluşturuyor
+    # Link yönetimi fix_php_duplicate_modules tarafından yapılıyor!
     
-    # pdo_mysql.ini içeriğini kontrol et ve düzelt
+    # 1. pdo_mysql.ini - Devre dışı bırak (sorun kaynağı)
     if [ -f "$mods_dir/pdo_mysql.ini" ]; then
-        local pdo_mysql_content=$(cat "$mods_dir/pdo_mysql.ini")
-        
-        if echo "$pdo_mysql_content" | grep -q "^extension=pdo_mysql.so"; then
-            print_info "pdo_mysql.ini düzeltiliyor..."
-            cp "$mods_dir/pdo_mysql.ini" "$mods_dir/pdo_mysql.ini.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
-            
+        if grep -q "^extension=pdo_mysql.so" "$mods_dir/pdo_mysql.ini"; then
+            print_info "pdo_mysql.ini düzeltiliyor (extension kaldırılıyor)..."
             cat > "$mods_dir/pdo_mysql.ini" <<'EOF'
 ; configuration for php mysql module
 ; priority=30
 ; Depends: pdo, mysqlnd
+; DISABLED: Use mysqli instead
 EOF
+            phpdismod -v $version pdo_mysql 2>/dev/null || true
         fi
     fi
     
-    # UYARI: Bu fonksiyon eskiden çift yükleme sorunlarına neden oluyordu
-    # Artık fix_php_duplicate_modules kullanılıyor, bu fonksiyon basitleştirildi
+    # 2. Gerekli .ini dosyalarını oluştur (yoksa veya bozuksa)
+    local critical_modules=("dom" "xml" "simplexml" "xmlreader" "xmlwriter" "xsl")
     
-    print_info "PHP eklenti yükleme sırası düzeltiliyor (basitleştirilmiş)..."
-    
-    # PHP mods-available dizini
-    local mods_dir="/etc/php/$version/mods-available"
-    
-    if [ ! -d "$mods_dir" ]; then
-        print_warning "PHP mods dizini bulunamadı: $mods_dir"
-        return 1
-    fi
-    
-    # pdo_mysql.ini içeriğini kontrol et (sorun kaynağı olabilir)
-    if [ -f "$mods_dir/pdo_mysql.ini" ]; then
-        local pdo_mysql_content=$(cat "$mods_dir/pdo_mysql.ini")
+    for ext in "${critical_modules[@]}"; do
+        local ini_file="$mods_dir/$ext.ini"
+        local needs_create=false
         
-        if echo "$pdo_mysql_content" | grep -q "^extension=pdo_mysql.so"; then
-            print_info "pdo_mysql.ini düzeltiliyor (extension satırını kaldırıyoruz)..."
-            cp "$mods_dir/pdo_mysql.ini" "$mods_dir/pdo_mysql.ini.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
-            
-            cat > "$mods_dir/pdo_mysql.ini" <<'EOF'
-; configuration for php mysql module
-; priority=30
-; Depends: pdo, mysqlnd
-EOF
-            print_info "pdo_mysql devre dışı bırakıldı (mysqli kullanılacak)"
+        if [ ! -f "$ini_file" ]; then
+            needs_create=true
+        elif ! grep -q "^extension=$ext.so" "$ini_file"; then
+            needs_create=true
         fi
-    fi
-    
-    # Kritik modüllerin .ini dosyalarını kontrol et
-    print_info "Kritik modüllerin .ini dosyaları kontrol ediliyor..."
-    
-    # dom.ini
-    if [ ! -f "$mods_dir/dom.ini" ] || ! grep -q "^extension=dom.so" "$mods_dir/dom.ini"; then
-        cat > "$mods_dir/dom.ini" <<'EOF'
-; configuration for php dom module
-; priority=20
-extension=dom.so
+        
+        if [ "$needs_create" = true ]; then
+            # Priority belirleme
+            local priority=20
+            case $ext in
+                "xml") priority=15;;
+                "dom"|"simplexml"|"xmlreader"|"xmlwriter") priority=20;;
+                "xsl") priority=30;;
+            esac
+            
+            cat > "$ini_file" <<EOF
+; configuration for php $ext module
+; priority=$priority
+extension=$ext.so
 EOF
-        chmod 644 "$mods_dir/dom.ini"
-        print_info "✓ dom.ini düzeltildi"
-    fi
+            chmod 644 "$ini_file"
+            print_info "✓ $ext.ini oluşturuldu/düzeltildi"
+        fi
+    done
     
-    # xml.ini
-    if [ ! -f "$mods_dir/xml.ini" ] || ! grep -q "^extension=xml.so" "$mods_dir/xml.ini"; then
-        cat > "$mods_dir/xml.ini" <<'EOF'
-; configuration for php xml module
-; priority=15
-extension=xml.so
-EOF
-        chmod 644 "$mods_dir/xml.ini"
-        print_info "✓ xml.ini düzeltildi"
-    fi
-    
-    # simplexml.ini
-    if [ ! -f "$mods_dir/simplexml.ini" ] || ! grep -q "^extension=simplexml.so" "$mods_dir/simplexml.ini"; then
-        cat > "$mods_dir/simplexml.ini" <<'EOF'
-; configuration for php simplexml module
-; priority=20
-extension=simplexml.so
-EOF
-        chmod 644 "$mods_dir/simplexml.ini"
-        print_info "✓ simplexml.ini düzeltildi"
-    fi
-    
-    # Gerekli modülleri etkinleştir (sadece etkinleştir, link oluşturmayı phpenmod'a bırak)
-    print_info "Gerekli modüller etkinleştiriliyor..."
-    
-    # Temel modüller
-    phpenmod -v $version mysqlnd 2>/dev/null || true
-    phpenmod -v $version pdo 2>/dev/null || true
-    phpenmod -v $version mysqli 2>/dev/null || true
-    phpenmod -v $version dom 2>/dev/null || true
-    phpenmod -v $version xml 2>/dev/null || true
-    phpenmod -v $version simplexml 2>/dev/null || true
-    phpenmod -v $version xmlreader 2>/dev/null || true
-    phpenmod -v $version xmlwriter 2>/dev/null || true
-    phpenmod -v $version xsl 2>/dev/null || true
-    
-    # pdo_mysql'i devre dışı bırak (sorun kaynağı)
-    phpdismod -v $version pdo_mysql 2>/dev/null || true
-    
-    print_success "PHP eklenti yükleme sırası düzeltildi (basitleştirilmiş)"
-    print_info "✓ Etkin: mysqlnd, pdo, mysqli, dom, xml, simplexml, xsl"
-    print_info "✗ Devre dışı: pdo_mysql (mysqli kullanın)"
+    print_success "✓ Gerekli .ini dosyaları hazır"
+    print_info "NOT: Modül linkleri phpenmod tarafından otomatik yönetiliyor"
     
     return 0
 }
@@ -904,9 +850,56 @@ check_and_install_missing_php_extensions() {
         echo -e "  ${RED}Kurulamadı:${NC} $failed_count"
     fi
     
+    echo ""
+    print_info "SON KONTROL: Çift yükleme sorunları önleniyor..."
+    
+    # fix_php_extension_loading_order çağrıldı ve bazı linkler oluşturmuş olabilir
+    # Son bir kez çift linkleri temizle
+    for conf_dir in "/etc/php/$version/cli/conf.d" "/etc/php/$version/fpm/conf.d"; do
+        if [ -d "$conf_dir" ]; then
+            # Duplicate linkleri bul ve temizle
+            for mod in pdo mysqlnd mysqli dom xml simplexml xmlreader xmlwriter xsl; do
+                local mod_links=($(find "$conf_dir" -type l -name "*${mod}.ini" 2>/dev/null))
+                
+                if [ ${#mod_links[@]} -gt 1 ]; then
+                    print_warning "  $mod için ${#mod_links[@]} link bulundu, TEK'e indirgeniyor..."
+                    
+                    # Tüm linkleri sil
+                    find "$conf_dir" -type l -name "*${mod}.ini" -delete 2>/dev/null || true
+                    
+                    # .ini dosyasından priority'yi al
+                    local priority=$(grep "priority=" "/etc/php/$version/mods-available/${mod}.ini" 2>/dev/null | sed 's/.*priority=//' | tr -d '; ' || echo "20")
+                    
+                    # Tek link oluştur
+                    if [ -f "/etc/php/$version/mods-available/${mod}.ini" ]; then
+                        ln -sf "/etc/php/$version/mods-available/${mod}.ini" "$conf_dir/${priority}-${mod}.ini"
+                    fi
+                fi
+            done
+        fi
+    done
+    
+    # PHP-FPM'i son bir kez yeniden başlat
+    if [ $installed_count -gt 0 ]; then
+        print_info "PHP-FPM son yeniden başlatma..."
+        systemctl restart php$version-fpm 2>/dev/null || true
+        sleep 2
+    fi
+    
+    echo ""
     # Kurulu eklentileri tekrar kontrol et
     print_info "Kurulu PHP eklentileri:"
     php$version -m 2>/dev/null | grep -v "^\[" | sort
+    
+    # Final uyarı kontrolü
+    echo ""
+    local final_warnings=$(php$version -v 2>&1 | grep -i "warning.*already loaded" || echo "")
+    if [ -z "$final_warnings" ]; then
+        print_success "✓ Çift yükleme uyarısı YOK!"
+    else
+        print_warning "⚠ Hala bazı uyarılar var:"
+        echo "$final_warnings"
+    fi
     
     return 0
 }
@@ -2108,59 +2101,56 @@ fix_php_duplicate_modules() {
         if [ -d "$conf_dir" ]; then
             print_info "Kontrol ediliyor: $conf_dir"
             
-            # dom ve xml için TÜMU linkleri say
+            # TÜMU linkleri say (dom, xml, pdo, mysqlnd, vb.)
             local dom_links=($(find "$conf_dir" -type l -name "*dom*" 2>/dev/null))
             local xml_links=($(find "$conf_dir" -type l -name "*xml*" 2>/dev/null))
+            local pdo_links=($(find "$conf_dir" -type l -name "*pdo.ini" 2>/dev/null))
+            local mysqlnd_links=($(find "$conf_dir" -type l -name "*mysqlnd*" 2>/dev/null))
             
-            print_info "Mevcut dom linkleri: ${#dom_links[@]}, xml linkleri: ${#xml_links[@]}"
+            print_info "Mevcut linkler → dom: ${#dom_links[@]}, xml: ${#xml_links[@]}, pdo: ${#pdo_links[@]}, mysqlnd: ${#mysqlnd_links[@]}"
             
-            # dom için temizlik ve yeniden oluşturma (link sayısı ne olursa olsun)
-            if [ ${#dom_links[@]} -ge 1 ]; then
-                # Uyarı seviyesini ayarla
-                if [ ${#dom_links[@]} -gt 1 ]; then
-                    print_warning "dom için ${#dom_links[@]} link bulundu, TEMİZLENİYOR..."
+            # Temizlenecek modüller (çift yükleme önleme)
+            local modules_to_clean=("dom" "xml" "pdo" "mysqlnd" "mysqli" "simplexml" "xmlreader" "xmlwriter" "xsl")
+            
+            for mod in "${modules_to_clean[@]}"; do
+                local mod_links=($(find "$conf_dir" -type l -name "*${mod}*" 2>/dev/null))
+                local mod_ini="/etc/php/$php_version/mods-available/${mod}.ini"
+                
+                # Eğer .ini dosyası yoksa atla
+                if [ ! -f "$mod_ini" ]; then
+                    continue
+                fi
+                
+                # Priority'yi .ini dosyasından al
+                local priority=$(grep "priority=" "$mod_ini" 2>/dev/null | sed 's/.*priority=//' | tr -d '; ' || echo "20")
+                
+                # Özel durumlar
+                case $mod in
+                    "xml") priority=15;;
+                    "mysqlnd") priority=10;;
+                    "pdo") priority=10;;
+                    "dom"|"simplexml"|"xmlreader"|"xmlwriter"|"mysqli") priority=20;;
+                    "xsl") priority=30;;
+                esac
+                
+                # Link temizliği
+                if [ ${#mod_links[@]} -ge 1 ]; then
+                    if [ ${#mod_links[@]} -gt 1 ]; then
+                        print_warning "$mod için ${#mod_links[@]} link bulundu, TEMİZLENİYOR..."
+                    fi
+                    
+                    # Tüm linkleri sil
+                    find "$conf_dir" -type l -name "*${mod}*" -delete 2>/dev/null || true
+                    
+                    # Tek doğru linki oluştur
+                    ln -sf "$mod_ini" "$conf_dir/${priority}-${mod}.ini"
+                    print_success "✓ $mod: ${priority}-${mod}.ini"
                 else
-                    print_info "dom için ${#dom_links[@]} link bulundu, YENİDEN YAPILANDIRILIYOR..."
+                    # Hiç link yok, oluştur
+                    ln -sf "$mod_ini" "$conf_dir/${priority}-${mod}.ini"
+                    print_info "✓ $mod linki oluşturuldu: ${priority}-${mod}.ini"
                 fi
-                
-                # HEPSİNİ sil (hatalı olanlar da olabilir)
-                find "$conf_dir" -type l -name "*dom*" -delete 2>/dev/null || true
-                
-                # Sadece DOĞRU olanı yeniden oluştur
-                if [ -f "/etc/php/$php_version/mods-available/dom.ini" ]; then
-                    ln -sf "/etc/php/$php_version/mods-available/dom.ini" "$conf_dir/20-dom.ini"
-                    print_success "✓ dom modülü: $conf_dir/20-dom.ini"
-                fi
-            elif [ -f "/etc/php/$php_version/mods-available/dom.ini" ]; then
-                # Hiç link yok ama .ini var, oluştur
-                print_info "dom linki eksik, oluşturuluyor..."
-                ln -sf "/etc/php/$php_version/mods-available/dom.ini" "$conf_dir/20-dom.ini"
-                print_success "✓ dom modülü: $conf_dir/20-dom.ini"
-            fi
-            
-            # xml için temizlik ve yeniden oluşturma (link sayısı ne olursa olsun)
-            if [ ${#xml_links[@]} -ge 1 ]; then
-                # Uyarı seviyesini ayarla
-                if [ ${#xml_links[@]} -gt 1 ]; then
-                    print_warning "xml için ${#xml_links[@]} link bulundu, TEMİZLENİYOR..."
-                else
-                    print_info "xml için ${#xml_links[@]} link bulundu, YENİDEN YAPILANDIRILIYOR..."
-                fi
-                
-                # HEPSİNİ sil (hatalı olanlar da olabilir)
-                find "$conf_dir" -type l -name "*xml*" -delete 2>/dev/null || true
-                
-                # Sadece DOĞRU olanı yeniden oluştur
-                if [ -f "/etc/php/$php_version/mods-available/xml.ini" ]; then
-                    ln -sf "/etc/php/$php_version/mods-available/xml.ini" "$conf_dir/15-xml.ini"
-                    print_success "✓ xml modülü: $conf_dir/15-xml.ini"
-                fi
-            elif [ -f "/etc/php/$php_version/mods-available/xml.ini" ]; then
-                # Hiç link yok ama .ini var, oluştur
-                print_info "xml linki eksik, oluşturuluyor..."
-                ln -sf "/etc/php/$php_version/mods-available/xml.ini" "$conf_dir/15-xml.ini"
-                print_success "✓ xml modülü: $conf_dir/15-xml.ini"
-            fi
+            done
         fi
     done
     
@@ -2169,95 +2159,77 @@ fix_php_duplicate_modules() {
     
     print_info ".ini dosyaları kontrol ediliyor: $mods_dir"
     
-    # dom.ini kontrolü ve temizliği
-    if [ -f "$mods_dir/dom.ini" ]; then
-        local dom_content=$(cat "$mods_dir/dom.ini")
-        local dom_extension_count=$(echo "$dom_content" | grep -c "^extension=dom.so" || echo "0")
+    # Düzeltilecek modüller (Composer için kritik olanlar)
+    local modules_to_fix=(
+        "dom:20"
+        "xml:15"
+        "simplexml:20"
+        "xmlreader:20"
+        "xmlwriter:20"
+        "xsl:30"
+        "pdo:10"
+        "mysqlnd:10"
+        "mysqli:20"
+    )
+    
+    for module_def in "${modules_to_fix[@]}"; do
+        local mod=$(echo "$module_def" | cut -d':' -f1)
+        local priority=$(echo "$module_def" | cut -d':' -f2)
+        local ini_file="$mods_dir/${mod}.ini"
         
-        # Her durumda temiz bir .ini dosyası oluştur (duplicate veya bozuk olabilir)
-        if [ "$dom_extension_count" -gt 1 ]; then
-            print_warning "dom.ini içinde çift 'extension=dom.so' satırı var, düzeltiliyor..."
-        elif [ "$dom_extension_count" -eq 0 ]; then
-            print_warning "dom.ini içinde 'extension=dom.so' satırı yok, ekleniyor..."
-        else
-            print_info "dom.ini kontrol ediliyor ve yeniden yazılıyor (standart format)..."
+        # .ini dosyasını kontrol et
+        local needs_fix=false
+        if [ ! -f "$ini_file" ]; then
+            needs_fix=true
+            print_info "✓ $mod.ini eksik, oluşturuluyor..."
+        elif ! grep -q "^extension=$mod.so" "$ini_file"; then
+            needs_fix=true
+            print_info "✓ $mod.ini bozuk, düzeltiliyor..."
+        elif [ $(grep -c "^extension=$mod.so" "$ini_file") -gt 1 ]; then
+            needs_fix=true
+            print_warning "✓ $mod.ini içinde duplicate extension, düzeltiliyor..."
         fi
         
-        # Yedek oluştur
-        cp "$mods_dir/dom.ini" "$mods_dir/dom.ini.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
-        
-        # Temiz dosya oluştur
-        cat > "$mods_dir/dom.ini" <<'EOF'
-; configuration for php dom module
-; priority=20
-extension=dom.so
+        # Düzeltme gerekiyorsa
+        if [ "$needs_fix" = true ]; then
+            # Yedek oluştur (varsa)
+            [ -f "$ini_file" ] && cp "$ini_file" "${ini_file}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+            
+            # Temiz .ini oluştur
+            cat > "$ini_file" <<EOF
+; configuration for php $mod module
+; priority=$priority
+extension=$mod.so
 EOF
-        chmod 644 "$mods_dir/dom.ini"
-        print_success "✓ dom.ini standart formata getirildi"
-    else
-        print_warning "dom.ini bulunamadı, oluşturuluyor..."
-        cat > "$mods_dir/dom.ini" <<'EOF'
-; configuration for php dom module
-; priority=20
-extension=dom.so
-EOF
-        chmod 644 "$mods_dir/dom.ini"
-        print_success "✓ dom.ini oluşturuldu"
-    fi
-    
-    # xml.ini kontrolü ve temizliği
-    if [ -f "$mods_dir/xml.ini" ]; then
-        local xml_content=$(cat "$mods_dir/xml.ini")
-        local xml_extension_count=$(echo "$xml_content" | grep -c "^extension=xml.so" || echo "0")
-        
-        # Her durumda temiz bir .ini dosyası oluştur
-        if [ "$xml_extension_count" -gt 1 ]; then
-            print_warning "xml.ini içinde çift 'extension=xml.so' satırı var, düzeltiliyor..."
-        elif [ "$xml_extension_count" -eq 0 ]; then
-            print_warning "xml.ini içinde 'extension=xml.so' satırı yok, ekleniyor..."
-        else
-            print_info "xml.ini kontrol ediliyor ve yeniden yazılıyor (standart format)..."
+            chmod 644 "$ini_file"
+            print_success "  ✓ $mod.ini hazır"
         fi
-        
-        # Yedek oluştur
-        cp "$mods_dir/xml.ini" "$mods_dir/xml.ini.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
-        
-        # Temiz dosya oluştur
-        cat > "$mods_dir/xml.ini" <<'EOF'
-; configuration for php xml module
-; priority=15
-extension=xml.so
-EOF
-        chmod 644 "$mods_dir/xml.ini"
-        print_success "✓ xml.ini standart formata getirildi"
-    else
-        print_warning "xml.ini bulunamadı, oluşturuluyor..."
-        cat > "$mods_dir/xml.ini" <<'EOF'
-; configuration for php xml module
-; priority=15
-extension=xml.so
-EOF
-        chmod 644 "$mods_dir/xml.ini"
-        print_success "✓ xml.ini oluşturuldu"
-    fi
+    done
     
-    # Şimdi linkleri YENİDEN oluştur (link sayısına bakılmaksızın)
-    print_info "Modül linkleri yeniden oluşturuluyor (her iki durumda da aynı sonuç)..."
+    echo ""
+    print_info "Modül linkleri yeniden oluşturuluyor (çift linkleri önlemek için)..."
+    
+    # Şimdi linkleri temizle ve YENİDEN oluştur
     for conf_dir in "/etc/php/$php_version/cli/conf.d" "/etc/php/$php_version/fpm/conf.d"; do
         if [ -d "$conf_dir" ]; then
-            # dom linkini yeniden oluştur
-            rm -f "$conf_dir"/*dom* 2>/dev/null || true
-            if [ -f "$mods_dir/dom.ini" ]; then
-                ln -sf "$mods_dir/dom.ini" "$conf_dir/20-dom.ini"
-            fi
+            print_info "  → $conf_dir"
             
-            # xml linkini yeniden oluştur
-            rm -f "$conf_dir"/*xml* 2>/dev/null || true
-            if [ -f "$mods_dir/xml.ini" ]; then
-                ln -sf "$mods_dir/xml.ini" "$conf_dir/15-xml.ini"
-            fi
+            for module_def in "${modules_to_fix[@]}"; do
+                local mod=$(echo "$module_def" | cut -d':' -f1)
+                local priority=$(echo "$module_def" | cut -d':' -f2)
+                local ini_file="$mods_dir/${mod}.ini"
+                
+                # .ini varsa link oluştur
+                if [ -f "$ini_file" ]; then
+                    # Önce tüm linkleri sil (10-pdo.ini, 15-pdo.ini gibi duplicate'leri temizlemek için)
+                    find "$conf_dir" -type l -name "*${mod}.ini" -delete 2>/dev/null || true
+                    
+                    # Tek doğru linki oluştur
+                    ln -sf "$ini_file" "$conf_dir/${priority}-${mod}.ini"
+                fi
+            done
             
-            print_success "✓ Linkler yeniden oluşturuldu: $conf_dir"
+            print_success "    ✓ Linkler temizlendi ve yeniden oluşturuldu"
         fi
     done
     
