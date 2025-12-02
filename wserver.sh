@@ -1683,97 +1683,19 @@ install_php_extensions() {
     print_info "Tespit edilen PHP versiyonu: $php_version"
     echo ""
     
-    # Kurulabilecek eklentileri listele
-    echo -e "${CYAN}Kurulabilecek PHP Eklentileri:${NC}"
-    echo "1) php$php_version-redis (Redis desteği)"
-    echo "2) php$php_version-memcached (Memcached desteği)"
-    echo "3) php$php_version-pcntl (Process Control)"
-    echo "4) php$php_version-sqlite3 (SQLite3 desteği)"
-    echo "5) php$php_version-pdo (PDO desteği)"
-    echo "6) php$php_version-pdo-mysql (PDO MySQL desteği)"
-    echo "7) php$php_version-imagick (ImageMagick desteği)"
-    echo "8) php$php_version-xdebug (Xdebug - Debugging)"
-    echo "9) php$php_version-mongodb (MongoDB desteği)"
-    echo "10) Tümü (Yukarıdaki tüm eklentiler)"
-    echo "11) Geri Dön"
+    print_info "Tüm gerekli PHP eklentileri kontrol ediliyor ve eksikler kuruluyor..."
     echo ""
     
-    read -p "Kurulacak eklentiyi seçin (1-11): " ext_choice
-    
-    case $ext_choice in
-        1)
-            print_info "php$php_version-redis kuruluyor..."
-            apt install -y php$php_version-redis
-            ;;
-        2)
-            print_info "php$php_version-memcached kuruluyor..."
-            apt install -y php$php_version-memcached
-            ;;
-        3)
-            print_info "php$php_version-pcntl kuruluyor..."
-            apt install -y php$php_version-pcntl
-            ;;
-        4)
-            print_info "php$php_version-sqlite3 kuruluyor..."
-            apt install -y php$php_version-sqlite3
-            ;;
-        5)
-            print_info "php$php_version-pdo kuruluyor..."
-            apt install -y php$php_version-pdo
-            ;;
-        6)
-            print_info "php$php_version-pdo-mysql kuruluyor..."
-            apt install -y php$php_version-pdo-mysql || apt install -y php$php_version-pdo_mysql
-            ;;
-        7)
-            print_info "php$php_version-imagick kuruluyor..."
-            apt install -y php$php_version-imagick
-            ;;
-        8)
-            print_info "php$php_version-xdebug kuruluyor..."
-            apt install -y php$php_version-xdebug
-            ;;
-        9)
-            print_info "php$php_version-mongodb kuruluyor..."
-            apt install -y php$php_version-mongodb
-            ;;
-        10)
-            print_info "Tüm PHP eklentileri kuruluyor..."
-            apt install -y php$php_version-redis php$php_version-memcached \
-                php$php_version-pcntl php$php_version-sqlite3 php$php_version-pdo \
-                php$php_version-imagick php$php_version-xdebug php$php_version-mongodb
-            
-            # PDO MySQL için alternatif isim denemesi
-            apt install -y php$php_version-pdo-mysql 2>/dev/null || \
-            apt install -y php$php_version-pdo_mysql 2>/dev/null || \
-            print_warning "php$php_version-pdo-mysql kurulamadı"
-            ;;
-        11)
-            return 0
-            ;;
-        *)
-            print_error "Geçersiz seçim"
-            return 1
-            ;;
-    esac
+    # check_and_install_missing_php_extensions fonksiyonunu çağır
+    check_and_install_missing_php_extensions $php_version
     
     if [ $? -eq 0 ]; then
-        # PHP-FPM servisini yeniden başlat (eklentilerin yüklenmesi için)
-        if systemctl is-active --quiet php$php_version-fpm 2>/dev/null; then
-            print_info "PHP-FPM servisi yeniden başlatılıyor (eklentilerin yüklenmesi için)..."
-            systemctl restart php$php_version-fpm
-            print_success "PHP eklentisi başarıyla kuruldu ve PHP-FPM yeniden başlatıldı"
-        else
-            print_success "PHP eklentisi başarıyla kuruldu"
-            print_warning "PHP-FPM servisi çalışmıyor, eklentilerin aktif olması için servisi başlatın"
-        fi
-        
-        # Kurulu eklentileri göster
+        print_success "PHP eklentileri kurulumu tamamlandı!"
         echo ""
-        print_info "Kurulu PHP eklentileri:"
-        php -m | grep -E "redis|memcached|pcntl|sqlite3|pdo|imagick|xdebug|mongodb" | sort
+        print_info "Tüm kurulu PHP eklentileri:"
+        php$php_version -m 2>/dev/null | grep -v "^\[" | sort
     else
-        print_error "PHP eklentisi kurulumu başarısız oldu!"
+        print_error "PHP eklentileri kurulumunda bazı hatalar oluştu!"
         return 1
     fi
 }
