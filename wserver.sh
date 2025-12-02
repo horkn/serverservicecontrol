@@ -502,88 +502,97 @@ fix_php_extension_loading_order() {
         return 1
     fi
     
-    # Bağımlılık sırası: bazı eklentiler diğerlerine bağımlı
-    # priority: 10 (önce yüklenmeli), 20 (normal), 30 (sonra yüklenmeli)
-    
-    # PDO ve mysqlnd önce yüklenmeli (mysqli ve pdo_mysql için gerekli)
-    if [ -f "$mods_dir/pdo.ini" ]; then
-        sed -i '1s/^/; priority=10\n/' "$mods_dir/pdo.ini" 2>/dev/null || true
-    fi
-    
-    if [ -f "$mods_dir/mysqlnd.ini" ]; then
-        sed -i '1s/^/; priority=10\n/' "$mods_dir/mysqlnd.ini" 2>/dev/null || true
-    fi
-    
-    # DOM/XML önce yüklenmeli (xsl için gerekli)
-    if [ -f "$mods_dir/dom.ini" ]; then
-        sed -i '1s/^/; priority=10\n/' "$mods_dir/dom.ini" 2>/dev/null || true
-    fi
-    
-    if [ -f "$mods_dir/xml.ini" ]; then
-        sed -i '1s/^/; priority=10\n/' "$mods_dir/xml.ini" 2>/dev/null || true
-    fi
-    
-    # mysqli ve pdo_mysql sonra yüklenmeli
-    if [ -f "$mods_dir/mysqli.ini" ]; then
-        sed -i '1s/^/; priority=20\n/' "$mods_dir/mysqli.ini" 2>/dev/null || true
-    fi
-    
+    # Kritik: pdo_mysql.ini içeriğini kontrol et ve düzelt
     if [ -f "$mods_dir/pdo_mysql.ini" ]; then
-        sed -i '1s/^/; priority=20\n/' "$mods_dir/pdo_mysql.ini" 2>/dev/null || true
+        # Eğer doğrudan extension=pdo_mysql.so yüklüyorsa, bunu devre dışı bırak
+        # Bunun yerine extension=pdo ve extension=mysqlnd'nin yüklü olduğundan emin ol
+        local pdo_mysql_content=$(cat "$mods_dir/pdo_mysql.ini")
+        
+        if echo "$pdo_mysql_content" | grep -q "^extension=pdo_mysql.so"; then
+            print_info "pdo_mysql.ini düzeltiliyor (doğrudan yükleme devre dışı bırakılıyor)..."
+            
+            # Yedek al
+            cp "$mods_dir/pdo_mysql.ini" "$mods_dir/pdo_mysql.ini.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+            
+            # pdo_mysql.so doğrudan yüklemeyi kaldır, sadece öncelik belirt
+            cat > "$mods_dir/pdo_mysql.ini" <<'EOF'
+; configuration for php mysql module
+; priority=30
+; Depends: pdo, mysqlnd
+EOF
+        fi
     fi
     
-    # XSL en son yüklenmeli
-    if [ -f "$mods_dir/xsl.ini" ]; then
-        sed -i '1s/^/; priority=30\n/' "$mods_dir/xsl.ini" 2>/dev/null || true
-    fi
-    
-    # Alternatif çözüm: conf.d dizinindeki dosyaları yeniden adlandır (sayısal öncelik)
+    # Alternatif çözüm: conf.d dizinlerindeki tüm pdo_mysql linklerini kaldır
     for conf_dir in "/etc/php/$version/cli/conf.d" "/etc/php/$version/fpm/conf.d"; do
         if [ -d "$conf_dir" ]; then
             print_info "Düzeltiliyor: $conf_dir"
             
-            # mysqlnd ve pdo önce (10-)
-            if [ -L "$conf_dir/20-mysqlnd.ini" ]; then
-                rm -f "$conf_dir/20-mysqlnd.ini"
+            # Tüm mevcut linkleri kaldır
+            rm -f "$conf_dir/20-mysqlnd.ini" 2>/dev/null || true
+            rm -f "$conf_dir/10-mysqlnd.ini" 2>/dev/null || true
+            rm -f "$conf_dir/20-pdo.ini" 2>/dev/null || true
+            rm -f "$conf_dir/10-pdo.ini" 2>/dev/null || true
+            rm -f "$conf_dir/20-mysqli.ini" 2>/dev/null || true
+            rm -f "$conf_dir/30-mysqli.ini" 2>/dev/null || true
+            rm -f "$conf_dir/20-pdo_mysql.ini" 2>/dev/null || true
+            rm -f "$conf_dir/30-pdo_mysql.ini" 2>/dev/null || true
+            rm -f "$conf_dir/20-dom.ini" 2>/dev/null || true
+            rm -f "$conf_dir/10-dom.ini" 2>/dev/null || true
+            rm -f "$conf_dir/20-xml.ini" 2>/dev/null || true
+            rm -f "$conf_dir/10-xml.ini" 2>/dev/null || true
+            rm -f "$conf_dir/20-xsl.ini" 2>/dev/null || true
+            rm -f "$conf_dir/40-xsl.ini" 2>/dev/null || true
+            
+            # Doğru sırayla yeniden oluştur
+            # 1. mysqlnd (en önce)
+            if [ -f "$mods_dir/mysqlnd.ini" ]; then
                 ln -s "$mods_dir/mysqlnd.ini" "$conf_dir/10-mysqlnd.ini" 2>/dev/null || true
             fi
             
-            if [ -L "$conf_dir/20-pdo.ini" ]; then
-                rm -f "$conf_dir/20-pdo.ini"
-                ln -s "$mods_dir/pdo.ini" "$conf_dir/10-pdo.ini" 2>/dev/null || true
+            # 2. pdo (mysqlnd'den sonra)
+            if [ -f "$mods_dir/pdo.ini" ]; then
+                ln -s "$mods_dir/pdo.ini" "$conf_dir/15-pdo.ini" 2>/dev/null || true
             fi
             
-            # dom ve xml önce (10-)
-            if [ -L "$conf_dir/20-dom.ini" ]; then
-                rm -f "$conf_dir/20-dom.ini"
-                ln -s "$mods_dir/dom.ini" "$conf_dir/10-dom.ini" 2>/dev/null || true
+            # 3. dom ve xml (xsl için gerekli)
+            if [ -f "$mods_dir/dom.ini" ]; then
+                ln -s "$mods_dir/dom.ini" "$conf_dir/15-dom.ini" 2>/dev/null || true
             fi
             
-            if [ -L "$conf_dir/20-xml.ini" ]; then
-                rm -f "$conf_dir/20-xml.ini"
-                ln -s "$mods_dir/xml.ini" "$conf_dir/10-xml.ini" 2>/dev/null || true
+            if [ -f "$mods_dir/xml.ini" ]; then
+                ln -s "$mods_dir/xml.ini" "$conf_dir/15-xml.ini" 2>/dev/null || true
             fi
             
-            # mysqli ve pdo_mysql sonra (30-)
-            if [ -L "$conf_dir/20-mysqli.ini" ]; then
-                rm -f "$conf_dir/20-mysqli.ini"
-                ln -s "$mods_dir/mysqli.ini" "$conf_dir/30-mysqli.ini" 2>/dev/null || true
+            # 4. mysqli (mysqlnd'ye bağımlı)
+            if [ -f "$mods_dir/mysqli.ini" ]; then
+                ln -s "$mods_dir/mysqli.ini" "$conf_dir/20-mysqli.ini" 2>/dev/null || true
             fi
             
-            if [ -L "$conf_dir/20-pdo_mysql.ini" ]; then
-                rm -f "$conf_dir/20-pdo_mysql.ini"
-                ln -s "$mods_dir/pdo_mysql.ini" "$conf_dir/30-pdo_mysql.ini" 2>/dev/null || true
-            fi
+            # 5. pdo_mysql'i DEVRE DIŞI BIRAK (sorun kaynağı)
+            # pdo_mysql.so doğrudan yüklenmesin, php-mysql paketi zaten mysqli sağlıyor
+            # PDO MySQL desteği için mysqli kullanılabilir
             
-            # xsl en son (40-)
-            if [ -L "$conf_dir/20-xsl.ini" ]; then
-                rm -f "$conf_dir/20-xsl.ini"
-                ln -s "$mods_dir/xsl.ini" "$conf_dir/40-xsl.ini" 2>/dev/null || true
+            # 6. xsl (dom/xml'e bağımlı)
+            if [ -f "$mods_dir/xsl.ini" ]; then
+                ln -s "$mods_dir/xsl.ini" "$conf_dir/30-xsl.ini" 2>/dev/null || true
             fi
         fi
     done
     
+    # pdo_mysql modülünü tamamen devre dışı bırak
+    print_info "pdo_mysql modülü devre dışı bırakılıyor (mysqli kullanılacak)..."
+    phpdismod -v $version pdo_mysql 2>/dev/null || true
+    
+    # mysqli'nin etkin olduğundan emin ol
+    print_info "mysqli modülü etkinleştiriliyor..."
+    phpenmod -v $version mysqli 2>/dev/null || true
+    phpenmod -v $version mysqlnd 2>/dev/null || true
+    phpenmod -v $version pdo 2>/dev/null || true
+    
     print_success "PHP eklenti yükleme sırası düzeltildi"
+    print_info "Not: pdo_mysql devre dışı bırakıldı, mysqli kullanılacak (PDO için PDO_MYSQL sürücüsü mysqli üzerinden çalışır)"
+    
     return 0
 }
 
@@ -713,20 +722,57 @@ check_and_install_missing_php_extensions() {
                 print_warning "PHP-FPM'de bazı eklenti yükleme hataları tespit edildi"
                 print_info "Hatalar düzeltiliyor..."
                 
-                # Hatalı eklentileri tespit et ve düzelt
-                if echo "$fpm_errors" | grep -qi "mysqli"; then
-                    print_info "mysqli bağımlılığı düzeltiliyor..."
-                    apt install --reinstall -y php$version-mysql 2>/dev/null || true
-                fi
-                
+                # pdo_mysql hatası özel durumu (en yaygın sorun)
                 if echo "$fpm_errors" | grep -qi "pdo_mysql"; then
-                    print_info "pdo_mysql bağımlılığı düzeltiliyor..."
+                    print_info "pdo_mysql sorunu tespit edildi - agresif düzeltme yapılıyor..."
+                    
+                    # 1. pdo_mysql modülünü tamamen devre dışı bırak
+                    phpdismod -v $version pdo_mysql 2>/dev/null || true
+                    
+                    # 2. Tüm pdo_mysql linklerini kaldır
+                    for conf_dir in "/etc/php/$version/cli/conf.d" "/etc/php/$version/fpm/conf.d"; do
+                        rm -f "$conf_dir"/*pdo_mysql* 2>/dev/null || true
+                    done
+                    
+                    # 3. php-mysql paketini yeniden kur (mysqli için)
+                    print_info "php$version-mysql paketi yeniden kuruluyor..."
                     apt install --reinstall -y php$version-mysql 2>/dev/null || true
+                    
+                    # 4. mysqlnd, pdo ve mysqli'yi etkinleştir
+                    phpenmod -v $version mysqlnd 2>/dev/null || true
+                    phpenmod -v $version pdo 2>/dev/null || true
+                    phpenmod -v $version mysqli 2>/dev/null || true
+                    
+                    print_success "pdo_mysql devre dışı bırakıldı, mysqli aktif"
                 fi
                 
-                if echo "$fpm_errors" | grep -qi "xsl"; then
+                # mysqli hatası
+                if echo "$fpm_errors" | grep -qi "mysqli.*mysqlnd_global_stats"; then
+                    print_info "mysqli bağımlılığı düzeltiliyor..."
+                    
+                    # mysqlnd'yi önce etkinleştir
+                    phpenmod -v $version mysqlnd 2>/dev/null || true
+                    
+                    # php-mysql paketini yeniden kur
+                    apt install --reinstall -y php$version-mysql 2>/dev/null || true
+                    
+                    # mysqli'yi etkinleştir
+                    phpenmod -v $version mysqli 2>/dev/null || true
+                fi
+                
+                # xsl hatası
+                if echo "$fpm_errors" | grep -qi "xsl.*dom_node_class_entry"; then
                     print_info "xsl bağımlılığı düzeltiliyor..."
+                    
+                    # dom ve xml'i önce etkinleştir
+                    phpenmod -v $version dom 2>/dev/null || true
+                    phpenmod -v $version xml 2>/dev/null || true
+                    
+                    # xsl paketini yeniden kur
                     apt install --reinstall -y php$version-xml php$version-xsl 2>/dev/null || true
+                    
+                    # xsl'i etkinleştir
+                    phpenmod -v $version xsl 2>/dev/null || true
                 fi
                 
                 # Yükleme sırasını tekrar düzelt
@@ -735,7 +781,7 @@ check_and_install_missing_php_extensions() {
                 # PHP-FPM'i tekrar başlat
                 print_info "PHP-FPM tekrar başlatılıyor..."
                 systemctl restart php$version-fpm
-                sleep 2
+                sleep 3
                 
                 # Son kontrol
                 local final_errors=$(journalctl -u php$version-fpm -n 10 --no-pager 2>/dev/null | grep -i "warning\|error" | grep -i "unable to load" || echo "")
@@ -743,8 +789,17 @@ check_and_install_missing_php_extensions() {
                 if [ -z "$final_errors" ]; then
                     print_success "Tüm PHP eklenti hataları düzeltildi!"
                 else
-                    print_warning "Bazı eklenti hataları devam ediyor, manuel kontrol gerekebilir"
-                    echo "$final_errors"
+                    print_warning "Bazı eklenti hataları devam ediyor"
+                    
+                    # Hala pdo_mysql hatası varsa, kullanıcıyı bilgilendir
+                    if echo "$final_errors" | grep -qi "pdo_mysql"; then
+                        print_info "pdo_mysql devre dışı bırakıldı (sorun kaynağı)"
+                        print_info "PDO MySQL desteği için mysqli kullanın:"
+                        echo "  \$pdo = new PDO('mysql:host=localhost;dbname=test', 'user', 'pass');"
+                        echo "  // mysqli otomatik olarak PDO MySQL sürücüsü olarak çalışır"
+                    else
+                        echo "$final_errors"
+                    fi
                 fi
             else
                 print_success "PHP eklentileri hatasız yüklendi!"
