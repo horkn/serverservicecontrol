@@ -1967,61 +1967,131 @@ quick_fix_php_extensions() {
     fi
     
     print_info "PHP versiyonu: $php_version"
-    print_info "Eksik eklentiler kontrol ediliyor ve kuruluyor..."
+    
+    # Önce mevcut durumu göster
+    print_info "Mevcut PHP eklentileri kontrol ediliyor..."
+    echo "Kurulu eklentiler:"
+    php -m 2>/dev/null | grep -v "^\[" | head -20
+    echo ""
     
     # Kritik eklentiler listesi (Composer ve Laravel için)
     local critical_extensions=("simplexml" "xmlreader" "xmlwriter" "fileinfo" "tokenizer" "iconv" "ctype" "phar")
-    local fixed_count=0
+    local missing_extensions=()
     
+    print_info "Eksik eklentiler tespit ediliyor..."
     for ext in "${critical_extensions[@]}"; do
         if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
-            print_warning "$ext eksik, düzeltiliyor..."
-            
-            # .ini dosyası var mı kontrol et
-            if [ ! -f "/etc/php/$php_version/mods-available/$ext.ini" ]; then
-                # .ini dosyası oluştur
-                echo "; configuration for php $ext module" > "/etc/php/$php_version/mods-available/$ext.ini"
-                echo "extension=$ext.so" >> "/etc/php/$php_version/mods-available/$ext.ini"
-            fi
-            
-            # Eklentiyi etkinleştir
-            phpenmod -v $php_version $ext 2>/dev/null || true
-            
-            # Hala yüklenmemişse paketi yeniden kur
-            if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
-                if [ "$ext" = "simplexml" ] || [ "$ext" = "xmlreader" ] || [ "$ext" = "xmlwriter" ]; then
-                    print_info "php$php_version-xml yeniden kuruluyor..."
-                    apt install --reinstall -y php$php_version-xml 2>/dev/null || true
-                else
-                    print_info "php$php_version-common yeniden kuruluyor..."
-                    apt install --reinstall -y php$php_version-common 2>/dev/null || true
-                fi
-            fi
-            
-            # Tekrar kontrol
-            if php -m 2>/dev/null | grep -qi "^$ext$"; then
-                print_success "$ext başarıyla etkinleştirildi"
-                ((fixed_count++))
-            else
-                print_error "$ext etkinleştirilemedi!"
-            fi
+            missing_extensions+=("$ext")
+            print_warning "✗ $ext eksik"
         else
-            print_success "$ext zaten kurulu"
+            print_success "✓ $ext kurulu"
         fi
     done
     
-    if [ $fixed_count -gt 0 ]; then
-        print_info "PHP-FPM yeniden başlatılıyor..."
-        systemctl restart php$php_version-fpm 2>/dev/null || true
-        
-        print_success "$fixed_count eklenti düzeltildi!"
-        print_info "Kurulu eklentiler:"
-        php -m | grep -E "simplexml|xmlreader|xmlwriter|fileinfo|tokenizer|iconv|ctype|phar" | sort
-    else
-        print_success "Tüm kritik eklentiler zaten kurulu"
+    if [ ${#missing_extensions[@]} -eq 0 ]; then
+        print_success "Tüm kritik eklentiler zaten kurulu!"
+        fix_git_safe_directory
+        return 0
     fi
     
+    print_warning "${#missing_extensions[@]} eklenti eksik: ${missing_extensions[*]}"
+    echo ""
+    
+    # php-xml ve php-common paketlerini önce kur/güncelle
+    print_info "Gerekli PHP paketleri kuruluyor..."
+    apt update
+    apt install -y php$php_version-xml php$php_version-common 2>/dev/null || true
+    
+    # Her eksik eklenti için düzeltme yap
+    local fixed_count=0
+    for ext in "${missing_extensions[@]}"; do
+        print_info "[$ext] Düzeltiliyor..."
+        
+        # 1. mods-available dizininde .ini dosyası var mı?
+        local ini_file="/etc/php/$php_version/mods-available/$ext.ini"
+        
+        if [ ! -f "$ini_file" ]; then
+            print_info "[$ext] .ini dosyası oluşturuluyor: $ini_file"
+            echo "; priority=20" > "$ini_file"
+            echo "; configuration for php $ext module" >> "$ini_file"
+            echo "extension=$ext.so" >> "$ini_file"
+        else
+            print_info "[$ext] .ini dosyası mevcut"
+        fi
+        
+        # 2. Eklentiyi etkinleştir
+        print_info "[$ext] Etkinleştiriliyor..."
+        phpenmod -v $php_version $ext 2>/dev/null || true
+        
+        # 3. CLI ve FPM conf.d dizinlerinde link var mı kontrol et
+        for conf_dir in "/etc/php/$php_version/cli/conf.d" "/etc/php/$php_version/fpm/conf.d"; do
+            if [ -d "$conf_dir" ]; then
+                local link_file="$conf_dir/20-$ext.ini"
+                if [ ! -L "$link_file" ]; then
+                    print_info "[$ext] Link oluşturuluyor: $link_file"
+                    ln -sf "$ini_file" "$link_file" 2>/dev/null || true
+                fi
+            fi
+        done
+        
+        # 4. Tekrar kontrol
+        sleep 1
+        if php -m 2>/dev/null | grep -qi "^$ext$"; then
+            print_success "[$ext] Başarıyla etkinleştirildi!"
+            ((fixed_count++))
+        else
+            print_error "[$ext] Hala yüklenemiyor!"
+            
+            # Son çare: İlgili paketi yeniden kur
+            if [ "$ext" = "simplexml" ] || [ "$ext" = "xmlreader" ] || [ "$ext" = "xmlwriter" ]; then
+                print_info "[$ext] php$php_version-xml paketi yeniden kuruluyor..."
+                apt remove -y php$php_version-xml 2>/dev/null || true
+                apt install -y php$php_version-xml 2>/dev/null || true
+            else
+                print_info "[$ext] php$php_version-common paketi yeniden kuruluyor..."
+                apt install --reinstall -y php$php_version-common 2>/dev/null || true
+            fi
+            
+            # Tekrar etkinleştir
+            phpenmod -v $php_version $ext 2>/dev/null || true
+            
+            # Son kontrol
+            sleep 1
+            if php -m 2>/dev/null | grep -qi "^$ext$"; then
+                print_success "[$ext] Başarıyla etkinleştirildi (ikinci deneme)!"
+                ((fixed_count++))
+            else
+                print_error "[$ext] Etkinleştirilemedi! Manuel kontrol gerekli."
+            fi
+        fi
+    done
+    
+    # PHP-FPM'i yeniden başlat
+    print_info "PHP-FPM yeniden başlatılıyor..."
+    systemctl restart php$php_version-fpm 2>/dev/null || true
+    sleep 2
+    
+    # Sonuçları göster
+    echo ""
+    print_info "=== SONUÇ ==="
+    print_info "Düzeltilen eklentiler: $fixed_count / ${#missing_extensions[@]}"
+    echo ""
+    print_info "Tüm PHP eklentileri:"
+    php -m 2>/dev/null | grep -v "^\[" | sort
+    echo ""
+    
+    # Kritik eklentileri tekrar kontrol et
+    print_info "Kritik eklentiler son kontrol:"
+    for ext in "${critical_extensions[@]}"; do
+        if php -m 2>/dev/null | grep -qi "^$ext$"; then
+            print_success "✓ $ext"
+        else
+            print_error "✗ $ext HALA EKSİK!"
+        fi
+    done
+    
     # Git safe.directory'yi de düzelt
+    echo ""
     fix_git_safe_directory
 }
 
