@@ -502,19 +502,17 @@ fix_php_extension_loading_order() {
         return 1
     fi
     
-    # Kritik: pdo_mysql.ini içeriğini kontrol et ve düzelt
+    # Kritik: Çift yükleme sorununu çöz
+    print_info "Çift yükleme sorunları kontrol ediliyor..."
+    
+    # pdo_mysql.ini içeriğini kontrol et ve düzelt
     if [ -f "$mods_dir/pdo_mysql.ini" ]; then
-        # Eğer doğrudan extension=pdo_mysql.so yüklüyorsa, bunu devre dışı bırak
-        # Bunun yerine extension=pdo ve extension=mysqlnd'nin yüklü olduğundan emin ol
         local pdo_mysql_content=$(cat "$mods_dir/pdo_mysql.ini")
         
         if echo "$pdo_mysql_content" | grep -q "^extension=pdo_mysql.so"; then
-            print_info "pdo_mysql.ini düzeltiliyor (doğrudan yükleme devre dışı bırakılıyor)..."
-            
-            # Yedek al
+            print_info "pdo_mysql.ini düzeltiliyor..."
             cp "$mods_dir/pdo_mysql.ini" "$mods_dir/pdo_mysql.ini.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
             
-            # pdo_mysql.so doğrudan yüklemeyi kaldır, sadece öncelik belirt
             cat > "$mods_dir/pdo_mysql.ini" <<'EOF'
 ; configuration for php mysql module
 ; priority=30
@@ -523,75 +521,94 @@ EOF
         fi
     fi
     
-    # Alternatif çözüm: conf.d dizinlerindeki tüm pdo_mysql linklerini kaldır
+    # Tüm conf.d dizinlerindeki linkleri temizle
     for conf_dir in "/etc/php/$version/cli/conf.d" "/etc/php/$version/fpm/conf.d"; do
         if [ -d "$conf_dir" ]; then
-            print_info "Düzeltiliyor: $conf_dir"
+            print_info "Temizleniyor: $conf_dir"
             
-            # Tüm mevcut linkleri kaldır
-            rm -f "$conf_dir/20-mysqlnd.ini" 2>/dev/null || true
-            rm -f "$conf_dir/10-mysqlnd.ini" 2>/dev/null || true
-            rm -f "$conf_dir/20-pdo.ini" 2>/dev/null || true
-            rm -f "$conf_dir/10-pdo.ini" 2>/dev/null || true
-            rm -f "$conf_dir/20-mysqli.ini" 2>/dev/null || true
-            rm -f "$conf_dir/30-mysqli.ini" 2>/dev/null || true
-            rm -f "$conf_dir/20-pdo_mysql.ini" 2>/dev/null || true
-            rm -f "$conf_dir/30-pdo_mysql.ini" 2>/dev/null || true
-            rm -f "$conf_dir/20-dom.ini" 2>/dev/null || true
-            rm -f "$conf_dir/10-dom.ini" 2>/dev/null || true
-            rm -f "$conf_dir/20-xml.ini" 2>/dev/null || true
-            rm -f "$conf_dir/10-xml.ini" 2>/dev/null || true
-            rm -f "$conf_dir/20-xsl.ini" 2>/dev/null || true
-            rm -f "$conf_dir/40-xsl.ini" 2>/dev/null || true
-            
-            # Doğru sırayla yeniden oluştur
-            # 1. mysqlnd (en önce)
-            if [ -f "$mods_dir/mysqlnd.ini" ]; then
-                ln -s "$mods_dir/mysqlnd.ini" "$conf_dir/10-mysqlnd.ini" 2>/dev/null || true
-            fi
-            
-            # 2. pdo (mysqlnd'den sonra)
-            if [ -f "$mods_dir/pdo.ini" ]; then
-                ln -s "$mods_dir/pdo.ini" "$conf_dir/15-pdo.ini" 2>/dev/null || true
-            fi
-            
-            # 3. dom ve xml (xsl için gerekli)
-            if [ -f "$mods_dir/dom.ini" ]; then
-                ln -s "$mods_dir/dom.ini" "$conf_dir/15-dom.ini" 2>/dev/null || true
-            fi
-            
-            if [ -f "$mods_dir/xml.ini" ]; then
-                ln -s "$mods_dir/xml.ini" "$conf_dir/15-xml.ini" 2>/dev/null || true
-            fi
-            
-            # 4. mysqli (mysqlnd'ye bağımlı)
-            if [ -f "$mods_dir/mysqli.ini" ]; then
-                ln -s "$mods_dir/mysqli.ini" "$conf_dir/20-mysqli.ini" 2>/dev/null || true
-            fi
-            
-            # 5. pdo_mysql'i DEVRE DIŞI BIRAK (sorun kaynağı)
-            # pdo_mysql.so doğrudan yüklenmesin, php-mysql paketi zaten mysqli sağlıyor
-            # PDO MySQL desteği için mysqli kullanılabilir
-            
-            # 6. xsl (dom/xml'e bağımlı)
-            if [ -f "$mods_dir/xsl.ini" ]; then
-                ln -s "$mods_dir/xsl.ini" "$conf_dir/30-xsl.ini" 2>/dev/null || true
-            fi
+            # Tüm ilgili linkleri kaldır (çift yüklemeyi önlemek için)
+            find "$conf_dir" -type l -name "*mysqlnd*" -delete 2>/dev/null || true
+            find "$conf_dir" -type l -name "*pdo.ini" -delete 2>/dev/null || true
+            find "$conf_dir" -type l -name "*mysqli*" -delete 2>/dev/null || true
+            find "$conf_dir" -type l -name "*pdo_mysql*" -delete 2>/dev/null || true
+            find "$conf_dir" -type l -name "*dom.ini" -delete 2>/dev/null || true
+            find "$conf_dir" -type l -name "*xml.ini" -delete 2>/dev/null || true
+            find "$conf_dir" -type l -name "*xsl*" -delete 2>/dev/null || true
         fi
     done
     
-    # pdo_mysql modülünü tamamen devre dışı bırak
-    print_info "pdo_mysql modülü devre dışı bırakılıyor (mysqli kullanılacak)..."
+    # pdo_mysql ve pdo modüllerini önce devre dışı bırak (temiz başlangıç)
+    print_info "Modüller devre dışı bırakılıyor..."
     phpdismod -v $version pdo_mysql 2>/dev/null || true
+    phpdismod -v $version pdo 2>/dev/null || true
+    phpdismod -v $version mysqli 2>/dev/null || true
+    phpdismod -v $version mysqlnd 2>/dev/null || true
+    phpdismod -v $version dom 2>/dev/null || true
+    phpdismod -v $version xml 2>/dev/null || true
+    phpdismod -v $version xsl 2>/dev/null || true
     
-    # mysqli'nin etkin olduğundan emin ol
-    print_info "mysqli modülü etkinleştiriliyor..."
-    phpenmod -v $version mysqli 2>/dev/null || true
+    # Şimdi doğru sırayla etkinleştir
+    print_info "Modüller doğru sırayla etkinleştiriliyor..."
+    
+    # 1. mysqlnd (en önce)
     phpenmod -v $version mysqlnd 2>/dev/null || true
+    
+    # 2. pdo (mysqlnd'den sonra)
     phpenmod -v $version pdo 2>/dev/null || true
     
+    # 3. dom ve xml (xsl için)
+    phpenmod -v $version dom 2>/dev/null || true
+    phpenmod -v $version xml 2>/dev/null || true
+    
+    # 4. mysqli (mysqlnd'ye bağımlı)
+    phpenmod -v $version mysqli 2>/dev/null || true
+    
+    # 5. xsl (dom/xml'e bağımlı)
+    phpenmod -v $version xsl 2>/dev/null || true
+    
+    # 6. pdo_mysql DEVRE DIŞI KALIYOR (sorun kaynağı)
+    
+    # Manuel olarak doğru sırayla linkler oluştur (phpenmod bazen yanlış sıralama yapabiliyor)
+    for conf_dir in "/etc/php/$version/cli/conf.d" "/etc/php/$version/fpm/conf.d"; do
+        if [ -d "$conf_dir" ]; then
+            print_info "Yeniden yapılandırılıyor: $conf_dir"
+            
+            # Önce tüm linkleri temizle
+            find "$conf_dir" -type l \( -name "*mysqlnd*" -o -name "*pdo.ini" -o -name "*mysqli*" -o -name "*pdo_mysql*" -o -name "*dom.ini" -o -name "*xml.ini" -o -name "*xsl*" \) -delete 2>/dev/null || true
+            
+            # Doğru sırayla yeniden oluştur
+            if [ -f "$mods_dir/mysqlnd.ini" ]; then
+                ln -sf "$mods_dir/mysqlnd.ini" "$conf_dir/10-mysqlnd.ini"
+            fi
+            
+            if [ -f "$mods_dir/pdo.ini" ]; then
+                ln -sf "$mods_dir/pdo.ini" "$conf_dir/15-pdo.ini"
+            fi
+            
+            if [ -f "$mods_dir/dom.ini" ]; then
+                ln -sf "$mods_dir/dom.ini" "$conf_dir/15-dom.ini"
+            fi
+            
+            if [ -f "$mods_dir/xml.ini" ]; then
+                ln -sf "$mods_dir/xml.ini" "$conf_dir/15-xml.ini"
+            fi
+            
+            if [ -f "$mods_dir/mysqli.ini" ]; then
+                ln -sf "$mods_dir/mysqli.ini" "$conf_dir/20-mysqli.ini"
+            fi
+            
+            if [ -f "$mods_dir/xsl.ini" ]; then
+                ln -sf "$mods_dir/xsl.ini" "$conf_dir/30-xsl.ini"
+            fi
+            
+            # pdo_mysql linklerini KALDIR (varsa)
+            rm -f "$conf_dir"/*pdo_mysql* 2>/dev/null || true
+        fi
+    done
+    
     print_success "PHP eklenti yükleme sırası düzeltildi"
-    print_info "Not: pdo_mysql devre dışı bırakıldı, mysqli kullanılacak (PDO için PDO_MYSQL sürücüsü mysqli üzerinden çalışır)"
+    print_info "Etkin modüller: mysqlnd, pdo, dom, xml, mysqli, xsl"
+    print_info "Devre dışı: pdo_mysql (sorun kaynağı, mysqli kullanılacak)"
     
     return 0
 }
