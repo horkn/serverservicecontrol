@@ -1913,6 +1913,23 @@ install_redis() {
         fi
     fi
     
+    # Redis yapılandırmasını düzenle (localhost bağlantısı için)
+    local redis_conf="/etc/redis/redis.conf"
+    if [ -f "$redis_conf" ]; then
+        print_info "Redis yapılandırması kontrol ediliyor..."
+        
+        # bind adresini kontrol et
+        if ! grep -q "^bind 127.0.0.1" "$redis_conf"; then
+            print_info "Redis bind adresi ayarlanıyor..."
+            sed -i 's/^bind .*/bind 127.0.0.1 ::1/' "$redis_conf"
+        fi
+        
+        # protected-mode kontrolü
+        if ! grep -q "^protected-mode yes" "$redis_conf"; then
+            sed -i 's/^protected-mode .*/protected-mode yes/' "$redis_conf"
+        fi
+    fi
+    
     # Redis servisini başlat ve etkinleştir
     print_info "Redis servisi başlatılıyor..."
     systemctl start redis-server 2>/dev/null || systemctl start redis 2>/dev/null || true
@@ -1926,11 +1943,106 @@ install_redis() {
         print_success "Redis kurulumu tamamlandı ve servis başlatıldı"
         echo -e "${GREEN}Redis Versiyonu:${NC} $(redis-server --version 2>/dev/null | cut -d' ' -f3 || echo "Kuruldu")"
         echo -e "${GREEN}Servis Durumu:${NC} $(systemctl is-active redis-server 2>/dev/null || systemctl is-active redis 2>/dev/null || echo "Çalışıyor")"
+        
+        # Bağlantı testi
+        if redis-cli ping 2>/dev/null | grep -q "PONG"; then
+            print_success "Redis bağlantı testi başarılı (PONG)"
+        else
+            print_warning "Redis çalışıyor ama bağlantı testi başarısız"
+        fi
     else
         print_warning "Redis kuruldu ancak servis başlatılamadı"
         print_info "Servis durumunu kontrol edin: systemctl status redis-server"
         print_info "Manuel başlatma: sudo systemctl start redis-server"
     fi
+}
+
+fix_redis_connection() {
+    print_header "Redis Bağlantı Sorunu Düzeltme"
+    
+    # Redis kurulu mu kontrol et
+    if ! command -v redis-server &>/dev/null && ! command -v redis-cli &>/dev/null; then
+        print_error "Redis kurulu değil!"
+        if ask_yes_no "Redis kurmak ister misiniz?"; then
+            install_redis
+            return $?
+        else
+            return 1
+        fi
+    fi
+    
+    # Redis servis durumunu kontrol et
+    local redis_running=false
+    if systemctl is-active --quiet redis-server 2>/dev/null || \
+       systemctl is-active --quiet redis 2>/dev/null; then
+        redis_running=true
+        print_success "Redis servisi çalışıyor"
+    else
+        print_warning "Redis servisi çalışmıyor!"
+        print_info "Redis servisi başlatılıyor..."
+        
+        systemctl start redis-server 2>/dev/null || systemctl start redis 2>/dev/null || true
+        sleep 2
+        
+        if systemctl is-active --quiet redis-server 2>/dev/null || \
+           systemctl is-active --quiet redis 2>/dev/null; then
+            redis_running=true
+            print_success "Redis servisi başlatıldı"
+        else
+            print_error "Redis servisi başlatılamadı!"
+            print_info "Log kontrolü: journalctl -u redis-server -n 50"
+            return 1
+        fi
+    fi
+    
+    # Bağlantı testi
+    if [ "$redis_running" = true ]; then
+        print_info "Redis bağlantı testi yapılıyor..."
+        
+        if redis-cli ping 2>/dev/null | grep -q "PONG"; then
+            print_success "Redis bağlantı testi başarılı!"
+            echo -e "${GREEN}Redis Durumu:${NC} Çalışıyor ve bağlanılabilir"
+            
+            # Redis bilgileri
+            echo ""
+            print_info "Redis Bilgileri:"
+            redis-cli INFO server 2>/dev/null | grep -E "redis_version|redis_mode|tcp_port" || true
+        else
+            print_error "Redis çalışıyor ama bağlantı kurulamıyor!"
+            
+            # Yapılandırmayı kontrol et
+            local redis_conf="/etc/redis/redis.conf"
+            if [ -f "$redis_conf" ]; then
+                print_info "Redis yapılandırması kontrol ediliyor..."
+                
+                # bind adresini kontrol et
+                local bind_address=$(grep "^bind" "$redis_conf" | head -1)
+                echo "Mevcut bind adresi: $bind_address"
+                
+                if ! echo "$bind_address" | grep -q "127.0.0.1"; then
+                    print_warning "Redis sadece localhost'a bind değil!"
+                    if ask_yes_no "Redis'i localhost (127.0.0.1) için yapılandırmak ister misiniz?"; then
+                        sed -i 's/^bind .*/bind 127.0.0.1 ::1/' "$redis_conf"
+                        systemctl restart redis-server 2>/dev/null || systemctl restart redis 2>/dev/null
+                        sleep 2
+                        
+                        if redis-cli ping 2>/dev/null | grep -q "PONG"; then
+                            print_success "Redis yapılandırması düzeltildi ve bağlantı başarılı!"
+                        else
+                            print_error "Yapılandırma değişikliği sonrası hala bağlantı kurulamıyor"
+                        fi
+                    fi
+                fi
+            fi
+        fi
+    fi
+    
+    # Laravel .env için bilgi
+    echo ""
+    print_info "Laravel .env yapılandırması için:"
+    echo -e "${CYAN}REDIS_HOST=127.0.0.1${NC}"
+    echo -e "${CYAN}REDIS_PASSWORD=null${NC}"
+    echo -e "${CYAN}REDIS_PORT=6379${NC}"
 }
 
 fix_git_safe_directory() {
@@ -1963,6 +2075,111 @@ fix_git_safe_directory() {
     fi
 }
 
+fix_php_duplicate_modules() {
+    print_header "PHP Çift Yükleme Sorunu Düzeltme"
+    
+    # PHP versiyonunu tespit et
+    local php_version=$(php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+    
+    if [ -z "$php_version" ]; then
+        print_error "PHP kurulu değil veya versiyon tespit edilemedi!"
+        return 1
+    fi
+    
+    print_info "PHP versiyonu: $php_version"
+    print_info "Çift yükleme sorunları kontrol ediliyor..."
+    
+    # Tüm conf.d dizinlerindeki linkleri kontrol et
+    for conf_dir in "/etc/php/$php_version/cli/conf.d" "/etc/php/$php_version/fpm/conf.d"; do
+        if [ -d "$conf_dir" ]; then
+            print_info "Kontrol ediliyor: $conf_dir"
+            
+            # dom ve xml için çift linkleri temizle
+            local dom_links=($(find "$conf_dir" -type l -name "*dom*" 2>/dev/null))
+            local xml_links=($(find "$conf_dir" -type l -name "*xml*" 2>/dev/null))
+            
+            # dom için sadece bir tane link olmalı
+            if [ ${#dom_links[@]} -gt 1 ]; then
+                print_warning "dom için ${#dom_links[@]} link bulundu, temizleniyor..."
+                # Hepsini sil
+                find "$conf_dir" -type l -name "*dom*" -delete 2>/dev/null || true
+                # Sadece doğru olanı yeniden oluştur
+                if [ -f "/etc/php/$php_version/mods-available/dom.ini" ]; then
+                    ln -sf "/etc/php/$php_version/mods-available/dom.ini" "$conf_dir/20-dom.ini"
+                    print_success "dom modülü tek link ile yeniden yapılandırıldı"
+                fi
+            fi
+            
+            # xml için sadece bir tane link olmalı
+            if [ ${#xml_links[@]} -gt 1 ]; then
+                print_warning "xml için ${#xml_links[@]} link bulundu, temizleniyor..."
+                # Hepsini sil
+                find "$conf_dir" -type l -name "*xml*" -delete 2>/dev/null || true
+                # Sadece doğru olanı yeniden oluştur
+                if [ -f "/etc/php/$php_version/mods-available/xml.ini" ]; then
+                    ln -sf "/etc/php/$php_version/mods-available/xml.ini" "$conf_dir/15-xml.ini"
+                    print_success "xml modülü tek link ile yeniden yapılandırıldı"
+                fi
+            fi
+        fi
+    done
+    
+    # mods-available dizinindeki .ini dosyalarını kontrol et
+    local mods_dir="/etc/php/$php_version/mods-available"
+    
+    # dom.ini kontrolü
+    if [ -f "$mods_dir/dom.ini" ]; then
+        local dom_content=$(cat "$mods_dir/dom.ini")
+        local dom_extension_count=$(echo "$dom_content" | grep -c "^extension=dom.so" || echo "0")
+        
+        if [ "$dom_extension_count" -gt 1 ]; then
+            print_warning "dom.ini içinde çift 'extension=dom.so' satırı var, düzeltiliyor..."
+            # Dosyayı yeniden yaz (sadece bir tane extension satırı)
+            cat > "$mods_dir/dom.ini" <<'EOF'
+; configuration for php dom module
+; priority=20
+extension=dom.so
+EOF
+            print_success "dom.ini düzeltildi"
+        fi
+    fi
+    
+    # xml.ini kontrolü
+    if [ -f "$mods_dir/xml.ini" ]; then
+        local xml_content=$(cat "$mods_dir/xml.ini")
+        local xml_extension_count=$(echo "$xml_content" | grep -c "^extension=xml.so" || echo "0")
+        
+        if [ "$xml_extension_count" -gt 1 ]; then
+            print_warning "xml.ini içinde çift 'extension=xml.so' satırı var, düzeltiliyor..."
+            # Dosyayı yeniden yaz (sadece bir tane extension satırı)
+            cat > "$mods_dir/xml.ini" <<'EOF'
+; configuration for php xml module
+; priority=15
+extension=xml.so
+EOF
+            print_success "xml.ini düzeltildi"
+        fi
+    fi
+    
+    # PHP-FPM'i yeniden başlat
+    print_info "PHP-FPM yeniden başlatılıyor..."
+    systemctl restart php$php_version-fpm 2>/dev/null || true
+    sleep 2
+    
+    # Test et
+    print_info "PHP modül listesi kontrol ediliyor..."
+    local warnings=$(php -v 2>&1 | grep -i "warning.*already loaded" || echo "")
+    
+    if [ -z "$warnings" ]; then
+        print_success "Çift yükleme sorunları düzeltildi!"
+        echo ""
+        print_info "PHP çalışıyor: $(php -v | head -1)"
+    else
+        print_warning "Hala bazı uyarılar var:"
+        echo "$warnings"
+    fi
+}
+
 quick_fix_php_extensions() {
     print_header "Eksik PHP Eklentilerini Hızlı Düzeltme"
     
@@ -1976,7 +2193,13 @@ quick_fix_php_extensions() {
     
     print_info "PHP versiyonu: $php_version"
     
-    # Önce mevcut durumu göster
+    # Önce çift yükleme sorunlarını düzelt
+    print_info "Çift yükleme sorunları kontrol ediliyor..."
+    fix_php_duplicate_modules
+    
+    echo ""
+    
+    # Şimdi mevcut durumu göster
     print_info "Mevcut PHP eklentileri kontrol ediliyor..."
     echo "Kurulu eklentiler:"
     php -m 2>/dev/null | grep -v "^\[" | head -20
@@ -7621,10 +7844,12 @@ main_menu() {
         echo "22) DNS Sunucusu Kurulumu"
         echo "23) Nginx Domain'lerini DNS'e Ekle"
         echo "24) PHP Eklentileri Hızlı Düzeltme (Composer için)"
-        echo "25) Çıkış"
+        echo "25) PHP Çift Yükleme Sorunu Düzelt (dom, xml)"
+        echo "26) Redis Bağlantı Sorunu Düzelt"
+        echo "27) Çıkış"
         echo ""
         
-        read -p "Seçiminizi yapın (1-25): " choice
+        read -p "Seçiminizi yapın (1-27): " choice
         
         case $choice in
             1)
@@ -7723,11 +7948,19 @@ main_menu() {
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             25)
+                fix_php_duplicate_modules
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            26)
+                fix_redis_connection
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            27)
                 print_success "Çıkılıyor..."
                 exit 0
                 ;;
             *)
-                print_error "Geçersiz seçim. Lütfen 1-25 arasında bir sayı girin."
+                print_error "Geçersiz seçim. Lütfen 1-27 arasında bir sayı girin."
                 sleep 2
                 ;;
         esac
