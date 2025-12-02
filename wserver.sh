@@ -851,29 +851,66 @@ check_and_install_missing_php_extensions() {
     fi
     
     echo ""
-    print_info "SON KONTROL: Çift yükleme sorunları önleniyor..."
+    print_info "SON KONTROL: Tüm gerekli modüller aktif mi kontrol ediliyor..."
     
-    # fix_php_extension_loading_order çağrıldı ve bazı linkler oluşturmuş olabilir
-    # Son bir kez çift linkleri temizle
+    # Kritik modüller ve priority'leri
+    local critical_modules=(
+        "mysqlnd:10"
+        "pdo:10"
+        "mysqli:20"
+        "dom:20"
+        "xml:15"
+        "simplexml:20"
+        "xmlreader:20"
+        "xmlwriter:20"
+        "xsl:30"
+    )
+    
     for conf_dir in "/etc/php/$version/cli/conf.d" "/etc/php/$version/fpm/conf.d"; do
         if [ -d "$conf_dir" ]; then
-            # Duplicate linkleri bul ve temizle
-            for mod in pdo mysqlnd mysqli dom xml simplexml xmlreader xmlwriter xsl; do
+            print_info "Kontrol: $conf_dir"
+            
+            for mod_def in "${critical_modules[@]}"; do
+                local mod=$(echo "$mod_def" | cut -d':' -f1)
+                local priority=$(echo "$mod_def" | cut -d':' -f2)
+                local mod_ini="/etc/php/$version/mods-available/${mod}.ini"
+                local expected_link="$conf_dir/${priority}-${mod}.ini"
+                
+                # .ini dosyası var mı?
+                if [ ! -f "$mod_ini" ]; then
+                    print_warning "  ✗ $mod.ini eksik, oluşturuluyor..."
+                    cat > "$mod_ini" <<EOF
+; configuration for php $mod module
+; priority=$priority
+extension=$mod.so
+EOF
+                    chmod 644 "$mod_ini"
+                fi
+                
+                # Duplicate link kontrolü
                 local mod_links=($(find "$conf_dir" -type l -name "*${mod}.ini" 2>/dev/null))
                 
                 if [ ${#mod_links[@]} -gt 1 ]; then
-                    print_warning "  $mod için ${#mod_links[@]} link bulundu, TEK'e indirgeniyor..."
-                    
+                    print_warning "  ✗ $mod için ${#mod_links[@]} duplicate link, temizleniyor..."
                     # Tüm linkleri sil
                     find "$conf_dir" -type l -name "*${mod}.ini" -delete 2>/dev/null || true
-                    
-                    # .ini dosyasından priority'yi al
-                    local priority=$(grep "priority=" "/etc/php/$version/mods-available/${mod}.ini" 2>/dev/null | sed 's/.*priority=//' | tr -d '; ' || echo "20")
-                    
-                    # Tek link oluştur
-                    if [ -f "/etc/php/$version/mods-available/${mod}.ini" ]; then
-                        ln -sf "/etc/php/$version/mods-available/${mod}.ini" "$conf_dir/${priority}-${mod}.ini"
-                    fi
+                    # Tek doğru link oluştur
+                    ln -sf "$mod_ini" "$expected_link"
+                    print_success "  ✓ $mod: ${priority}-${mod}.ini (TEK)"
+                elif [ ${#mod_links[@]} -eq 0 ]; then
+                    # Link hiç yok, oluştur
+                    print_info "  + $mod linki oluşturuluyor..."
+                    ln -sf "$mod_ini" "$expected_link"
+                    print_success "  ✓ $mod: ${priority}-${mod}.ini (YENİ)"
+                elif [ ! -L "$expected_link" ]; then
+                    # Yanlış priority ile link var
+                    print_warning "  ⚠ $mod yanlış priority ile, düzeltiliyor..."
+                    find "$conf_dir" -type l -name "*${mod}.ini" -delete 2>/dev/null || true
+                    ln -sf "$mod_ini" "$expected_link"
+                    print_success "  ✓ $mod: ${priority}-${mod}.ini (DÜZELTİLDİ)"
+                else
+                    # Her şey doğru
+                    print_success "  ✓ $mod: ${priority}-${mod}.ini"
                 fi
             done
         fi
