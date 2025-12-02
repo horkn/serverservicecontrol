@@ -624,7 +624,7 @@ check_and_install_missing_php_extensions() {
         "zip" "xml" "intl" "opcache" "bcmath" "soap" "xsl" 
         "tidy" "imap" "gmp" "sodium" "imagick" "openssl" 
         "fileinfo" "exif" "sockets" "pcntl" "gettext" "shmop"
-        "phar" "json" "readline"
+        "phar" "json" "readline" "tokenizer" "iconv" "ctype"
     )
     
     # Kurulu eklentileri al
@@ -685,9 +685,26 @@ check_and_install_missing_php_extensions() {
                     continue
                 fi
                 ;;
-            "fileinfo"|"exif"|"sockets"|"gettext"|"shmop")
-                # Bu eklentiler genellikle php-common ile gelir
-                print_info "$ext zaten php-common ile kurulu olmalı, atlanıyor"
+            "fileinfo"|"exif"|"sockets"|"gettext"|"shmop"|"tokenizer"|"iconv"|"ctype")
+                # Bu eklentiler genellikle php-common ile gelir ama etkinleştirilmemiş olabilir
+                print_info "$ext eklentisi kontrol ediliyor..."
+                
+                # Önce etkinleştirmeyi dene
+                if [ -f "/etc/php/$version/mods-available/$ext.ini" ]; then
+                    phpenmod -v $version $ext 2>/dev/null || true
+                else
+                    # .ini dosyası yoksa oluştur
+                    echo "; configuration for php $ext module" > "/etc/php/$version/mods-available/$ext.ini"
+                    echo "extension=$ext.so" >> "/etc/php/$version/mods-available/$ext.ini"
+                    phpenmod -v $version $ext 2>/dev/null || true
+                fi
+                
+                # Hala yoksa php-common'ı yeniden kur
+                if ! php$version -m 2>/dev/null | grep -qi "^$ext$"; then
+                    print_info "php$version-common yeniden kuruluyor ($ext için)..."
+                    apt install --reinstall -y php$version-common 2>/dev/null || true
+                    ((installed_count++))
+                fi
                 continue
                 ;;
             "phar")
@@ -1923,7 +1940,7 @@ install_composer() {
     # Composer için gerekli PHP eklentilerini kontrol et
     print_info "Composer için gerekli PHP eklentileri kontrol ediliyor..."
     
-    local required_for_composer=("phar" "json" "mbstring" "openssl" "curl" "zip")
+    local required_for_composer=("phar" "json" "mbstring" "openssl" "curl" "zip" "fileinfo" "tokenizer" "iconv" "ctype")
     local missing_for_composer=()
     
     for ext in "${required_for_composer[@]}"; do
@@ -1940,23 +1957,23 @@ install_composer() {
         for ext in "${missing_for_composer[@]}"; do
             local pkg="php$php_version-$ext"
             
-            # Özel durum: phar genellikle php-common ile gelir
-            if [ "$ext" = "phar" ]; then
-                print_info "phar eklentisi etkinleştiriliyor..."
+            # Özel durum: bazı eklentiler php-common ile gelir
+            if [ "$ext" = "phar" ] || [ "$ext" = "fileinfo" ] || [ "$ext" = "tokenizer" ] || [ "$ext" = "iconv" ] || [ "$ext" = "ctype" ]; then
+                print_info "$ext eklentisi etkinleştiriliyor..."
                 
-                # phar genellikle PHP ile birlikte gelir, sadece etkinleştirmek gerekebilir
-                if [ -f "/etc/php/$php_version/mods-available/phar.ini" ]; then
-                    phpenmod -v $php_version phar 2>/dev/null || true
+                # Eklenti genellikle PHP ile birlikte gelir, sadece etkinleştirmek gerekebilir
+                if [ -f "/etc/php/$php_version/mods-available/$ext.ini" ]; then
+                    phpenmod -v $php_version $ext 2>/dev/null || true
                 else
-                    # phar.ini yoksa oluştur
-                    echo "; configuration for php phar module" > "/etc/php/$php_version/mods-available/phar.ini"
-                    echo "extension=phar.so" >> "/etc/php/$php_version/mods-available/phar.ini"
-                    phpenmod -v $php_version phar 2>/dev/null || true
+                    # .ini dosyası yoksa oluştur
+                    echo "; configuration for php $ext module" > "/etc/php/$php_version/mods-available/$ext.ini"
+                    echo "extension=$ext.so" >> "/etc/php/$php_version/mods-available/$ext.ini"
+                    phpenmod -v $php_version $ext 2>/dev/null || true
                 fi
                 
                 # Hala yoksa php-common'ı yeniden kur
-                if ! php -m 2>/dev/null | grep -qi "^phar$"; then
-                    print_info "php$php_version-common yeniden kuruluyor..."
+                if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
+                    print_info "php$php_version-common yeniden kuruluyor ($ext için)..."
                     apt install --reinstall -y php$php_version-common 2>/dev/null || true
                 fi
             else
