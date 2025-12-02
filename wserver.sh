@@ -2008,6 +2008,10 @@ quick_fix_php_extensions() {
     # php-xml ve php-common paketlerini önce kur/güncelle
     print_info "Gerekli PHP paketleri kuruluyor..."
     apt update
+    
+    # XML paketini kaldır ve yeniden kur (simplexml sorunu için)
+    print_info "php$php_version-xml paketi temiz kurulum yapılıyor..."
+    apt remove -y php$php_version-xml 2>/dev/null || true
     apt install -y php$php_version-xml php$php_version-common 2>/dev/null || true
     
     # Her eksik eklenti için düzeltme yap
@@ -2084,6 +2088,38 @@ quick_fix_php_extensions() {
     print_info "PHP-FPM yeniden başlatılıyor..."
     systemctl restart php$php_version-fpm 2>/dev/null || true
     sleep 2
+    
+    # simplexml özel kontrolü (genellikle php-xml ile gelir ama bazen görünmez)
+    if ! php -m 2>/dev/null | grep -qi "^simplexml$"; then
+        print_warning "simplexml hala görünmüyor, özel düzeltme yapılıyor..."
+        
+        # libxml2 ve php-xml bağımlılıklarını kontrol et
+        apt install -y libxml2 libxml2-dev 2>/dev/null || true
+        
+        # php-xml'i tamamen kaldır ve yeniden kur
+        apt purge -y php$php_version-xml 2>/dev/null || true
+        apt autoremove -y 2>/dev/null || true
+        apt install -y php$php_version-xml 2>/dev/null || true
+        
+        # Tüm XML eklentilerini etkinleştir
+        phpenmod -v $php_version xml 2>/dev/null || true
+        phpenmod -v $php_version simplexml 2>/dev/null || true
+        phpenmod -v $php_version xmlreader 2>/dev/null || true
+        phpenmod -v $php_version xmlwriter 2>/dev/null || true
+        phpenmod -v $php_version dom 2>/dev/null || true
+        
+        # PHP-FPM'i tekrar başlat
+        systemctl restart php$php_version-fpm 2>/dev/null || true
+        sleep 2
+        
+        # Son kontrol
+        if php -m 2>/dev/null | grep -qi "^simplexml$"; then
+            print_success "simplexml başarıyla yüklendi (özel düzeltme)"
+        else
+            print_error "simplexml yüklenemedi! php$php_version-xml paketi sorunlu olabilir"
+            print_info "Manuel düzeltme: sudo apt purge php$php_version-xml && sudo apt install php$php_version-xml"
+        fi
+    fi
     
     # Sonuçları göster
     echo ""
