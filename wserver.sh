@@ -2105,105 +2105,240 @@ fix_php_duplicate_modules() {
     print_info "PHP versiyonu: $php_version"
     print_info "Çift yükleme sorunları kontrol ediliyor..."
     
-    # Tüm conf.d dizinlerindeki linkleri kontrol et
+    # Tüm conf.d dizinlerindeki linkleri kontrol et ve temizle
     for conf_dir in "/etc/php/$php_version/cli/conf.d" "/etc/php/$php_version/fpm/conf.d"; do
         if [ -d "$conf_dir" ]; then
             print_info "Kontrol ediliyor: $conf_dir"
             
-            # dom ve xml için çift linkleri temizle
+            # dom ve xml için TÜMU linkleri say
             local dom_links=($(find "$conf_dir" -type l -name "*dom*" 2>/dev/null))
             local xml_links=($(find "$conf_dir" -type l -name "*xml*" 2>/dev/null))
             
-            # dom için sadece bir tane link olmalı
-            if [ ${#dom_links[@]} -gt 1 ]; then
-                print_warning "dom için ${#dom_links[@]} link bulundu, temizleniyor..."
-                # Hepsini sil
+            print_info "Mevcut dom linkleri: ${#dom_links[@]}, xml linkleri: ${#xml_links[@]}"
+            
+            # dom için temizlik ve yeniden oluşturma (link sayısı ne olursa olsun)
+            if [ ${#dom_links[@]} -ge 1 ]; then
+                # Uyarı seviyesini ayarla
+                if [ ${#dom_links[@]} -gt 1 ]; then
+                    print_warning "dom için ${#dom_links[@]} link bulundu, TEMİZLENİYOR..."
+                else
+                    print_info "dom için ${#dom_links[@]} link bulundu, YENİDEN YAPILANDIRILIYOR..."
+                fi
+                
+                # HEPSİNİ sil (hatalı olanlar da olabilir)
                 find "$conf_dir" -type l -name "*dom*" -delete 2>/dev/null || true
-                # Sadece doğru olanı yeniden oluştur
+                
+                # Sadece DOĞRU olanı yeniden oluştur
                 if [ -f "/etc/php/$php_version/mods-available/dom.ini" ]; then
                     ln -sf "/etc/php/$php_version/mods-available/dom.ini" "$conf_dir/20-dom.ini"
-                    print_success "dom modülü tek link ile yeniden yapılandırıldı"
+                    print_success "✓ dom modülü: $conf_dir/20-dom.ini"
                 fi
+            elif [ -f "/etc/php/$php_version/mods-available/dom.ini" ]; then
+                # Hiç link yok ama .ini var, oluştur
+                print_info "dom linki eksik, oluşturuluyor..."
+                ln -sf "/etc/php/$php_version/mods-available/dom.ini" "$conf_dir/20-dom.ini"
+                print_success "✓ dom modülü: $conf_dir/20-dom.ini"
             fi
             
-            # xml için sadece bir tane link olmalı
-            if [ ${#xml_links[@]} -gt 1 ]; then
-                print_warning "xml için ${#xml_links[@]} link bulundu, temizleniyor..."
-                # Hepsini sil
+            # xml için temizlik ve yeniden oluşturma (link sayısı ne olursa olsun)
+            if [ ${#xml_links[@]} -ge 1 ]; then
+                # Uyarı seviyesini ayarla
+                if [ ${#xml_links[@]} -gt 1 ]; then
+                    print_warning "xml için ${#xml_links[@]} link bulundu, TEMİZLENİYOR..."
+                else
+                    print_info "xml için ${#xml_links[@]} link bulundu, YENİDEN YAPILANDIRILIYOR..."
+                fi
+                
+                # HEPSİNİ sil (hatalı olanlar da olabilir)
                 find "$conf_dir" -type l -name "*xml*" -delete 2>/dev/null || true
-                # Sadece doğru olanı yeniden oluştur
+                
+                # Sadece DOĞRU olanı yeniden oluştur
                 if [ -f "/etc/php/$php_version/mods-available/xml.ini" ]; then
                     ln -sf "/etc/php/$php_version/mods-available/xml.ini" "$conf_dir/15-xml.ini"
-                    print_success "xml modülü tek link ile yeniden yapılandırıldı"
+                    print_success "✓ xml modülü: $conf_dir/15-xml.ini"
                 fi
+            elif [ -f "/etc/php/$php_version/mods-available/xml.ini" ]; then
+                # Hiç link yok ama .ini var, oluştur
+                print_info "xml linki eksik, oluşturuluyor..."
+                ln -sf "/etc/php/$php_version/mods-available/xml.ini" "$conf_dir/15-xml.ini"
+                print_success "✓ xml modülü: $conf_dir/15-xml.ini"
             fi
         fi
     done
     
-    # mods-available dizinindeki .ini dosyalarını kontrol et
+    # mods-available dizinindeki .ini dosyalarını kontrol et ve düzelt
     local mods_dir="/etc/php/$php_version/mods-available"
     
-    # dom.ini kontrolü
+    print_info ".ini dosyaları kontrol ediliyor: $mods_dir"
+    
+    # dom.ini kontrolü ve temizliği
     if [ -f "$mods_dir/dom.ini" ]; then
         local dom_content=$(cat "$mods_dir/dom.ini")
         local dom_extension_count=$(echo "$dom_content" | grep -c "^extension=dom.so" || echo "0")
         
+        # Her durumda temiz bir .ini dosyası oluştur (duplicate veya bozuk olabilir)
         if [ "$dom_extension_count" -gt 1 ]; then
             print_warning "dom.ini içinde çift 'extension=dom.so' satırı var, düzeltiliyor..."
-            # Dosyayı yeniden yaz (sadece bir tane extension satırı)
-            cat > "$mods_dir/dom.ini" <<'EOF'
+        elif [ "$dom_extension_count" -eq 0 ]; then
+            print_warning "dom.ini içinde 'extension=dom.so' satırı yok, ekleniyor..."
+        else
+            print_info "dom.ini kontrol ediliyor ve yeniden yazılıyor (standart format)..."
+        fi
+        
+        # Yedek oluştur
+        cp "$mods_dir/dom.ini" "$mods_dir/dom.ini.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+        
+        # Temiz dosya oluştur
+        cat > "$mods_dir/dom.ini" <<'EOF'
 ; configuration for php dom module
 ; priority=20
 extension=dom.so
 EOF
-            print_success "dom.ini düzeltildi"
-        fi
+        chmod 644 "$mods_dir/dom.ini"
+        print_success "✓ dom.ini standart formata getirildi"
+    else
+        print_warning "dom.ini bulunamadı, oluşturuluyor..."
+        cat > "$mods_dir/dom.ini" <<'EOF'
+; configuration for php dom module
+; priority=20
+extension=dom.so
+EOF
+        chmod 644 "$mods_dir/dom.ini"
+        print_success "✓ dom.ini oluşturuldu"
     fi
     
-    # xml.ini kontrolü
+    # xml.ini kontrolü ve temizliği
     if [ -f "$mods_dir/xml.ini" ]; then
         local xml_content=$(cat "$mods_dir/xml.ini")
         local xml_extension_count=$(echo "$xml_content" | grep -c "^extension=xml.so" || echo "0")
         
+        # Her durumda temiz bir .ini dosyası oluştur
         if [ "$xml_extension_count" -gt 1 ]; then
             print_warning "xml.ini içinde çift 'extension=xml.so' satırı var, düzeltiliyor..."
-            # Dosyayı yeniden yaz (sadece bir tane extension satırı)
-            cat > "$mods_dir/xml.ini" <<'EOF'
+        elif [ "$xml_extension_count" -eq 0 ]; then
+            print_warning "xml.ini içinde 'extension=xml.so' satırı yok, ekleniyor..."
+        else
+            print_info "xml.ini kontrol ediliyor ve yeniden yazılıyor (standart format)..."
+        fi
+        
+        # Yedek oluştur
+        cp "$mods_dir/xml.ini" "$mods_dir/xml.ini.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+        
+        # Temiz dosya oluştur
+        cat > "$mods_dir/xml.ini" <<'EOF'
 ; configuration for php xml module
 ; priority=15
 extension=xml.so
 EOF
-            print_success "xml.ini düzeltildi"
-        fi
+        chmod 644 "$mods_dir/xml.ini"
+        print_success "✓ xml.ini standart formata getirildi"
+    else
+        print_warning "xml.ini bulunamadı, oluşturuluyor..."
+        cat > "$mods_dir/xml.ini" <<'EOF'
+; configuration for php xml module
+; priority=15
+extension=xml.so
+EOF
+        chmod 644 "$mods_dir/xml.ini"
+        print_success "✓ xml.ini oluşturuldu"
     fi
+    
+    # Şimdi linkleri YENİDEN oluştur (link sayısına bakılmaksızın)
+    print_info "Modül linkleri yeniden oluşturuluyor (her iki durumda da aynı sonuç)..."
+    for conf_dir in "/etc/php/$php_version/cli/conf.d" "/etc/php/$php_version/fpm/conf.d"; do
+        if [ -d "$conf_dir" ]; then
+            # dom linkini yeniden oluştur
+            rm -f "$conf_dir"/*dom* 2>/dev/null || true
+            if [ -f "$mods_dir/dom.ini" ]; then
+                ln -sf "$mods_dir/dom.ini" "$conf_dir/20-dom.ini"
+            fi
+            
+            # xml linkini yeniden oluştur
+            rm -f "$conf_dir"/*xml* 2>/dev/null || true
+            if [ -f "$mods_dir/xml.ini" ]; then
+                ln -sf "$mods_dir/xml.ini" "$conf_dir/15-xml.ini"
+            fi
+            
+            print_success "✓ Linkler yeniden oluşturuldu: $conf_dir"
+        fi
+    done
     
     # PHP-FPM'i yeniden başlat
     print_info "PHP-FPM yeniden başlatılıyor..."
     systemctl restart php$php_version-fpm 2>/dev/null || true
-    sleep 2
+    sleep 3
+    
+    echo ""
+    print_header "SONUÇ DOĞRULAMA"
     
     # Test et
-    print_info "PHP modül listesi kontrol ediliyor..."
-    local php_binary="php$php_version"
+    print_info "PHP modül yükleme testi yapılıyor..."
     
+    local php_binary="php$php_version"
     # PHP binary'yi kontrol et
     if ! command -v $php_binary &> /dev/null; then
         php_binary="php"
     fi
     
-    local warnings=$($php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo "")
+    # CLI test
+    print_info "1) PHP CLI testi..."
+    local cli_warnings=$($php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo "")
     
-    if [ -z "$warnings" ]; then
-        print_success "Çift yükleme sorunları düzeltildi!"
-        echo ""
-        print_info "PHP çalışıyor: $($php_binary -v 2>&1 | head -1)"
+    if [ -z "$cli_warnings" ]; then
+        print_success "✓ PHP CLI: Uyarı yok"
+        echo "   $($php_binary -v 2>&1 | head -1)"
     else
-        print_warning "Hala bazı uyarılar var:"
-        echo "$warnings"
+        print_error "✗ PHP CLI: Hala uyarılar var"
+        echo "$cli_warnings"
+    fi
+    
+    # FPM test (eğer çalışıyorsa)
+    if systemctl is-active --quiet php$php_version-fpm 2>/dev/null; then
+        print_info "2) PHP-FPM log testi..."
+        local fpm_warnings=$(journalctl -u php$php_version-fpm -n 10 --no-pager 2>/dev/null | grep -i "warning.*already loaded" || echo "")
+        
+        if [ -z "$fpm_warnings" ]; then
+            print_success "✓ PHP-FPM: Uyarı yok"
+        else
+            print_error "✗ PHP-FPM: Hala uyarılar var"
+            echo "$fpm_warnings"
+        fi
+    fi
+    
+    # Modül listesi
+    echo ""
+    print_info "3) Yüklü modüller kontrol ediliyor..."
+    if $php_binary -m 2>&1 | grep -qi "^dom$" && $php_binary -m 2>&1 | grep -qi "^xml$"; then
+        print_success "✓ dom ve xml modülleri YÜKLENDİ"
+    else
+        print_error "✗ dom veya xml modülü YÜKLENEMEDİ!"
+        print_info "Yüklü modüller:"
+        $php_binary -m 2>&1 | grep -E "^(dom|xml|simplexml|xmlreader|xmlwriter)$" || echo "  [Hiçbiri yüklü değil]"
+    fi
+    
+    echo ""
+    
+    # Sonuç özeti
+    if [ -z "$cli_warnings" ] && [ -z "$fpm_warnings" ]; then
+        print_success "════════════════════════════════════════"
+        print_success "  ✓ SORUN TAMAMEN DÜZELTİLDİ!"
+        print_success "════════════════════════════════════════"
         echo ""
-        print_info "Manuel düzeltme gerekebilir. Kontrol edin:"
-        echo "  sudo ls -la /etc/php/$php_version/cli/conf.d/*dom* /etc/php/$php_version/cli/conf.d/*xml*"
-        echo "  sudo ls -la /etc/php/$php_version/fpm/conf.d/*dom* /etc/php/$php_version/fpm/conf.d/*xml*"
+        print_info "Composer artık hatasız çalışmalı:"
+        echo "  composer install"
+        echo "  composer update"
+    else
+        print_warning "════════════════════════════════════════"
+        print_warning "  ⚠ SORUN KISMEN DÜZELDİ"
+        print_warning "════════════════════════════════════════"
+        echo ""
+        print_info "Link durumunu kontrol edin:"
+        echo "  sudo ls -la /etc/php/$php_version/cli/conf.d/ | grep -E 'dom|xml'"
+        echo "  sudo ls -la /etc/php/$php_version/fpm/conf.d/ | grep -E 'dom|xml'"
+        echo ""
+        print_info ".ini dosyalarını kontrol edin:"
+        echo "  sudo cat /etc/php/$php_version/mods-available/dom.ini"
+        echo "  sudo cat /etc/php/$php_version/mods-available/xml.ini"
     fi
 }
 
@@ -2335,29 +2470,29 @@ quick_fix_php_extensions() {
     print_info "PHP binary: $php_binary"
     echo ""
     
-    # Önce çift yükleme sorunlarını düzelt
-    print_info "Çift yükleme sorunları kontrol ediliyor..."
+    # Önce çift yükleme sorunlarını HER ZAMAN düzelt (kontrol değil, önleyici bakım)
+    print_info "PHP modül yapılandırması temizleniyor ve yeniden oluşturuluyor..."
+    echo ""
     
-    # PHP-FPM varsa kontrol et
-    if systemctl list-units --type=service | grep -q "php${php_version}-fpm"; then
-        # Logları kontrol et
-        local fpm_warnings=$(journalctl -u php${php_version}-fpm -n 20 --no-pager 2>/dev/null | grep -i "warning.*already loaded" || echo "")
-        if [ -n "$fpm_warnings" ]; then
-            print_warning "PHP-FPM'de çift yükleme uyarıları tespit edildi"
-            fix_php_duplicate_modules "$php_version"
-        else
-            print_success "Çift yükleme sorunu yok"
-        fi
-    else
-        # PHP-FPM servisi yoksa ama dom/xml uyarıları varsa
-        local cli_warnings=$($php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo "")
-        if [ -n "$cli_warnings" ]; then
-            print_warning "PHP CLI'de çift yükleme uyarıları tespit edildi"
-            fix_php_duplicate_modules "$php_version"
-        else
-            print_success "Çift yükleme sorunu yok"
-        fi
+    # dom/xml uyarısı var mı kontrol et
+    local has_warnings=false
+    local cli_warnings=$($php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo "")
+    
+    if [ -n "$cli_warnings" ]; then
+        has_warnings=true
+        print_warning "PHP'de çift yükleme uyarıları tespit edildi:"
+        echo "$cli_warnings"
+        echo ""
     fi
+    
+    # Her durumda temizlik yap (önleyici)
+    if [ "$has_warnings" = true ]; then
+        print_info "Çift yükleme sorunları düzeltiliyor..."
+    else
+        print_info "Modül yapılandırması optimize ediliyor (önleyici bakım)..."
+    fi
+    
+    fix_php_duplicate_modules "$php_version"
     
     echo ""
     
@@ -2528,6 +2663,49 @@ quick_fix_php_extensions() {
     # Git safe.directory'yi de düzelt
     echo ""
     fix_git_safe_directory
+    
+    # Redis bağlantı testi (Laravel için önemli)
+    echo ""
+    print_info "Redis bağlantı durumu kontrol ediliyor..."
+    if command -v redis-cli &>/dev/null; then
+        if systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
+            if redis-cli ping 2>/dev/null | grep -q "PONG"; then
+                print_success "✓ Redis çalışıyor ve bağlanılabilir"
+            else
+                print_warning "✗ Redis çalışıyor ama bağlantı kurulamıyor"
+                print_info "Düzeltmek için: Ana Menü > 26) Redis Bağlantı Sorunu Düzelt"
+            fi
+        else
+            print_warning "✗ Redis servisi çalışmıyor"
+            print_info "Başlatmak için: sudo systemctl start redis-server"
+        fi
+    else
+        print_info "Redis kurulu değil (Laravel için opsiyonel)"
+    fi
+    
+    # Composer test (eğer varsa)
+    echo ""
+    if command -v composer &>/dev/null; then
+        print_info "Composer çalışıyor mu test ediliyor..."
+        if composer --version &>/dev/null 2>&1; then
+            print_success "✓ Composer çalışıyor: $(composer --version 2>/dev/null | head -1)"
+            echo ""
+            print_info "════════════════════════════════════════"
+            print_info "  🎉 HER ŞEY HAZIR!"
+            print_info "════════════════════════════════════════"
+            echo ""
+            print_info "Laravel projenizde çalıştırabilirsiniz:"
+            echo "  ${GREEN}composer install${NC}"
+            echo "  ${GREEN}composer update${NC}"
+            echo "  ${GREEN}php artisan migrate${NC}"
+        else
+            print_warning "✗ Composer kurulu ama hata veriyor"
+            print_info "Tekrar test edin: composer --version"
+        fi
+    else
+        print_info "Composer kurulu değil"
+        print_info "Kurmak için: Ana Menü > 10) Tekil Servis Kurulumu > 6) Composer"
+    fi
 }
 
 install_composer() {
