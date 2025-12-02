@@ -467,6 +467,9 @@ install_php() {
                 print_info "Kurulu PHP eklentileri kontrol ediliyor..."
                 check_and_install_missing_php_extensions $version
                 
+                # PHP eklenti yükleme sırasını düzelt
+                fix_php_extension_loading_order $version
+                
                 # Mevcut Nginx yapılandırmalarını PHP için güncelle
                 update_nginx_for_php $version
             else
@@ -484,6 +487,104 @@ install_php() {
         print_info "Kurulu paketleri kontrol edin: dpkg -l | grep php$version-fpm"
         return 1
     fi
+}
+
+fix_php_extension_loading_order() {
+    local version=$1
+    
+    print_info "PHP eklenti yükleme sırası düzeltiliyor..."
+    
+    # PHP mods-available dizini
+    local mods_dir="/etc/php/$version/mods-available"
+    
+    if [ ! -d "$mods_dir" ]; then
+        print_warning "PHP mods dizini bulunamadı: $mods_dir"
+        return 1
+    fi
+    
+    # Bağımlılık sırası: bazı eklentiler diğerlerine bağımlı
+    # priority: 10 (önce yüklenmeli), 20 (normal), 30 (sonra yüklenmeli)
+    
+    # PDO ve mysqlnd önce yüklenmeli (mysqli ve pdo_mysql için gerekli)
+    if [ -f "$mods_dir/pdo.ini" ]; then
+        sed -i '1s/^/; priority=10\n/' "$mods_dir/pdo.ini" 2>/dev/null || true
+    fi
+    
+    if [ -f "$mods_dir/mysqlnd.ini" ]; then
+        sed -i '1s/^/; priority=10\n/' "$mods_dir/mysqlnd.ini" 2>/dev/null || true
+    fi
+    
+    # DOM/XML önce yüklenmeli (xsl için gerekli)
+    if [ -f "$mods_dir/dom.ini" ]; then
+        sed -i '1s/^/; priority=10\n/' "$mods_dir/dom.ini" 2>/dev/null || true
+    fi
+    
+    if [ -f "$mods_dir/xml.ini" ]; then
+        sed -i '1s/^/; priority=10\n/' "$mods_dir/xml.ini" 2>/dev/null || true
+    fi
+    
+    # mysqli ve pdo_mysql sonra yüklenmeli
+    if [ -f "$mods_dir/mysqli.ini" ]; then
+        sed -i '1s/^/; priority=20\n/' "$mods_dir/mysqli.ini" 2>/dev/null || true
+    fi
+    
+    if [ -f "$mods_dir/pdo_mysql.ini" ]; then
+        sed -i '1s/^/; priority=20\n/' "$mods_dir/pdo_mysql.ini" 2>/dev/null || true
+    fi
+    
+    # XSL en son yüklenmeli
+    if [ -f "$mods_dir/xsl.ini" ]; then
+        sed -i '1s/^/; priority=30\n/' "$mods_dir/xsl.ini" 2>/dev/null || true
+    fi
+    
+    # Alternatif çözüm: conf.d dizinindeki dosyaları yeniden adlandır (sayısal öncelik)
+    for conf_dir in "/etc/php/$version/cli/conf.d" "/etc/php/$version/fpm/conf.d"; do
+        if [ -d "$conf_dir" ]; then
+            print_info "Düzeltiliyor: $conf_dir"
+            
+            # mysqlnd ve pdo önce (10-)
+            if [ -L "$conf_dir/20-mysqlnd.ini" ]; then
+                rm -f "$conf_dir/20-mysqlnd.ini"
+                ln -s "$mods_dir/mysqlnd.ini" "$conf_dir/10-mysqlnd.ini" 2>/dev/null || true
+            fi
+            
+            if [ -L "$conf_dir/20-pdo.ini" ]; then
+                rm -f "$conf_dir/20-pdo.ini"
+                ln -s "$mods_dir/pdo.ini" "$conf_dir/10-pdo.ini" 2>/dev/null || true
+            fi
+            
+            # dom ve xml önce (10-)
+            if [ -L "$conf_dir/20-dom.ini" ]; then
+                rm -f "$conf_dir/20-dom.ini"
+                ln -s "$mods_dir/dom.ini" "$conf_dir/10-dom.ini" 2>/dev/null || true
+            fi
+            
+            if [ -L "$conf_dir/20-xml.ini" ]; then
+                rm -f "$conf_dir/20-xml.ini"
+                ln -s "$mods_dir/xml.ini" "$conf_dir/10-xml.ini" 2>/dev/null || true
+            fi
+            
+            # mysqli ve pdo_mysql sonra (30-)
+            if [ -L "$conf_dir/20-mysqli.ini" ]; then
+                rm -f "$conf_dir/20-mysqli.ini"
+                ln -s "$mods_dir/mysqli.ini" "$conf_dir/30-mysqli.ini" 2>/dev/null || true
+            fi
+            
+            if [ -L "$conf_dir/20-pdo_mysql.ini" ]; then
+                rm -f "$conf_dir/20-pdo_mysql.ini"
+                ln -s "$mods_dir/pdo_mysql.ini" "$conf_dir/30-pdo_mysql.ini" 2>/dev/null || true
+            fi
+            
+            # xsl en son (40-)
+            if [ -L "$conf_dir/20-xsl.ini" ]; then
+                rm -f "$conf_dir/20-xsl.ini"
+                ln -s "$mods_dir/xsl.ini" "$conf_dir/40-xsl.ini" 2>/dev/null || true
+            fi
+        fi
+    done
+    
+    print_success "PHP eklenti yükleme sırası düzeltildi"
+    return 0
 }
 
 check_and_install_missing_php_extensions() {
@@ -592,14 +693,62 @@ check_and_install_missing_php_extensions() {
         fi
     done
     
+    # PHP eklenti yükleme sırasını düzelt (bağımlılık sorunlarını önlemek için)
+    print_info "PHP eklenti bağımlılıkları düzeltiliyor..."
+    fix_php_extension_loading_order $version
+    
     # PHP-FPM'i yeniden başlat (eklentilerin yüklenmesi için)
-    if [ $installed_count -gt 0 ]; then
+    if [ $installed_count -gt 0 ] || [ $failed_count -gt 0 ]; then
         print_info "PHP-FPM yeniden başlatılıyor (eklentilerin yüklenmesi için)..."
         systemctl restart php$version-fpm
         sleep 2
         
         if systemctl is-active --quiet php$version-fpm; then
             print_success "PHP-FPM başarıyla yeniden başlatıldı"
+            
+            # PHP-FPM loglarını kontrol et (hata var mı?)
+            local fpm_errors=$(journalctl -u php$version-fpm -n 20 --no-pager 2>/dev/null | grep -i "warning\|error" | grep -i "unable to load" || echo "")
+            
+            if [ -n "$fpm_errors" ]; then
+                print_warning "PHP-FPM'de bazı eklenti yükleme hataları tespit edildi"
+                print_info "Hatalar düzeltiliyor..."
+                
+                # Hatalı eklentileri tespit et ve düzelt
+                if echo "$fpm_errors" | grep -qi "mysqli"; then
+                    print_info "mysqli bağımlılığı düzeltiliyor..."
+                    apt install --reinstall -y php$version-mysql 2>/dev/null || true
+                fi
+                
+                if echo "$fpm_errors" | grep -qi "pdo_mysql"; then
+                    print_info "pdo_mysql bağımlılığı düzeltiliyor..."
+                    apt install --reinstall -y php$version-mysql 2>/dev/null || true
+                fi
+                
+                if echo "$fpm_errors" | grep -qi "xsl"; then
+                    print_info "xsl bağımlılığı düzeltiliyor..."
+                    apt install --reinstall -y php$version-xml php$version-xsl 2>/dev/null || true
+                fi
+                
+                # Yükleme sırasını tekrar düzelt
+                fix_php_extension_loading_order $version
+                
+                # PHP-FPM'i tekrar başlat
+                print_info "PHP-FPM tekrar başlatılıyor..."
+                systemctl restart php$version-fpm
+                sleep 2
+                
+                # Son kontrol
+                local final_errors=$(journalctl -u php$version-fpm -n 10 --no-pager 2>/dev/null | grep -i "warning\|error" | grep -i "unable to load" || echo "")
+                
+                if [ -z "$final_errors" ]; then
+                    print_success "Tüm PHP eklenti hataları düzeltildi!"
+                else
+                    print_warning "Bazı eklenti hataları devam ediyor, manuel kontrol gerekebilir"
+                    echo "$final_errors"
+                fi
+            else
+                print_success "PHP eklentileri hatasız yüklendi!"
+            fi
         else
             print_error "PHP-FPM yeniden başlatılamadı!"
             return 1
