@@ -324,10 +324,30 @@ install_php() {
     
     # PHP-FPM başarıyla kuruldu, şimdi diğer paketleri kur
     print_info "PHP eklentileri ve CLI kuruluyor..."
-    apt install -y php$version-cli php$version-common \
-        php$version-mysql php$version-zip php$version-gd php$version-mbstring \
-        php$version-curl php$version-xml php$version-bcmath php$version-json \
-        php$version-opcache php$version-intl
+    
+    # Temel paketler listesi
+    local php_packages="php$version-cli php$version-common php$version-mysql php$version-zip php$version-gd php$version-mbstring php$version-curl php$version-xml php$version-bcmath php$version-opcache php$version-intl"
+    
+    # JSON paketi (bazı versiyonlarda ayrı paket olarak gelmeyebilir)
+    if apt-cache search "php$version-json" 2>/dev/null | grep -q "php$version-json"; then
+        php_packages="$php_packages php$version-json"
+    fi
+    
+    # Paketleri kur
+    if ! apt install -y $php_packages; then
+        print_warning "Bazı PHP paketleri kurulamadı, eksik paketler kontrol ediliyor..."
+        
+        # Her paketi tek tek kur (hata toleranslı)
+        for pkg in $php_packages; do
+            if apt install -y $pkg 2>/dev/null; then
+                print_success "$pkg kuruldu"
+            else
+                print_warning "$pkg kurulamadı (atlanıyor)"
+            fi
+        done
+    else
+        print_success "Temel PHP paketleri kuruldu"
+    fi
     
     # PHP-FPM'in düzgün kurulduğunu doğrula
     if ! systemctl list-unit-files | grep -q "php$version-fpm.service"; then
@@ -337,10 +357,29 @@ install_php() {
     
     print_success "PHP-FPM başarıyla kuruldu"
     
-    # Imagick paketi (opsiyonel, hata olsa bile devam et)
-    if apt-cache search php$version-imagick | grep -q "php$version-imagick"; then
-        apt install -y php$version-imagick 2>/dev/null || print_warning "php$version-imagick kurulamadı (opsiyonel)"
-    fi
+    # Tüm gerekli eklentiler (zorunlu)
+    print_info "Tüm gerekli PHP eklentileri kuruluyor..."
+    local required_packages="php$version-imagick php$version-soap php$version-xsl php$version-tidy php$version-imap php$version-gmp php$version-sodium php$version-pdo php$version-sqlite3 php$version-pgsql php$version-ldap php$version-readline php$version-pcntl"
+    
+    for pkg in $required_packages; do
+        if apt-cache search "$pkg" 2>/dev/null | grep -q "$pkg"; then
+            if apt install -y $pkg 2>/dev/null; then
+                print_success "$pkg kuruldu"
+            else
+                print_warning "$pkg kurulamadı, tekrar deneniyor..."
+                # Broken dependencies düzelt
+                apt --fix-broken install -y 2>/dev/null || true
+                # Tekrar dene
+                if apt install -y $pkg 2>/dev/null; then
+                    print_success "$pkg kuruldu (ikinci deneme)"
+                else
+                    print_error "$pkg kurulamadı!"
+                fi
+            fi
+        else
+            print_warning "$pkg paketi repository'de bulunamadı"
+        fi
+    done
     
     # Framework'e özel ek paketler
     case $FRAMEWORK in
@@ -424,6 +463,10 @@ install_php() {
                     print_warning "PHP-FPM socket dosyası henüz oluşmadı, birkaç saniye bekleyin"
                 fi
                 
+                # Kurulu eklentileri kontrol et ve eksik olanları kur
+                print_info "Kurulu PHP eklentileri kontrol ediliyor..."
+                check_and_install_missing_php_extensions $version
+                
                 # Mevcut Nginx yapılandırmalarını PHP için güncelle
                 update_nginx_for_php $version
             else
@@ -441,6 +484,140 @@ install_php() {
         print_info "Kurulu paketleri kontrol edin: dpkg -l | grep php$version-fpm"
         return 1
     fi
+}
+
+check_and_install_missing_php_extensions() {
+    local version=$1
+    
+    print_info "PHP eklentileri kontrol ediliyor..."
+    
+    # Tüm gerekli eklentiler listesi
+    local required_extensions=(
+        "curl" "gd" "mbstring" "mysql" "mysqli" "pdo" "pdo_mysql" 
+        "zip" "xml" "intl" "opcache" "bcmath" "soap" "xsl" 
+        "tidy" "imap" "gmp" "sodium" "imagick" "openssl" 
+        "fileinfo" "exif" "sockets" "pcntl" "gettext" "shmop"
+    )
+    
+    # Kurulu eklentileri al
+    local installed_extensions=$(php$version -m 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    
+    # Eksik eklentileri tespit et
+    local missing_extensions=()
+    local missing_count=0
+    
+    for ext in "${required_extensions[@]}"; do
+        # Eklenti adını küçük harfe çevir
+        local ext_lower=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+        
+        # Eklenti kurulu mu kontrol et
+        if ! echo "$installed_extensions" | grep -qi "^${ext_lower}$"; then
+            missing_extensions+=("$ext_lower")
+            ((missing_count++))
+        fi
+    done
+    
+    if [ $missing_count -eq 0 ]; then
+        print_success "Tüm gerekli PHP eklentileri kurulu"
+        return 0
+    fi
+    
+    print_warning "$missing_count eksik PHP eklentisi tespit edildi"
+    print_info "Eksik eklentiler: ${missing_extensions[*]}"
+    print_info "Eksik eklentiler kuruluyor..."
+    
+    # Eksik eklentileri kur
+    local installed_count=0
+    local failed_count=0
+    
+    for ext in "${missing_extensions[@]}"; do
+        # Paket adını belirle (bazı eklentiler farklı paket adlarına sahip)
+        local pkg_name="php$version-$ext"
+        
+        # Özel paket adları
+        case $ext in
+            "mysqli"|"pdo_mysql")
+                pkg_name="php$version-mysql"
+                ;;
+            "pdo")
+                # PDO genellikle php-common ile gelir, ayrı paket olmayabilir
+                if apt-cache search "php$version-pdo" 2>/dev/null | grep -q "php$version-pdo"; then
+                    pkg_name="php$version-pdo"
+                else
+                    print_info "PDO zaten php-common ile kurulu olmalı, atlanıyor"
+                    continue
+                fi
+                ;;
+            "openssl")
+                # OpenSSL genellikle php-common ile gelir
+                if apt-cache search "php$version-openssl" 2>/dev/null | grep -q "php$version-openssl"; then
+                    pkg_name="php$version-openssl"
+                else
+                    print_info "OpenSSL zaten php-common ile kurulu olmalı, atlanıyor"
+                    continue
+                fi
+                ;;
+            "fileinfo"|"exif"|"sockets"|"gettext"|"shmop")
+                # Bu eklentiler genellikle php-common ile gelir
+                print_info "$ext zaten php-common ile kurulu olmalı, atlanıyor"
+                continue
+                ;;
+        esac
+        
+        # Paketi kur
+        if apt-cache search "$pkg_name" 2>/dev/null | grep -q "^$pkg_name "; then
+            print_info "$pkg_name kuruluyor..."
+            
+            if apt install -y $pkg_name 2>/dev/null; then
+                print_success "$pkg_name kuruldu"
+                ((installed_count++))
+            else
+                print_warning "$pkg_name kurulamadı, düzeltme deneniyor..."
+                
+                # Broken dependencies düzelt
+                apt --fix-broken install -y 2>/dev/null || true
+                
+                # Tekrar dene
+                if apt install -y $pkg_name 2>/dev/null; then
+                    print_success "$pkg_name kuruldu (ikinci deneme)"
+                    ((installed_count++))
+                else
+                    print_error "$pkg_name kurulamadı!"
+                    ((failed_count++))
+                fi
+            fi
+        else
+            print_warning "$pkg_name paketi repository'de bulunamadı"
+            ((failed_count++))
+        fi
+    done
+    
+    # PHP-FPM'i yeniden başlat (eklentilerin yüklenmesi için)
+    if [ $installed_count -gt 0 ]; then
+        print_info "PHP-FPM yeniden başlatılıyor (eklentilerin yüklenmesi için)..."
+        systemctl restart php$version-fpm
+        sleep 2
+        
+        if systemctl is-active --quiet php$version-fpm; then
+            print_success "PHP-FPM başarıyla yeniden başlatıldı"
+        else
+            print_error "PHP-FPM yeniden başlatılamadı!"
+            return 1
+        fi
+    fi
+    
+    # Sonuçları göster
+    print_info "Eklenti kurulum özeti:"
+    echo -e "  ${GREEN}Başarıyla kuruldu:${NC} $installed_count"
+    if [ $failed_count -gt 0 ]; then
+        echo -e "  ${RED}Kurulamadı:${NC} $failed_count"
+    fi
+    
+    # Kurulu eklentileri tekrar kontrol et
+    print_info "Kurulu PHP eklentileri:"
+    php$version -m 2>/dev/null | grep -v "^\[" | sort
+    
+    return 0
 }
 
 update_nginx_configs_for_php() {
