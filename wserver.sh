@@ -9564,9 +9564,65 @@ install_ssl_to_remote_nginx() {
     local scp_cmd="scp -o StrictHostKeyChecking=no"
     
     if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
-        ssh_cmd="sshpass -p '$remote_pass' ssh -o StrictHostKeyChecking=no"
-        scp_cmd="sshpass -p '$remote_pass' scp -o StrictHostKeyChecking=no"
+        # Şifre dosyası kullan (özel karakter güvenli)
+        local pass_file="/tmp/.web_ssh_pass_$$"
+        
+        # Şifreyi güvenli şekilde dosyaya yaz (özel karakterleri koru)
+        printf '%s\n' "$remote_pass" > "$pass_file"
+        chmod 600 "$pass_file"
+        
+        ssh_cmd="sshpass -f $pass_file ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+        scp_cmd="sshpass -f $pass_file scp -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+        
+        print_info "✓ Şifre geçici dosyaya yazıldı (özel karakter korumalı)"
+        echo "  Dosya: $pass_file (chmod 600)"
     fi
+    
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  MANUEL TEST KOMUTLARI${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo "A sunucusundan B'ye SSH testi:"
+    echo ""
+    if [ "$ssh_method" = "2" ]; then
+        echo "# Şifre dosyası ile (özel karakter güvenli):"
+        echo "  echo 'ŞİFRENİZ' > /tmp/test_pass"
+        echo "  chmod 600 /tmp/test_pass"
+        echo "  sshpass -f /tmp/test_pass ssh root@$remote_ip 'echo TEST'"
+        echo ""
+        echo "# Direkt şifre ile (basit şifreler için):"
+        echo "  sshpass -p 'ŞİFRENİZ' ssh root@$remote_ip 'echo TEST'"
+    else
+        echo "  ssh $remote_user@$remote_ip 'echo TEST'"
+    fi
+    echo "═══════════════════════════════════════════"
+    echo ""
+    
+    # İsteğe bağlı manuel test
+    if ask_yes_no "Manuel SSH testi yapmak ister misiniz?"; then
+        echo ""
+        print_info "SSH bağlantı testi yapılıyor..."
+        
+        local manual_test=$($ssh_cmd $remote_user@$remote_ip "hostname && echo 'SSH_OK'" 2>&1)
+        
+        if echo "$manual_test" | grep -q "SSH_OK"; then
+            print_success "✓ SSH bağlantısı çalışıyor!"
+            echo "  Hostname: $(echo "$manual_test" | head -1)"
+        else
+            print_error "✗ SSH bağlantısı çalışmıyor!"
+            echo ""
+            echo "Hata detayı:"
+            echo "$manual_test" | head -20
+            echo ""
+            print_info "B sunucusunda SSH yapılandırmasını kontrol edin:"
+            echo "  sudo nano /etc/ssh/sshd_config"
+            echo "  → PasswordAuthentication yes"
+            echo "  → PermitRootLogin yes"
+            echo "  sudo systemctl restart sshd"
+            return 1
+        fi
+    fi
+    echo ""
     
     # Web sunucusunda /etc/letsencrypt dizini var mı
     print_info "Web sunucusunda dizinler oluşturuluyor..."
@@ -9574,9 +9630,30 @@ install_ssl_to_remote_nginx() {
     # Root kullanıcısı mı?
     if [ "$remote_user" = "root" ]; then
         # Root - sudo gereksiz
+        print_info "ROOT kullanıcısı ile bağlanılıyor..."
+        echo "  Komut: $ssh_cmd $remote_user@$remote_ip"
+        echo ""
+        
+        # Debug: SSH bağlantısını test et
+        local test_result=$($ssh_cmd $remote_user@$remote_ip "echo 'SSH_TEST_OK'" 2>&1)
+        
+        if echo "$test_result" | grep -q "SSH_TEST_OK"; then
+            print_success "✓ ROOT SSH bağlantısı çalışıyor"
+        else
+            print_error "✗ ROOT SSH bağlantısı çalışmıyor!"
+            echo ""
+            echo "Hata detayı:"
+            echo "$test_result"
+            echo ""
+            print_warning "Manuel test yapın:"
+            echo "  sshpass -p 'şifreniz' ssh root@$remote_ip 'echo test'"
+            return 1
+        fi
+        
+        # Dizin oluştur
         $ssh_cmd $remote_user@$remote_ip "
-            mkdir -p /etc/letsencrypt/live/$domain
-            chmod 755 /etc/letsencrypt/live/$domain
+            mkdir -p /etc/letsencrypt/live/$domain 2>&1
+            chmod 755 /etc/letsencrypt/live/$domain 2>&1
             echo '[OK] Dizin oluşturuldu (root)'
         "
     else
@@ -9741,7 +9818,15 @@ install_ssl_to_remote_nginx() {
         fi
     fi
     
-    if [ $? -eq 0 ]; then
+    local result=$?
+    
+    # Şifre dosyasını temizle
+    if [ "$ssh_method" = "2" ] && [ -f "$pass_file" ]; then
+        rm -f "$pass_file" 2>/dev/null
+        print_info "✓ Geçici şifre dosyası temizlendi"
+    fi
+    
+    if [ $result -eq 0 ]; then
         print_success "═══════════════════════════════════════════"
         print_success "  ✓ SSL WEB SUNUCUSUNA KURULDU!"
         print_success "═══════════════════════════════════════════"
