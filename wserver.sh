@@ -71,6 +71,109 @@ reload_bind9() {
     fi
 }
 
+# LOKAL DNS challenge hook'ları oluştur (A sunucusunda)
+create_local_dns_hooks() {
+    local domain=$1
+    
+    print_info "LOKAL DNS hook'ları oluşturuluyor..."
+    
+    # Auth hook (TXT ekle - LOKAL)
+    cat > /usr/local/bin/certbot-dns-local-add.sh <<'HOOK_ADD'
+#!/bin/bash
+# LOKAL DNS Challenge - TXT Ekle
+
+DOMAIN="$CERTBOT_DOMAIN"
+TOKEN="$CERTBOT_VALIDATION"
+MAIN_DOMAIN=$(echo "$DOMAIN" | rev | cut -d'.' -f1-2 | rev)
+ZONE_FILE="/etc/bind/db.$MAIN_DOMAIN"
+
+echo "[INFO] TXT kaydı ekleniyor (LOKAL): _acme-challenge.$DOMAIN"
+
+# Zone var mı
+if [ ! -f "$ZONE_FILE" ]; then
+    echo "[HATA] Zone dosyası yok: $ZONE_FILE"
+    exit 1
+fi
+
+# Subdomain parse
+RECORD_NAME="_acme-challenge"
+if [ "$DOMAIN" != "$MAIN_DOMAIN" ]; then
+    SUBDOMAIN=$(echo "$DOMAIN" | sed "s/\.$MAIN_DOMAIN//")
+    RECORD_NAME="_acme-challenge.$SUBDOMAIN"
+fi
+
+# Eski TXT kayıtlarını sil
+sed -i "/$RECORD_NAME.*IN.*TXT/d" "$ZONE_FILE"
+
+# Serial güncelle
+CURRENT_SERIAL=$(grep "Serial" "$ZONE_FILE" | grep -oE '[0-9]+' | head -1)
+NEW_SERIAL=$(date +%Y%m%d%H)
+[ "$NEW_SERIAL" -le "$CURRENT_SERIAL" ] && NEW_SERIAL=$((CURRENT_SERIAL + 1))
+sed -i "s/$CURRENT_SERIAL/$NEW_SERIAL/" "$ZONE_FILE"
+
+# TXT kaydı ekle
+echo "$RECORD_NAME     IN      TXT     \"$TOKEN\"" >> "$ZONE_FILE"
+
+# BIND9 reload
+if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
+    systemctl reload bind9
+else
+    systemctl reload named
+fi
+
+echo "[OK] TXT kaydı eklendi (LOKAL)"
+sleep 60  # DNS propagation
+HOOK_ADD
+    
+    # Cleanup hook (TXT sil - LOKAL)
+    cat > /usr/local/bin/certbot-dns-local-cleanup.sh <<'HOOK_CLEANUP'
+#!/bin/bash
+# LOKAL DNS Challenge - TXT Sil
+
+DOMAIN="$CERTBOT_DOMAIN"
+MAIN_DOMAIN=$(echo "$DOMAIN" | rev | cut -d'.' -f1-2 | rev)
+ZONE_FILE="/etc/bind/db.$MAIN_DOMAIN"
+
+echo "[INFO] TXT kaydı siliniyor (LOKAL): _acme-challenge.$DOMAIN"
+
+if [ ! -f "$ZONE_FILE" ]; then
+    echo "[UYARI] Zone dosyası yok, atlaniyor"
+    exit 0
+fi
+
+# Subdomain parse
+RECORD_NAME="_acme-challenge"
+if [ "$DOMAIN" != "$MAIN_DOMAIN" ]; then
+    SUBDOMAIN=$(echo "$DOMAIN" | sed "s/\.$MAIN_DOMAIN//")
+    RECORD_NAME="_acme-challenge.$SUBDOMAIN"
+fi
+
+# TXT kaydını sil
+sed -i "/$RECORD_NAME.*IN.*TXT/d" "$ZONE_FILE"
+
+# Serial güncelle
+CURRENT_SERIAL=$(grep "Serial" "$ZONE_FILE" | grep -oE '[0-9]+' | head -1)
+NEW_SERIAL=$((CURRENT_SERIAL + 1))
+sed -i "s/$CURRENT_SERIAL/$NEW_SERIAL/" "$ZONE_FILE"
+
+# BIND9 reload
+if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
+    systemctl reload bind9
+else
+    systemctl reload named
+fi
+
+echo "[OK] TXT kaydı silindi (LOKAL)"
+HOOK_CLEANUP
+    
+    chmod +x /usr/local/bin/certbot-dns-local-add.sh
+    chmod +x /usr/local/bin/certbot-dns-local-cleanup.sh
+    
+    print_success "✓ LOKAL DNS hook'ları hazır"
+    echo "  /usr/local/bin/certbot-dns-local-add.sh"
+    echo "  /usr/local/bin/certbot-dns-local-cleanup.sh"
+}
+
 print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
@@ -8753,40 +8856,100 @@ create_ssl_dns_auto() {
     fi
     
     echo -e "${CYAN}Otomatik DNS Challenge Nasıl Çalışır?${NC}"
-    echo "1. Script DNS sunucusuna SSH ile bağlanır"
-    echo "2. TXT kaydını otomatik ekler"
-    echo "3. Certbot doğrulama yapar"
-    echo "4. Sertifika alınır"
-    echo "5. TXT kaydı otomatik silinir"
+    echo "1. TXT kaydını LOKAL DNS'e ekler (/etc/bind)"
+    echo "2. Certbot doğrulama yapar"
+    echo "3. Sertifika alınır (bu sunucuda)"
+    echo "4. SSH ile Web sunucusuna bağlanır"
+    echo "5. Sertifikayı Nginx'e kurar"
     echo ""
     
-    # DNS sunucusu bilgileri
-    local dns_server_ip=""
-    local dns_server_user="root"
-    
-    if [ "$MULTI_SERVER_MODE" = true ] && [ -n "$DNS_SERVER_IP" ]; then
-        dns_server_ip="$DNS_SERVER_IP"
-        echo -e "${CYAN}Yapılandırmadan DNS sunucusu:${NC} $dns_server_ip"
-    else
-        ask_input "DNS sunucusu IP adresi" dns_server_ip
+    # Bu sunucuda DNS var mı kontrol et
+    if [ ! -d "/etc/bind" ] && ! command -v named-checkzone &>/dev/null; then
+        print_error "Bu sunucuda BIND9 bulunamadı!"
+        print_info "Bu fonksiyon DNS sunucusunda çalıştırılmalıdır"
+        print_info "Mevcut sunucu: $(hostname -I | awk '{print $1}')"
+        return 1
     fi
     
-    ask_input "DNS sunucusu SSH kullanıcı adı" dns_server_user "root"
+    print_success "✓ BIND9 tespit edildi (lokal DNS)"
     
-    # SSH bağlantı yöntemi seçimi
+    # Web sunucusu bilgileri (sertifika kurulacak yer)
+    local web_server_ip=""
+    local web_server_user="root"
+    
+    if [ "$MULTI_SERVER_MODE" = true ] && [ -n "$WEB_SERVER_IP" ]; then
+        web_server_ip="$WEB_SERVER_IP"
+        echo -e "${CYAN}Web sunucusu (Nginx):${NC} $web_server_ip"
+    else
+        local current_ip=$(hostname -I | awk '{print $1}')
+        ask_input "Web sunucusu IP (Nginx'in çalıştığı yer)" web_server_ip "$current_ip"
+    fi
+    
+    # Aynı sunucudaysa SSH gerektirmez
+    local same_server=false
+    local current_ip=$(hostname -I | awk '{print $1}')
+    if [ "$web_server_ip" = "$current_ip" ] || [ "$web_server_ip" = "127.0.0.1" ] || [ "$web_server_ip" = "localhost" ]; then
+        same_server=true
+        print_info "DNS ve Web aynı sunucuda, SSH gerektirmez"
+    else
+        print_info "Web sunucusu farklı, SSH ile sertifika kurulacak"
+        ask_input "Web sunucusu SSH kullanıcı adı" web_server_user "root"
+    fi
+    
+    # SSL oluştur (LOKAL DNS challenge)
+    print_info "SSL sertifikası oluşturuluyor (DNS challenge lokal)..."
+    
+    # Certbot DNS plugin kurulumu
+    if ! command -v certbot &>/dev/null; then
+        print_info "Certbot kuruluyor..."
+        snap install --classic certbot 2>/dev/null || apt install -y certbot
+        ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
+    fi
+    
+    # LOKAL DNS hook scriptleri oluştur
+    create_local_dns_hooks "$domain"
+    
+    # Certbot çalıştır (LOKAL hook'lar ile)
+    print_info "Certbot başlatılıyor..."
+    certbot certonly \
+        --manual \
+        --preferred-challenges dns \
+        --manual-auth-hook /usr/local/bin/certbot-dns-local-add.sh \
+        --manual-cleanup-hook /usr/local/bin/certbot-dns-local-cleanup.sh \
+        --agree-tos \
+        --email $email \
+        $certbot_domains \
+        --non-interactive
+    
+    if [ $? -ne 0 ]; then
+        print_error "SSL oluşturma başarısız!"
+        return 1
+    fi
+    
+    print_success "✓ SSL sertifikası oluşturuldu!"
+    
+    # Aynı sunucuysa direkt Nginx'e kur
+    if [ "$same_server" = true ]; then
+        print_info "Sertifika Nginx'e kuruluyor (lokal)..."
+        install_ssl_to_nginx "$domain"
+        return $?
+    fi
+    
+    # Farklı sunucuysa SSH ile kur
+    print_header "Web Sunucusuna SSL Kurulumu"
+    
     echo ""
     print_header "SSH Bağlantı Yöntemi"
     
-    echo -e "${CYAN}Hangi yöntemle bağlanmak istersiniz?${NC}"
-    echo "1) SSH Key (Önerilen - Şifresiz, güvenli)"
-    echo "2) Şifre ile (Basit - sshpass gerekli)"
+    echo -e "${CYAN}Web sunucusuna nasıl bağlanmak istersiniz?${NC}"
+    echo "1) SSH Key (Önerilen)"
+    echo "2) Şifre ile (sshpass)"
     echo ""
     
-    read -p "Seçiminiz (1-2) [2]: " ssh_method
-    ssh_method=${ssh_method:-2}
+    read -p "Seçiminiz (1-2) [1]: " ssh_method
+    ssh_method=${ssh_method:-1}
     
     local ssh_password=""
-    local ssh_connected=false
     
     if [ "$ssh_method" = "1" ]; then
         # SSH Key yöntemi
@@ -9024,7 +9187,7 @@ if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
     RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
 fi
 
-# SSH ile DNS sunucusunda TXT kaydı ekle
+# SSH ile DNS sunucusunda TXT kaydı ekle (A sunucusunda çalışır)
 sshpass -f "\$PASSWORD_FILE" ssh -o StrictHostKeyChecking=no \$DNS_USER@\$DNS_SERVER "
 set -e
 MAIN_DOMAIN='\$MAIN_DOMAIN'
@@ -9032,47 +9195,21 @@ RECORD_NAME='\$RECORD_NAME'
 TOKEN='\$TOKEN'
 ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
-# BIND9 kurulu mu detaylı kontrol
-BIND9_OK=false
-
-# Kontrol 1: /etc/bind dizini
-if [ -d '/etc/bind' ]; then
-    BIND9_OK=true
-fi
-
-# Kontrol 2: named-checkzone komutu
-if command -v named-checkzone >/dev/null 2>&1; then
-    BIND9_OK=true
-fi
-
-# Kontrol 3: bind9 paketi
-if dpkg -l 2>/dev/null | grep -q '^ii.*bind9 '; then
-    BIND9_OK=true
-fi
-
-# BIND9 yoksa kur
-if [ \"\$BIND9_OK\" = \"false\" ]; then
-    echo '[UYARI] BIND9 tespit edilemedi, kuruluyor...'
-    
-    export DEBIAN_FRONTEND=noninteractive
-    apt update -qq
-    apt install -y bind9 bind9utils bind9-doc dnsutils
-    
-    echo '[OK] BIND9 kuruldu'
-fi
-
-# Servis kontrolü (sessiz)
-if ! systemctl is-active --quiet bind9 2>/dev/null && ! systemctl is-active --quiet named 2>/dev/null; then
-    if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
-        systemctl start bind9 2>/dev/null || true
-    else
-        systemctl start named 2>/dev/null || true
-    fi
-fi
-
-# Zone dosyası kontrolü ve otomatik oluşturma
+# Zone dosyası var mı kontrol et (A sunucusunda)
 if [ ! -f \"\\\$ZONE_FILE\" ]; then
-    echo '[INFO] Zone oluşturuluyor: '\\\$ZONE_FILE
+    echo '[INFO] Zone yok, oluşturuluyor: '\\\$ZONE_FILE
+    
+    # BIND9 kurulu mu (sadece zone yoksa kontrol et)
+    if [ ! -d '/etc/bind' ] && ! command -v named-checkzone >/dev/null 2>&1; then
+        echo '[INFO] BIND9 kuruluyor (A sunucusunda)...'
+        export DEBIAN_FRONTEND=noninteractive
+        apt update -qq && apt install -y bind9 bind9utils bind9-doc dnsutils
+    fi
+    
+    # Servis başlat
+    if ! systemctl is-active --quiet bind9 2>/dev/null && ! systemctl is-active --quiet named 2>/dev/null; then
+        systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service' && systemctl start bind9 || systemctl start named
+    fi
     
     WEB_SERVER_IP=\"$web_server_ip\"
     SERIAL=\\\$(date +%Y%m%d)01
