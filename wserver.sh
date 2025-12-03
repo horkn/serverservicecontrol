@@ -9362,7 +9362,7 @@ test_dns_hook_manually() {
     ask_password "DNS sunucusu şifresi" dns_password
     
     # Ana domain'i bul
-    local main_domain=\$(echo "\$test_domain" | rev | cut -d'.' -f1-2 | rev)
+    local main_domain=$(echo "$test_domain" | rev | cut -d'.' -f1-2 | rev)
     local record_name="_acme-challenge-test"
     
     echo ""
@@ -9378,7 +9378,7 @@ test_dns_hook_manually() {
     # Test 0: Zone dosyası var mı?
     print_info "Test 0: Zone dosyası kontrolü..."
     
-    local zone_check=\$(sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
+    local zone_check=$(sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
         if [ -f '/etc/bind/db.$main_domain' ]; then
             echo 'EXISTS'
             ls -lh /etc/bind/db.$main_domain
@@ -9405,7 +9405,7 @@ test_dns_hook_manually() {
     echo ""
     print_info "Test 1: TXT kaydı ekleme..."
     
-    local add_result=\$(sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
+    local add_result=$(sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
         ZONE_FILE='/etc/bind/db.$main_domain'
         
         # Root mu kontrol et
@@ -9435,7 +9435,7 @@ test_dns_hook_manually() {
     sleep 10
     
     if command -v dig &>/dev/null; then
-        local dns_result=\$(dig @$dns_ip ${record_name}.${main_domain} TXT +short 2>/dev/null)
+        local dns_result=$(dig @$dns_ip ${record_name}.${main_domain} TXT +short 2>/dev/null)
         if echo "$dns_result" | grep -q "$test_token"; then
             print_success "✓ TXT kaydı DNS'de görünüyor!"
             echo "  Sonuç: $dns_result"
@@ -9450,7 +9450,7 @@ test_dns_hook_manually() {
     echo ""
     print_info "Test 3: TXT kaydı silme..."
     
-    local del_result=\$(sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
+    local del_result=$(sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
         ZONE_FILE='/etc/bind/db.$main_domain'
         
         if [ \\\$(id -u) -eq 0 ]; then
