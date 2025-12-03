@@ -603,8 +603,25 @@ multi_server_menu() {
             
             echo -e "${GREEN}✓ Multi-Server Modu: Aktif${NC}"
             echo -e "${CYAN}Bu Sunucu:${NC} $current_ip - Rol: $current_role"
+            echo ""
+            
+            # SSL nerede çalıştırılacağı uyarısı
+            if echo "$current_role" | grep -q "WEB"; then
+                echo -e "${GREEN}✓ Bu sunucuda SSL oluşturabilirsiniz (Nginx var)${NC}"
+            elif echo "$current_role" | grep -q "DNS"; then
+                echo -e "${YELLOW}⚠ SSL için WEB sunucusuna gidin!${NC}"
+                echo "  Bu sunucuda sadece DNS servisi var"
+            fi
         else
             echo -e "${YELLOW}⚠ Multi-Server Modu: Pasif${NC}"
+            echo ""
+            echo -e "${CYAN}Örnek Senaryo:${NC}"
+            echo "  A Server (185.255.4.193) → DNS + Firma sitesi"
+            echo "  B Server (185.255.4.197) → Laravel + Nginx + SSL ← Ana sistem"
+            echo "  C Server (46.37.115.20)  → MySQL Master"
+            echo "  D Server (46.37.115.208) → MySQL Slave"
+            echo "  E Server (46.37.115.31)  → Redis Master"
+            echo "  F Server (46.37.115.137) → Redis Slave"
         fi
         
         echo ""
@@ -8431,6 +8448,45 @@ renew_ssl() {
 create_ssl() {
     print_header "SSL Sertifikası Oluşturma"
     
+    echo ""
+    print_warning "═══════════════════════════════════════════"
+    print_warning "  ÖNEMLİ: SSL SUNUCU KONUMU"
+    print_warning "═══════════════════════════════════════════"
+    echo ""
+    echo -e "${YELLOW}SSL sertifikası NGINX'İN ÇALIŞTIĞI SUNUCUDA oluşturulmalıdır!${NC}"
+    echo ""
+    echo -e "${CYAN}Örnek Multi-Server Yapı:${NC}"
+    echo "  A Server (DNS):     BIND9 çalışıyor"
+    echo "  B Server (Laravel): Nginx + PHP çalışıyor ← SSL BURDA OLUŞTURULMALI!"
+    echo ""
+    echo -e "${YELLOW}Şu anda bu script hangi sunucuda çalışıyor?${NC}"
+    local current_ip=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    echo "  Bu sunucu IP: ${GREEN}$current_ip${NC}"
+    echo ""
+    
+    # Nginx kontrolü
+    if ! command -v nginx &>/dev/null; then
+        print_error "═══════════════════════════════════════════"
+        print_error "  ✗ BU SUNUCUDA NGINX KURULU DEĞİL!"
+        print_error "═══════════════════════════════════════════"
+        echo ""
+        echo -e "${RED}SSL sertifikası sadece Nginx'in çalıştığı sunucuda oluşturulabilir!${NC}"
+        echo ""
+        echo -e "${CYAN}Çözümler:${NC}"
+        echo "  1. Nginx'in çalıştığı sunucuya gidin ve orada bu script'i çalıştırın"
+        echo "  2. Bu sunucuya Nginx kurun (Ana Menü → Seçenek 1)"
+        echo "  3. Manuel DNS challenge kullanın ve sertifikayı elle transfer edin"
+        echo ""
+        
+        if ! ask_yes_no "Yine de devam etmek istiyor musunuz? (Önerilmez)"; then
+            return 1
+        fi
+    else
+        print_success "✓ Bu sunucuda Nginx çalışıyor - SSL kurulabilir"
+    fi
+    
+    echo ""
+    
     if ! command -v certbot &> /dev/null; then
         print_info "Certbot kuruluyor..."
         snap install core
@@ -8453,16 +8509,31 @@ create_ssl() {
         local current_ip=$(hostname -I | awk '{print $1}')
         
         if [ "$DNS_SERVER_IP" != "$current_ip" ] && [ -n "$DNS_SERVER_IP" ]; then
-            print_warning "DNS sunucusu farklı bir IP'de tespit edildi!"
-            echo -e "${CYAN}DNS Server:${NC} $DNS_SERVER_IP"
-            echo -e "${CYAN}Bu Server:${NC} $current_ip"
+            print_warning "═══════════════════════════════════════════"
+            print_warning "  FARKLI SUNUCU TESPİT EDİLDİ"
+            print_warning "═══════════════════════════════════════════"
             echo ""
-            echo -e "${YELLOW}HTTP-01 challenge çalışmayabilir!${NC}"
-            echo "DNS-01 challenge kullanmanız önerilir"
+            echo -e "${CYAN}DNS Server:${NC}      $DNS_SERVER_IP (BIND9 çalışıyor)"
+            echo -e "${CYAN}Bu Server (SSL):${NC} $current_ip (Nginx çalışıyor)"
+            echo ""
+            echo -e "${GREEN}✓ Bu doğru mimari!${NC}"
+            echo ""
+            echo -e "${YELLOW}Nasıl çalışacak?${NC}"
+            echo "  1. SSL sertifikası BU SUNUCUDA oluşturulur ($current_ip)"
+            echo "  2. Certbot, DNS sunucusuna ($DNS_SERVER_IP) SSH ile bağlanır"
+            echo "  3. DNS sunucusunda TXT kaydı ekler (_acme-challenge)"
+            echo "  4. Let's Encrypt TXT kaydını doğrular"
+            echo "  5. SSL sertifikası BU SUNUCUDA Nginx'e kurulur"
+            echo ""
+            echo -e "${YELLOW}HTTP-01 challenge bu yapıda ÇALIŞMAZ!${NC}"
+            echo "DNS-01 challenge kullanmalısınız"
             echo ""
             
-            if ask_yes_no "DNS-01 Challenge kullanmak ister misiniz? (Önerilen)"; then
+            if ask_yes_no "DNS-01 Challenge kullanmak ister misiniz? (Zorunlu)"; then
                 use_dns_challenge=true
+            else
+                print_error "Multi-server yapıda DNS-01 challenge şarttır!"
+                return 1
             fi
         fi
     fi
