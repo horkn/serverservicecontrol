@@ -1453,7 +1453,7 @@ select_cluster_communication_mode() {
     
     echo -e "${CYAN}Sunucularınız nasıl haberleşecek?${NC}"
     echo ""
-    echo -e "${YELLOW}GÜVENLİK SEVİYESİ: En Yüksek → En Düşük${NC}"
+    echo -e "${YELLOW}GÜVENLİK SEVİYESİ: En Yüksek - En Düşük${NC}"
     echo ""
     echo "1) ${GREEN}Private Network${NC} (Hetzner Private Network, DO VPC - EN HIZLI)"
     echo "2) ${GREEN}WireGuard VPN${NC} (Modern, Hızlı - ÖNERİLEN)"
@@ -2073,14 +2073,15 @@ ${server_count}. Redis Slave
    VPN IP: 10.9.0.21
 
 EOF
-
+    
+    cat >> "$summary_file" <<EOF
 ═══════════════════════════════════════════════════════════════════
   DİĞER SUNUCULARDA YAPILACAKLAR
 ═══════════════════════════════════════════════════════════════════
 
 1. Her sunucuda WireGuard kurun:
    sudo bash deepseek_bash_20251127_badcb6.sh
-   → 27) Multi-Server → 3) WireGuard Kurulumu
+   -> 27) Multi-Server -> 3) WireGuard Kurulumu
 
 2. Her sunucuda BU sunucuyu peer olarak ekleyin:
    
@@ -2106,45 +2107,45 @@ EOF
 
 EOF
     
-    [ -n "$DATABASE_SERVER_IP" ] && cat >> "$summary_file" <<EOF
+    [ -n "$DATABASE_SERVER_IP" ] && cat >> "$summary_file" <<'DBMASTER'
 MySQL Master ($DATABASE_SERVER_IP):
-  → Multi-Server → MySQL Master Yapılandır
-  → İzin ver: 10.9.0.2 (Laravel VPN IP)
-EOF
-    [ -n "$DATABASE_SLAVE_IP" ] && echo "  → İzin ver: 10.9.0.11 (Slave VPN IP)" >> "$summary_file"
+  -> Multi-Server -> MySQL Master Yapılandır
+  -> İzin ver: 10.9.0.2 (Laravel VPN IP)
+DBMASTER
+    [ -n "$DATABASE_SLAVE_IP" ] && echo "  -> İzin ver: 10.9.0.11 (Slave VPN IP)" >> "$summary_file"
     [ -n "$DATABASE_SERVER_IP" ] && echo "" >> "$summary_file"
     
-    [ -n "$REDIS_SERVER_IP" ] && cat >> "$summary_file" <<EOF
+    [ -n "$REDIS_SERVER_IP" ] && cat >> "$summary_file" <<'REDISMASTER'
 Redis Master ($REDIS_SERVER_IP):
-  → Multi-Server → Redis Master Yapılandır
-  → İzin ver: 10.9.0.2 (Laravel VPN IP)
-EOF
-    [ -n "$REDIS_SLAVE_IP" ] && echo "  → İzin ver: 10.9.0.21 (Slave VPN IP)" >> "$summary_file"
+  -> Multi-Server -> Redis Master Yapılandır
+  -> İzin ver: 10.9.0.2 (Laravel VPN IP)
+REDISMASTER
+    [ -n "$REDIS_SLAVE_IP" ] && echo "  -> İzin ver: 10.9.0.21 (Slave VPN IP)" >> "$summary_file"
     [ -n "$REDIS_SERVER_IP" ] && echo "" >> "$summary_file"
     
-    [ -n "$DATABASE_SLAVE_IP" ] && cat >> "$summary_file" <<EOF
+    [ -n "$DATABASE_SLAVE_IP" ] && cat >> "$summary_file" <<'DBSLAVE'
 MySQL Slave ($DATABASE_SLAVE_IP):
-  → Multi-Server → MySQL Slave Yapılandır
-  → Master: 10.9.0.10 (MySQL Master VPN IP)
+  -> Multi-Server -> MySQL Slave Yapılandır
+  -> Master: 10.9.0.10 (MySQL Master VPN IP)
 
-EOF
+DBSLAVE
     
-    [ -n "$REDIS_SLAVE_IP" ] && cat >> "$summary_file" <<EOF
+    [ -n "$REDIS_SLAVE_IP" ] && cat >> "$summary_file" <<'REDISSLAVE'
 Redis Slave ($REDIS_SLAVE_IP):
-  → Multi-Server → Redis Slave Yapılandır
-  → Master: 10.9.0.20 (Redis Master VPN IP)
+  -> Multi-Server -> Redis Slave Yapılandır
+  -> Master: 10.9.0.20 (Redis Master VPN IP)
 
-EOF
+REDISSLAVE
     
-    [ -n "$WEB_SERVER_IP" ] && cat >> "$summary_file" <<EOF
+    [ -n "$WEB_SERVER_IP" ] && cat >> "$summary_file" <<'WEBSRV'
 Web/Laravel Sistem ($WEB_SERVER_IP):
-  → Multi-Server → Laravel .env Oluştur
-  → DB_HOST=10.9.0.10 (MySQL Master VPN)
-  → REDIS_HOST=10.9.0.20 (Redis Master VPN)
+  -> Multi-Server -> Laravel .env Oluştur
+  -> DB_HOST=10.9.0.10 (MySQL Master VPN)
+  -> REDIS_HOST=10.9.0.20 (Redis Master VPN)
 
-EOF
+WEBSRV
     
-    cat >> "$summary_file" <<EOF
+    cat >> "$summary_file" <<'FINALSECTION'
 
 
 ═══════════════════════════════════════════════════════════════════
