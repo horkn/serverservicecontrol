@@ -8436,48 +8436,470 @@ create_ssl() {
         snap install core
         snap refresh core
         snap install --classic certbot
-        ln -s /snap/bin/certbot /usr/bin/certbot
-    fi
-    
-    if ! command -v nginx &> /dev/null; then
-        print_error "Nginx kurulu değil. SSL için Nginx gerekli."
-        return 1
+        ln -s /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
     fi
     
     local domain=""
     ask_input "SSL oluşturulacak domain/subdomain adını girin" domain
     
-    if [ ! -f "/etc/nginx/sites-available/$domain" ]; then
-        print_error "Domain bulunamadı: $domain"
-        return 1
-    fi
-    
     if [ -z "$EMAIL" ]; then
         ask_input "E-posta adresinizi girin (SSL için gerekli)" EMAIL
     fi
     
-    local server_names=$(grep -E "^\s*server_name\s+" /etc/nginx/sites-available/$domain 2>/dev/null | head -1 | sed 's/server_name//' | sed 's/;//' | xargs)
+    # DNS sunucusu farklı IP'de mi kontrol et
+    local use_dns_challenge=false
     
-    if [ -z "$server_names" ]; then
-        print_error "Domain yapılandırmasında server_name bulunamadı."
-        return 1
+    if [ "$MULTI_SERVER_MODE" = true ]; then
+        local current_ip=$(hostname -I | awk '{print $1}')
+        
+        if [ "$DNS_SERVER_IP" != "$current_ip" ] && [ -n "$DNS_SERVER_IP" ]; then
+            print_warning "DNS sunucusu farklı bir IP'de tespit edildi!"
+            echo -e "${CYAN}DNS Server:${NC} $DNS_SERVER_IP"
+            echo -e "${CYAN}Bu Server:${NC} $current_ip"
+            echo ""
+            echo -e "${YELLOW}HTTP-01 challenge çalışmayabilir!${NC}"
+            echo "DNS-01 challenge kullanmanız önerilir"
+            echo ""
+            
+            if ask_yes_no "DNS-01 Challenge kullanmak ister misiniz? (Önerilen)"; then
+                use_dns_challenge=true
+            fi
+        fi
     fi
     
-    print_info "SSL sertifikası oluşturuluyor: $server_names"
+    # Challenge yöntemi seçimi
+    if [ "$use_dns_challenge" = false ]; then
+        echo ""
+        echo -e "${CYAN}SSL Challenge Yöntemi:${NC}"
+        echo "1) HTTP-01 (Nginx ile otomatik - Standart)"
+        echo "2) DNS-01 (Manuel TXT kaydı - DNS farklı sunucuda)"
+        echo "3) DNS-01 (Otomatik - BIND9 API)"
+        echo "4) Standalone (Nginx'siz, port 80 gerekli)"
+        echo ""
+        read -p "Seçiminiz (1-4) [1]: " challenge_choice
+        challenge_choice=${challenge_choice:-1}
+        
+        case $challenge_choice in
+            2|3) use_dns_challenge=true;;
+        esac
+    else
+        challenge_choice=2
+    fi
     
-    # Domain listesini oluştur (-d parametreleri için)
+    # Domain listesini hazırla
+    local server_names="$domain"
+    
+    if ask_yes_no "www.$domain da eklensin mi?"; then
+        server_names="$domain www.$domain"
+    fi
+    
+    if ask_yes_no "Wildcard sertifika oluşturulsun mu? (*.$domain)"; then
+        server_names="$domain *.$domain"
+        use_dns_challenge=true
+        print_info "Wildcard sertifika için DNS-01 challenge zorunlu"
+    fi
+    
     local certbot_domains=""
     for d in $server_names; do
         certbot_domains="$certbot_domains -d $d"
     done
     
-    certbot --nginx --agree-tos --redirect --hsts --staple-ocsp --email $EMAIL $certbot_domains --non-interactive
+    print_info "SSL sertifikası oluşturuluyor: $server_names"
+    echo ""
+    
+    # Challenge yöntemine göre kurulum
+    case $challenge_choice in
+        1)
+            # HTTP-01 - Nginx ile otomatik
+            if ! command -v nginx &> /dev/null; then
+                print_error "Nginx kurulu değil!"
+                return 1
+            fi
+            
+            certbot --nginx --agree-tos --redirect --hsts --staple-ocsp --email $EMAIL $certbot_domains --non-interactive
+            
+            if [ $? -eq 0 ]; then
+                print_success "SSL sertifikası başarıyla oluşturuldu"
+                systemctl reload nginx
+            else
+                print_error "SSL oluşturma başarısız!"
+                print_info "DNS farklı sunucuda ise DNS-01 challenge deneyin"
+                return 1
+            fi
+            ;;
+        2)
+            # DNS-01 - Manuel
+            create_ssl_dns_manual "$domain" "$certbot_domains" "$EMAIL"
+            ;;
+        3)
+            # DNS-01 - Otomatik (BIND9)
+            create_ssl_dns_auto "$domain" "$certbot_domains" "$EMAIL"
+            ;;
+        4)
+            # Standalone
+            print_warning "Nginx geçici olarak durdurulacak!"
+            systemctl stop nginx
+            
+            certbot certonly --standalone --agree-tos --email $EMAIL $certbot_domains --non-interactive
+            
+            systemctl start nginx
+            
+            if [ $? -eq 0 ]; then
+                print_success "SSL sertifikası oluşturuldu (standalone)"
+                
+                # Nginx'e manuel kurulum gerekli
+                print_info "Sertifika Nginx'e manuel eklenmelidir"
+                echo "Cert: /etc/letsencrypt/live/$domain/fullchain.pem"
+                echo "Key:  /etc/letsencrypt/live/$domain/privkey.pem"
+            fi
+            ;;
+    esac
+}
+
+create_ssl_dns_manual() {
+    local domain=$1
+    local certbot_domains=$2
+    local email=$3
+    
+    print_header "SSL - DNS-01 Challenge (Manuel)"
+    
+    echo -e "${CYAN}DNS-01 Challenge Nasıl Çalışır?${NC}"
+    echo "1. Certbot bir TXT kaydı değeri verir"
+    echo "2. Bu TXT kaydını DNS sunucunuza eklersiniz"
+    echo "3. Let's Encrypt DNS'i kontrol eder"
+    echo "4. Doğrulama başarılıysa sertifika verilir"
+    echo ""
+    echo -e "${YELLOW}Avantajları:${NC}"
+    echo "• DNS farklı sunucuda olsa bile çalışır"
+    echo "• Web sunucusu internete açık olmasa bile çalışır"
+    echo "• Wildcard sertifika (*.$domain) oluşturabilir"
+    echo ""
+    
+    if ! ask_yes_no "Devam etmek istiyor musunuz?"; then
+        return 1
+    fi
+    
+    print_info "DNS-01 challenge başlatılıyor..."
+    echo ""
+    echo -e "${RED}ÖNEMLİ:${NC} Certbot size bir TXT kaydı verecek"
+    echo "Bu kaydı DNS sunucunuza eklemeniz gerekecek"
+    echo ""
+    read -p "Hazır olduğunuzda Enter'a basın..."
+    
+    # Certbot DNS challenge
+    certbot certonly --manual --preferred-challenges dns --agree-tos --email $email $certbot_domains
     
     if [ $? -eq 0 ]; then
-        print_success "SSL sertifikası başarıyla oluşturuldu"
-        systemctl reload nginx
+        print_success "SSL sertifikası başarıyla oluşturuldu!"
+        echo ""
+        echo -e "${CYAN}Sertifika Konumu:${NC}"
+        echo "  Cert: /etc/letsencrypt/live/$domain/fullchain.pem"
+        echo "  Key:  /etc/letsencrypt/live/$domain/privkey.pem"
+        echo ""
+        
+        # Nginx'e kur (varsa)
+        if command -v nginx &>/dev/null && [ -f "/etc/nginx/sites-available/$domain" ]; then
+            if ask_yes_no "Sertifikayı Nginx'e kurmak ister misiniz?"; then
+                install_ssl_to_nginx "$domain"
+            fi
+        fi
     else
-        print_error "SSL oluşturma sırasında hata oluştu"
+        print_error "SSL oluşturma başarısız!"
+        return 1
+    fi
+}
+
+create_ssl_dns_auto() {
+    local domain=$1
+    local certbot_domains=$2
+    local email=$3
+    
+    print_header "SSL - DNS-01 Challenge (Otomatik - BIND9)"
+    
+    # DNS sunucusu kontrolü
+    local dns_type=$(detect_dns_server)
+    
+    if [ "$dns_type" != "bind9" ]; then
+        print_error "Bu özellik sadece BIND9 için çalışır!"
+        print_info "dnsmasq için manuel DNS challenge kullanın"
+        return 1
+    fi
+    
+    echo -e "${CYAN}Otomatik DNS Challenge Nasıl Çalışır?${NC}"
+    echo "1. Script DNS sunucusuna SSH ile bağlanır"
+    echo "2. TXT kaydını otomatik ekler"
+    echo "3. Certbot doğrulama yapar"
+    echo "4. Sertifika alınır"
+    echo "5. TXT kaydı otomatik silinir"
+    echo ""
+    
+    # DNS sunucusu bilgileri
+    local dns_server_ip=""
+    local dns_server_user="root"
+    
+    if [ "$MULTI_SERVER_MODE" = true ] && [ -n "$DNS_SERVER_IP" ]; then
+        dns_server_ip="$DNS_SERVER_IP"
+        echo -e "${CYAN}Yapılandırmadan DNS sunucusu:${NC} $dns_server_ip"
+    else
+        ask_input "DNS sunucusu IP adresi" dns_server_ip
+    fi
+    
+    ask_input "DNS sunucusu SSH kullanıcı adı" dns_server_user "root"
+    
+    # SSH bağlantı testi
+    print_info "DNS sunucusuna SSH bağlantı testi..."
+    
+    if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no $dns_server_user@$dns_server_ip "echo test" &>/dev/null; then
+        print_error "DNS sunucusuna SSH bağlantısı başarısız!"
+        echo ""
+        print_info "SSH key kurulumu gerekli:"
+        echo "  1. ssh-keygen -t rsa -b 4096"
+        echo "  2. ssh-copy-id $dns_server_user@$dns_server_ip"
+        echo ""
+        
+        if ask_yes_no "SSH key'i şimdi kopyalamak ister misiniz?"; then
+            if [ ! -f "/root/.ssh/id_rsa" ]; then
+                ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N ""
+            fi
+            
+            ssh-copy-id $dns_server_user@$dns_server_ip
+            
+            if [ $? -ne 0 ]; then
+                print_error "SSH key kopyalama başarısız!"
+                return 1
+            fi
+        else
+            print_info "Manuel DNS challenge kullanın (Seçenek 2)"
+            return 1
+        fi
+    fi
+    
+    print_success "✓ DNS sunucusuna SSH erişimi var"
+    
+    # Certbot DNS plugin kurulumu
+    print_info "Certbot DNS plugin'i kuruluyor..."
+    
+    # RFC2136 plugin (BIND9 için)
+    snap install certbot-dns-rfc2136 2>/dev/null || pip3 install certbot-dns-rfc2136 2>/dev/null || true
+    
+    # Hook script oluştur (TXT kaydı ekleme/silme)
+    create_dns_challenge_hooks "$dns_server_ip" "$dns_server_user"
+    
+    # Certbot çalıştır (hook scriptler ile)
+    certbot certonly \
+        --manual \
+        --preferred-challenges dns \
+        --manual-auth-hook /usr/local/bin/certbot-dns-add.sh \
+        --manual-cleanup-hook /usr/local/bin/certbot-dns-cleanup.sh \
+        --agree-tos \
+        --email $email \
+        $certbot_domains \
+        --non-interactive
+    
+    if [ $? -eq 0 ]; then
+        print_success "SSL sertifikası otomatik oluşturuldu!"
+        
+        # Nginx'e kur
+        if command -v nginx &>/dev/null && [ -f "/etc/nginx/sites-available/$domain" ]; then
+            if ask_yes_no "Sertifikayı Nginx'e kurmak ister misiniz?"; then
+                install_ssl_to_nginx "$domain"
+            fi
+        fi
+    else
+        print_error "Otomatik SSL oluşturma başarısız!"
+        print_info "Manuel DNS challenge deneyin (Seçenek 2)"
+    fi
+}
+
+create_dns_challenge_hooks() {
+    local dns_server=$1
+    local dns_user=$2
+    
+    # Auth hook (TXT kaydı ekle)
+    cat > /usr/local/bin/certbot-dns-add.sh <<'HOOK_ADD'
+#!/bin/bash
+# Certbot DNS-01 Challenge - TXT Kaydı Ekle
+
+DNS_SERVER="$1"
+DNS_USER="$2"
+DOMAIN="$CERTBOT_DOMAIN"
+TOKEN="$CERTBOT_VALIDATION"
+
+# _acme-challenge TXT kaydı ekle
+ssh $DNS_USER@$DNS_SERVER "echo '_acme-challenge.$DOMAIN IN TXT \"$TOKEN\"' >> /etc/bind/db.$DOMAIN"
+
+# Serial güncelle
+ssh $DNS_USER@$DNS_SERVER "sed -i 's/\([0-9]\{10\}\)/\1/' /etc/bind/db.$DOMAIN"
+
+# BIND9'u yeniden yükle
+ssh $DNS_USER@$DNS_SERVER "systemctl reload named"
+
+# DNS'in yayılması için bekle
+sleep 30
+HOOK_ADD
+    
+    # Cleanup hook (TXT kaydını sil)
+    cat > /usr/local/bin/certbot-dns-cleanup.sh <<'HOOK_CLEANUP'
+#!/bin/bash
+# Certbot DNS-01 Challenge - TXT Kaydını Sil
+
+DNS_SERVER="$1"
+DNS_USER="$2"
+DOMAIN="$CERTBOT_DOMAIN"
+
+# _acme-challenge kaydını sil
+ssh $DNS_USER@$DNS_SERVER "sed -i '/_acme-challenge.$DOMAIN/d' /etc/bind/db.$DOMAIN"
+
+# BIND9'u yeniden yükle
+ssh $DNS_USER@$DNS_SERVER "systemctl reload named"
+HOOK_CLEANUP
+    
+    chmod +x /usr/local/bin/certbot-dns-add.sh
+    chmod +x /usr/local/bin/certbot-dns-cleanup.sh
+    
+    # DNS bilgilerini hook scriptlere geç
+    sed -i "s|DNS_SERVER=\"\$1\"|DNS_SERVER=\"$dns_server\"|" /usr/local/bin/certbot-dns-add.sh
+    sed -i "s|DNS_USER=\"\$2\"|DNS_USER=\"$dns_user\"|" /usr/local/bin/certbot-dns-add.sh
+    sed -i "s|DNS_SERVER=\"\$1\"|DNS_SERVER=\"$dns_server\"|" /usr/local/bin/certbot-dns-cleanup.sh
+    sed -i "s|DNS_USER=\"\$2\"|DNS_USER=\"$dns_user\"|" /usr/local/bin/certbot-dns-cleanup.sh
+    
+    print_success "✓ DNS challenge hook'ları oluşturuldu"
+}
+
+install_ssl_to_nginx() {
+    local domain=$1
+    
+    print_info "SSL sertifikası Nginx'e kuruluyor..."
+    
+    local nginx_config="/etc/nginx/sites-available/$domain"
+    
+    if [ ! -f "$nginx_config" ]; then
+        print_error "Nginx yapılandırması bulunamadı: $nginx_config"
+        return 1
+    fi
+    
+    # Yedek oluştur
+    cp "$nginx_config" "${nginx_config}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # SSL zaten yapılandırılmış mı?
+    if grep -q "ssl_certificate" "$nginx_config" 2>/dev/null; then
+        print_info "SSL zaten yapılandırılmış, güncelleniyor..."
+        sed -i "s|ssl_certificate .*|ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;|" "$nginx_config"
+        sed -i "s|ssl_certificate_key .*|ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;|" "$nginx_config"
+    else
+        # Yeni SSL bloğu ekle
+        print_info "SSL yapılandırması ekleniyor..."
+        
+        # Port 443 bloğu ekle
+        cat >> "$nginx_config" <<EOF
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    
+    server_name $domain www.$domain;
+    
+    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
+    
+    # SSL ayarları
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    
+    # Nginx yapılandırmanızın geri kalanı buraya
+    # (root, location bloklarını kopyalayın)
+}
+EOF
+    fi
+    
+    # Nginx test
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        print_success "✓ SSL sertifikası Nginx'e kuruldu!"
+        echo ""
+        echo -e "${GREEN}Test edin:${NC} https://$domain"
+    else
+        print_error "Nginx yapılandırma hatası!"
+        cp "${nginx_config}.backup."$(ls -t ${nginx_config}.backup.* | head -1 | sed 's/.*backup\.//') "$nginx_config"
+        return 1
+    fi
+}
+
+add_dns_txt_record_for_ssl() {
+    print_header "DNS TXT Kaydı Ekle (SSL Challenge İçin)"
+    
+    local domain=$1
+    local txt_value=$2
+    
+    local dns_type=$(detect_dns_server)
+    
+    case $dns_type in
+        "bind9"|"bind9-stopped")
+            add_bind9_txt_record "$domain" "$txt_value"
+            ;;
+        "dnsmasq"|"dnsmasq-stopped")
+            print_warning "dnsmasq TXT kayıtlarını desteklemez!"
+            print_info "BIND9 kullanmanız veya Cloudflare gibi DNS sağlayıcı kullanmanız önerilir"
+            return 1
+            ;;
+        *)
+            print_error "DNS servisi bulunamadı!"
+            return 1
+            ;;
+    esac
+}
+
+add_bind9_txt_record() {
+    local domain=$1
+    local txt_value=$2
+    
+    # Ana domain'i bul
+    local main_domain=$(echo "$domain" | rev | cut -d'.' -f1-2 | rev)
+    local zone_file="/etc/bind/db.$main_domain"
+    
+    if [ ! -f "$zone_file" ]; then
+        print_error "Zone dosyası bulunamadı: $zone_file"
+        return 1
+    fi
+    
+    print_info "TXT kaydı ekleniyor: _acme-challenge.$domain"
+    
+    # Yedek oluştur
+    cp "$zone_file" "${zone_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Serial güncelle
+    local current_serial=$(grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1)
+    local new_serial=$(date +%Y%m%d01)
+    if [ "$new_serial" -le "$current_serial" ]; then
+        new_serial=$((current_serial + 1))
+    fi
+    sed -i "s/$current_serial/$new_serial/" "$zone_file"
+    
+    # TXT kaydını ekle
+    echo "_acme-challenge     IN      TXT     \"$txt_value\"" >> "$zone_file"
+    
+    print_success "✓ TXT kaydı eklendi"
+    
+    # Zone kontrol
+    if named-checkzone "$main_domain" "$zone_file" 2>/dev/null; then
+        systemctl reload named
+        print_success "✓ BIND9 yeniden yüklendi"
+        
+        # DNS propagation bekle
+        print_info "DNS propagation bekleniyor (30 saniye)..."
+        sleep 30
+        
+        # Doğrula
+        local txt_check=$(dig @127.0.0.1 _acme-challenge.$domain TXT +short 2>/dev/null)
+        if [ -n "$txt_check" ]; then
+            print_success "✓ TXT kaydı doğrulandı: $txt_check"
+        else
+            print_warning "TXT kaydı henüz görünmüyor, biraz daha bekleyin"
+        fi
+    else
+        print_error "Zone geçersiz!"
+        cp "${zone_file}.backup."$(ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//') "$zone_file"
         return 1
     fi
 }
