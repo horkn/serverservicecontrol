@@ -8796,18 +8796,50 @@ create_ssl_dns_auto() {
         $certbot_domains \
         --non-interactive
     
-    if [ $? -eq 0 ]; then
-        print_success "SSL sertifikası otomatik oluşturuldu!"
+    local certbot_result=$?
+    
+    # Şifre dosyasını temizle (güvenlik)
+    if [ "$use_pass" = true ]; then
+        rm -f "$password_file" 2>/dev/null
+        print_info "✓ Geçici şifre dosyası temizlendi"
+    fi
+    
+    if [ $certbot_result -eq 0 ]; then
+        print_success "═══════════════════════════════════════════"
+        print_success "  ✓ SSL SERTİFİKASI BAŞARIYLA OLUŞTURULDU!"
+        print_success "═══════════════════════════════════════════"
+        echo ""
+        echo -e "${CYAN}Sertifika Konumu:${NC}"
+        echo "  Cert: /etc/letsencrypt/live/$domain/fullchain.pem"
+        echo "  Key:  /etc/letsencrypt/live/$domain/privkey.pem"
+        echo ""
         
         # Nginx'e kur
-        if command -v nginx &>/dev/null && [ -f "/etc/nginx/sites-available/$domain" ]; then
+        if command -v nginx &>/dev/null; then
             if ask_yes_no "Sertifikayı Nginx'e kurmak ister misiniz?"; then
                 install_ssl_to_nginx "$domain"
             fi
         fi
     else
-        print_error "Otomatik SSL oluşturma başarısız!"
-        print_info "Manuel DNS challenge deneyin (Seçenek 2)"
+        print_error "═══════════════════════════════════════════"
+        print_error "  ✗ SSL OLUŞTURMA BAŞARISIZ!"
+        print_error "═══════════════════════════════════════════"
+        echo ""
+        echo -e "${YELLOW}Olası Nedenler:${NC}"
+        echo "  1. SSH bağlantısı kesildi (Permission denied)"
+        echo "  2. DNS zone dosyası bulunamadı"
+        echo "  3. BIND9 servisi çalışmıyor"
+        echo "  4. TXT kaydı DNS'e yayılmadı (timing sorunu)"
+        echo ""
+        echo -e "${CYAN}Çözüm Önerileri:${NC}"
+        echo "  • 27) SSH Bağlantı Testi ile SSH'ı kontrol edin"
+        echo "  • 22) DNS Yönetimi ile zone dosyasını kontrol edin"
+        echo "  • Manuel DNS challenge deneyin (Challenge: 2)"
+        echo ""
+        echo -e "${CYAN}Log dosyası:${NC}"
+        echo "  /var/log/letsencrypt/letsencrypt.log"
+        
+        return 1
     fi
 }
 
@@ -8819,88 +8851,182 @@ create_dns_challenge_hooks() {
     
     print_info "DNS challenge hook scriptleri oluşturuluyor..."
     
-    # SSH komut prefix'i belirle
-    local ssh_cmd=""
+    # Şifre yöntemi için güvenli geçiş (dosya kullan)
+    local password_file="/tmp/.dns_ssh_pass"
+    
     if [ "$use_password" = true ] && [ -n "$password" ]; then
-        ssh_cmd="sshpass -p '$password' ssh -o StrictHostKeyChecking=no"
+        # Şifreyi güvenli dosyaya yaz
+        echo "$password" > "$password_file"
+        chmod 600 "$password_file"
         print_info "✓ Şifre authentication kullanılacak"
     else
-        ssh_cmd="ssh -o StrictHostKeyChecking=no -o BatchMode=yes"
         print_info "✓ Key authentication kullanılacak"
     fi
     
     # Auth hook (TXT kaydı ekle)
-    cat > /usr/local/bin/certbot-dns-add.sh <<HOOK_ADD
+    if [ "$use_password" = true ]; then
+        # Şifre ile version
+        cat > /usr/local/bin/certbot-dns-add.sh <<HOOK_ADD
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydı Ekle (Otomatik)
+# Certbot DNS-01 Challenge - TXT Kaydı Ekle (Şifre ile)
 
 DNS_SERVER="$dns_server"
 DNS_USER="$dns_user"
+PASSWORD_FILE="$password_file"
 DOMAIN="\$CERTBOT_DOMAIN"
 TOKEN="\$CERTBOT_VALIDATION"
 
-echo "[INFO] TXT kaydı ekleniyor: _acme-challenge.\$DOMAIN = \$TOKEN"
+echo "[INFO] TXT kaydı ekleniyor: _acme-challenge.\$DOMAIN"
 
-# Ana domain'i bul (subdomain desteği için)
+# Ana domain'i bul
 MAIN_DOMAIN=\$(echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev)
-ZONE_FILE="/etc/bind/db.\$MAIN_DOMAIN"
 
-# SSH komutu
-SSH_CMD="$ssh_cmd"
-
-# Uzak sunucuda komutları çalıştır
-\$SSH_CMD \$DNS_USER@\$DNS_SERVER bash <<'REMOTE_EOF'
-ZONE_FILE="$zone_file"
-DOMAIN="\$DOMAIN"
-TOKEN="\$TOKEN"
-
-# Zone dosyası var mı?
-if [ ! -f "/etc/bind/db.\$MAIN_DOMAIN" ]; then
-    echo "[HATA] Zone dosyası bulunamadı: /etc/bind/db.\$MAIN_DOMAIN"
-    exit 1
-fi
-
-# Yedek oluştur
-cp /etc/bind/db.\$MAIN_DOMAIN /etc/bind/db.\$MAIN_DOMAIN.backup.\$(date +%Y%m%d_%H%M%S)
-
-# Subdomain desteği
+# Subdomain parse
 RECORD_NAME="_acme-challenge"
 if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
     SUBDOMAIN=\$(echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//")
     RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
 fi
 
-# Mevcut TXT kaydını sil (varsa)
-sed -i "/\$RECORD_NAME.*IN.*TXT/d" /etc/bind/db.\$MAIN_DOMAIN
+# SSH ile DNS sunucusunda TXT kaydı ekle
+sshpass -f "\$PASSWORD_FILE" ssh -o StrictHostKeyChecking=no \$DNS_USER@\$DNS_SERVER "
+MAIN_DOMAIN='\$MAIN_DOMAIN'
+RECORD_NAME='\$RECORD_NAME'
+TOKEN='\$TOKEN'
+ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
+
+if [ ! -f \"\\\$ZONE_FILE\" ]; then
+    echo '[HATA] Zone dosyası yok'
+    exit 1
+fi
+
+# Eski TXT kayıtlarını sil
+sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
 
 # Serial güncelle
-CURRENT_SERIAL=\$(grep "Serial" /etc/bind/db.\$MAIN_DOMAIN | grep -oE "[0-9]+" | head -1)
-NEW_SERIAL=\$(date +%Y%m%d01)
-if [ "\$NEW_SERIAL" -le "\$CURRENT_SERIAL" ]; then
-    NEW_SERIAL=\$((CURRENT_SERIAL + 1))
+CURRENT_SERIAL=\\\$(grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
+NEW_SERIAL=\\\$(date +%Y%m%d%H)
+[ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
+
+# TXT kaydı ekle
+echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
+
+# BIND9 reload
+sudo systemctl reload named
+
+echo '[OK] TXT kaydı eklendi'
+"
+
+RET=\$?
+if [ \$RET -eq 0 ]; then
+    echo "[INFO] DNS propagation bekleniyor (60 saniye)..."
+    sleep 60
+    echo "[OK] DNS challenge hazır"
+else
+    echo "[HATA] DNS güncelleme başarısız!"
+    exit 1
 fi
-sed -i "s/\$CURRENT_SERIAL/\$NEW_SERIAL/" /etc/bind/db.\$MAIN_DOMAIN
-
-# TXT kaydını ekle
-echo "\$RECORD_NAME     IN      TXT     \\"\$TOKEN\\"" >> /etc/bind/db.\$MAIN_DOMAIN
-
-# BIND9'u yeniden yükle
-systemctl reload named
-
-echo "[OK] TXT kaydı eklendi: \$RECORD_NAME"
-REMOTE_EOF
-
-# DNS propagation bekle
-echo "[INFO] DNS propagation bekleniyor (45 saniye)..."
-sleep 45
-
-echo "[OK] DNS challenge hazır"
 HOOK_ADD
+    else
+        # Key ile version
+        cat > /usr/local/bin/certbot-dns-add.sh <<HOOK_ADD
+#!/bin/bash
+# Certbot DNS-01 Challenge - TXT Kaydı Ekle (SSH Key ile)
+
+DNS_SERVER="$dns_server"
+DNS_USER="$dns_user"
+DOMAIN="\$CERTBOT_DOMAIN"
+TOKEN="\$CERTBOT_VALIDATION"
+
+echo "[INFO] TXT kaydı ekleniyor: _acme-challenge.\$DOMAIN"
+
+MAIN_DOMAIN=\$(echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev)
+
+RECORD_NAME="_acme-challenge"
+if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
+    SUBDOMAIN=\$(echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//")
+    RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
+fi
+
+ssh -o StrictHostKeyChecking=no -o BatchMode=yes \$DNS_USER@\$DNS_SERVER "
+MAIN_DOMAIN='\$MAIN_DOMAIN'
+RECORD_NAME='\$RECORD_NAME'
+TOKEN='\$TOKEN'
+ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
+
+[ ! -f \"\\\$ZONE_FILE\" ] && echo '[HATA] Zone yok' && exit 1
+
+sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+
+CURRENT_SERIAL=\\\$(grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
+NEW_SERIAL=\\\$(date +%Y%m%d%H)
+[ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
+
+echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
+
+sudo systemctl reload named
+
+echo '[OK] TXT kaydı eklendi'
+"
+
+RET=\$?
+if [ \$RET -eq 0 ]; then
+    echo "[INFO] DNS propagation bekleniyor (60 saniye)..."
+    sleep 60
+    echo "[OK] DNS challenge hazır"
+else
+    echo "[HATA] DNS güncelleme başarısız!"
+    exit 1
+fi
+HOOK_ADD
+    fi
     
     # Cleanup hook (TXT kaydını sil)
-    cat > /usr/local/bin/certbot-dns-cleanup.sh <<HOOK_CLEANUP
+    if [ "$use_password" = true ]; then
+        # Şifre ile version
+        cat > /usr/local/bin/certbot-dns-cleanup.sh <<HOOK_CLEANUP
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydını Sil (Otomatik)
+# Certbot DNS-01 Challenge - TXT Kaydını Sil (Şifre ile)
+
+DNS_SERVER="$dns_server"
+DNS_USER="$dns_user"
+PASSWORD_FILE="$password_file"
+DOMAIN="\$CERTBOT_DOMAIN"
+
+echo "[INFO] TXT kaydı siliniyor: _acme-challenge.\$DOMAIN"
+
+MAIN_DOMAIN=\$(echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev)
+
+RECORD_NAME="_acme-challenge"
+if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
+    SUBDOMAIN=\$(echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//")
+    RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
+fi
+
+# SSH ile DNS sunucusunda TXT kaydını sil
+sshpass -f "\$PASSWORD_FILE" ssh -o StrictHostKeyChecking=no \$DNS_USER@\$DNS_SERVER "
+MAIN_DOMAIN='\$MAIN_DOMAIN'
+RECORD_NAME='\$RECORD_NAME'
+
+sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" /etc/bind/db.\\\$MAIN_DOMAIN
+
+CURRENT_SERIAL=\\\$(grep 'Serial' /etc/bind/db.\\\$MAIN_DOMAIN | grep -oE '[0-9]+' | head -1)
+NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" /etc/bind/db.\\\$MAIN_DOMAIN
+
+sudo systemctl reload named
+echo '[OK] TXT kaydı silindi'
+"
+
+echo "[OK] DNS temizlendi"
+HOOK_CLEANUP
+    else
+        # Key ile version
+        cat > /usr/local/bin/certbot-dns-cleanup.sh <<HOOK_CLEANUP
+#!/bin/bash
+# Certbot DNS-01 Challenge - TXT Kaydını Sil (SSH Key ile)
 
 DNS_SERVER="$dns_server"
 DNS_USER="$dns_user"
@@ -8908,46 +9034,56 @@ DOMAIN="\$CERTBOT_DOMAIN"
 
 echo "[INFO] TXT kaydı siliniyor: _acme-challenge.\$DOMAIN"
 
-# SSH komutu
-SSH_CMD="$ssh_cmd"
-
-# Uzak sunucuda TXT kaydını sil
-\$SSH_CMD \$DNS_USER@\$DNS_SERVER bash <<'REMOTE_EOF'
-DOMAIN="\$DOMAIN"
 MAIN_DOMAIN=\$(echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev)
 
-# Subdomain desteği
 RECORD_NAME="_acme-challenge"
 if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
     SUBDOMAIN=\$(echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//")
     RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
 fi
 
-# TXT kaydını sil
-sed -i "/\$RECORD_NAME.*IN.*TXT/d" /etc/bind/db.\$MAIN_DOMAIN
+ssh -o StrictHostKeyChecking=no -o BatchMode=yes \$DNS_USER@\$DNS_SERVER "
+MAIN_DOMAIN='\$MAIN_DOMAIN'
+RECORD_NAME='\$RECORD_NAME'
 
-# Serial güncelle
-CURRENT_SERIAL=\$(grep "Serial" /etc/bind/db.\$MAIN_DOMAIN | grep -oE "[0-9]+" | head -1)
-NEW_SERIAL=\$((CURRENT_SERIAL + 1))
-sed -i "s/\$CURRENT_SERIAL/\$NEW_SERIAL/" /etc/bind/db.\$MAIN_DOMAIN
+sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" /etc/bind/db.\\\$MAIN_DOMAIN
 
-# BIND9'u yeniden yükle
-systemctl reload named
+CURRENT_SERIAL=\\\$(grep 'Serial' /etc/bind/db.\\\$MAIN_DOMAIN | grep -oE '[0-9]+' | head -1)
+NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" /etc/bind/db.\\\$MAIN_DOMAIN
 
-echo "[OK] TXT kaydı silindi"
-REMOTE_EOF
+sudo systemctl reload named
+echo '[OK] TXT kaydı silindi'
+"
 
 echo "[OK] DNS temizlendi"
 HOOK_CLEANUP
+    fi
     
     chmod +x /usr/local/bin/certbot-dns-add.sh
     chmod +x /usr/local/bin/certbot-dns-cleanup.sh
+    
+    # Şifre dosyası için cleanup da ekle
+    if [ "$use_password" = true ]; then
+        # Cleanup hook sonuna şifre dosyası silme ekle
+        cat >> /usr/local/bin/certbot-dns-cleanup.sh <<'CLEANUP_PASS'
+
+# Şifre dosyasını temizle
+rm -f "$PASSWORD_FILE" 2>/dev/null
+CLEANUP_PASS
+    fi
     
     print_success "✓ DNS challenge hook'ları oluşturuldu"
     echo ""
     echo -e "${CYAN}Hook dosyaları:${NC}"
     echo "  /usr/local/bin/certbot-dns-add.sh      (TXT ekle)"
     echo "  /usr/local/bin/certbot-dns-cleanup.sh  (TXT sil)"
+    
+    if [ "$use_password" = true ]; then
+        echo ""
+        echo -e "${CYAN}Şifre dosyası:${NC} $password_file (geçici)"
+        echo -e "${YELLOW}Not: SSL işlemi bitince otomatik silinir${NC}"
+    fi
 }
 
 install_ssl_to_nginx() {
@@ -9150,6 +9286,84 @@ REMOTE_COMMANDS
         print_error "Uzak sunucuda işlem başarısız!"
         print_info "Şifre yanlış olabilir veya SSH erişimi yok"
     fi
+}
+
+test_dns_hook_manually() {
+    print_header "DNS Challenge Hook Manuel Test"
+    
+    print_info "Bu test, SSL hook scriptlerini manuel çalıştırır"
+    echo ""
+    
+    local test_domain=""
+    local test_token="TEST_TOKEN_12345"
+    
+    ask_input "Test edilecek domain" test_domain
+    
+    # Multi-server'dan DNS bilgilerini al
+    local dns_ip="${DNS_SERVER_IP}"
+    local dns_user="root"
+    
+    if [ -z "$dns_ip" ]; then
+        ask_input "DNS sunucusu IP" dns_ip
+    fi
+    
+    ask_input "DNS sunucusu kullanıcı" dns_user "root"
+    
+    local dns_password=""
+    ask_password "DNS sunucusu şifresi" dns_password
+    
+    # Test: TXT kaydı ekle
+    print_info "Test 1: TXT kaydı ekleme..."
+    
+    local main_domain=$(echo "$test_domain" | rev | cut -d'.' -f1-2 | rev)
+    local record_name="_acme-challenge-test"
+    
+    if sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
+        ZONE_FILE='/etc/bind/db.$main_domain'
+        [ ! -f \"\\\$ZONE_FILE\" ] && echo 'Zone yok: \$ZONE_FILE' && exit 1
+        echo '$record_name     IN      TXT     \"$test_token\"' | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
+        sudo systemctl reload named
+        echo 'TXT kaydı eklendi'
+    " 2>&1; then
+        print_success "✓ TXT kaydı ekleme başarılı!"
+    else
+        print_error "✗ TXT kaydı ekleme başarısız!"
+        echo ""
+        print_info "Hata detayları yukarıda"
+        return 1
+    fi
+    
+    # Test 2: DNS doğrulama
+    echo ""
+    print_info "Test 2: DNS doğrulama (5 saniye bekleniyor)..."
+    sleep 5
+    
+    if dig @$dns_ip ${record_name}.${test_domain} TXT +short 2>/dev/null | grep -q "$test_token"; then
+        print_success "✓ TXT kaydı DNS'de görünüyor!"
+    else
+        print_warning "✗ TXT kaydı henüz görünmüyor"
+    fi
+    
+    # Test 3: TXT kaydı silme
+    echo ""
+    print_info "Test 3: TXT kaydı silme..."
+    
+    if sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
+        sudo sed -i '/$record_name.*IN.*TXT/d' /etc/bind/db.$main_domain
+        sudo systemctl reload named
+        echo 'TXT kaydı silindi'
+    " 2>&1; then
+        print_success "✓ TXT kaydı silme başarılı!"
+    else
+        print_error "✗ TXT kaydı silme başarısız!"
+    fi
+    
+    echo ""
+    print_success "═══════════════════════════════════════════"
+    print_success "  TEST TAMAMLANDI"
+    print_success "═══════════════════════════════════════════"
+    echo ""
+    print_info "Tüm testler başarılıysa, SSL otomatik challenge çalışacaktır"
 }
 
 test_ssh_connection() {
@@ -12413,9 +12627,10 @@ main_menu() {
         echo "24) PHP Eklentileri Hızlı Düzeltme (Composer için)"
         echo "25) PHP Çift Yükleme Sorunu Düzelt (dom, xml)"
         echo "26) Redis Bağlantı Sorunu Düzelt"
-        echo "27) SSH Bağlantı Testi ve Düzeltme (Sunucular Arası)"
-        echo "28) Multi-Server (Dağıtık Sistem) Yapılandırması"
-        echo "29) Çıkış"
+        echo "27) SSH Bağlantı Testi (Sunucular Arası)"
+        echo "28) DNS Hook Test (SSL Challenge Debug)"
+        echo "29) Multi-Server (Dağıtık Sistem) Yapılandırması"
+        echo "30) Çıkış"
         echo ""
         
         # Multi-server modu göstergesi
@@ -12425,7 +12640,7 @@ main_menu() {
             echo ""
         fi
         
-        read -p "Seçiminizi yapın (1-29): " choice
+        read -p "Seçiminizi yapın (1-30): " choice
         
         case $choice in
             1)
@@ -12546,14 +12761,18 @@ main_menu() {
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             28)
-                multi_server_menu
+                test_dns_hook_manually
+                read -p "Devam etmek için Enter'a basın..."
                 ;;
             29)
+                multi_server_menu
+                ;;
+            30)
                 print_success "Çıkılıyor..."
                 exit 0
                 ;;
             *)
-                print_error "Geçersiz seçim. Lütfen 1-29 arasında bir sayı girin."
+                print_error "Geçersiz seçim. Lütfen 1-30 arasında bir sayı girin."
                 sleep 2
                 ;;
         esac
