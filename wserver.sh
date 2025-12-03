@@ -8984,45 +8984,37 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     WEB_SERVER_IP=\"$web_server_ip\"
     SERIAL=\\\$(date +%Y%m%d)01
     
-    # Zone dosyasını satır satır oluştur (nested heredoc çalışmaz)
-    {
-        echo \"\\\\\$TTL    604800\"
-        echo \"@       IN      SOA     \\\$MAIN_DOMAIN. admin.\\\$MAIN_DOMAIN. (\"
-        echo \"                         \\\$SERIAL ; Serial\"
-        echo \"                         604800         ; Refresh\"
-        echo \"                         86400          ; Retry\"
-        echo \"                         2419200        ; Expire\"
-        echo \"                         604800 )       ; Negative Cache TTL\"
-        echo \";\"
-        echo \"@       IN      NS      ns1.\\\$MAIN_DOMAIN.\"
-        echo \"@       IN      A       \\\$WEB_SERVER_IP\"
-        echo \"ns1     IN      A       \\\$WEB_SERVER_IP\"
-        echo \"www     IN      A       \\\$WEB_SERVER_IP\"
-    } > \"\\\$ZONE_FILE\"
+    # printf + tee ile dosya oluştur (redirect sorunu yok)
+    printf '%s\\\\n' \\\
+        '\\\\\$TTL    604800' \\\
+        '@       IN      SOA     '\\\$MAIN_DOMAIN'. admin.'\\\$MAIN_DOMAIN'. (' \\\
+        '                         '\\\$SERIAL' ; Serial' \\\
+        '                         604800         ; Refresh' \\\
+        '                         86400          ; Retry' \\\
+        '                         2419200        ; Expire' \\\
+        '                         604800 )       ; Negative Cache TTL' \\\
+        ';' \\\
+        '@       IN      NS      ns1.'\\\$MAIN_DOMAIN'.' \\\
+        '@       IN      A       '\\\$WEB_SERVER_IP \\\
+        'ns1     IN      A       '\\\$WEB_SERVER_IP \\\
+        'www     IN      A       '\\\$WEB_SERVER_IP | tee \"\\\$ZONE_FILE\" >/dev/null
     
     chmod 644 \"\\\$ZONE_FILE\"
     chown bind:bind \"\\\$ZONE_FILE\" 2>/dev/null || true
     
-    # named.conf.local'e ekle
+    # named.conf.local güncelle
     if ! grep -q \"zone \\\\\"\\\$MAIN_DOMAIN\\\\\"\" /etc/bind/named.conf.local 2>/dev/null; then
-        {
-            echo \"\"
-            echo \"zone \\\\\"\\\$MAIN_DOMAIN\\\\\" {\"
-            echo \"    type master;\"
-            echo \"    file \\\\\"/etc/bind/db.\\\$MAIN_DOMAIN\\\\\";\"
-            echo \"    allow-transfer { any; };\"
-            echo \"};\"
-        } >> /etc/bind/named.conf.local
+        printf '%s\\\\n' '' 'zone \"'\\\$MAIN_DOMAIN'\" {' '    type master;' '    file \"/etc/bind/db.'\\\$MAIN_DOMAIN'\";' '    allow-transfer { any; };' '};' | tee -a /etc/bind/named.conf.local >/dev/null
     fi
     
-    # BIND9 yapılandırma testi
-    if ! named-checkzone \"\\\$MAIN_DOMAIN\" \"\\\$ZONE_FILE\" >/dev/null 2>&1; then
-        echo '[HATA] Zone dosyası geçersiz!'
+    # Zone test
+    if ! named-checkzone \"\\\$MAIN_DOMAIN\" \"\\\$ZONE_FILE\" 2>&1 | head -1; then
+        echo '[HATA] Zone syntax hatası!'
         exit 1
     fi
     
-    systemctl reload named
-    echo '[OK] Zone dosyası oluşturuldu: '\\\$ZONE_FILE
+    systemctl reload named 2>&1
+    echo '[OK] Zone oluşturuldu: '\\\$ZONE_FILE' -> '\\\$WEB_SERVER_IP
 fi
 
 # Root mu kontrol et
@@ -9095,43 +9087,35 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     WEB_SERVER_IP=\"$web_server_ip\"
     SERIAL=\\\$(date +%Y%m%d)01
     
-    # Zone dosyasını satır satır oluştur
-    {
-        echo \"\\\\\$TTL    604800\"
-        echo \"@       IN      SOA     \\\$MAIN_DOMAIN. admin.\\\$MAIN_DOMAIN. (\"
-        echo \"                         \\\$SERIAL ; Serial\"
-        echo \"                         604800         ; Refresh\"
-        echo \"                         86400          ; Retry\"
-        echo \"                         2419200        ; Expire\"
-        echo \"                         604800 )       ; Negative Cache TTL\"
-        echo \";\"
-        echo \"@       IN      NS      ns1.\\\$MAIN_DOMAIN.\"
-        echo \"@       IN      A       \\\$WEB_SERVER_IP\"
-        echo \"ns1     IN      A       \\\$WEB_SERVER_IP\"
-        echo \"www     IN      A       \\\$WEB_SERVER_IP\"
-    } > \"\\\$ZONE_FILE\"
+    # printf + tee ile dosya oluştur
+    printf '%s\\\\n' \\\
+        '\\\\\$TTL    604800' \\\
+        '@       IN      SOA     '\\\$MAIN_DOMAIN'. admin.'\\\$MAIN_DOMAIN'. (' \\\
+        '                         '\\\$SERIAL' ; Serial' \\\
+        '                         604800         ; Refresh' \\\
+        '                         86400          ; Retry' \\\
+        '                         2419200        ; Expire' \\\
+        '                         604800 )       ; Negative Cache TTL' \\\
+        ';' \\\
+        '@       IN      NS      ns1.'\\\$MAIN_DOMAIN'.' \\\
+        '@       IN      A       '\\\$WEB_SERVER_IP \\\
+        'ns1     IN      A       '\\\$WEB_SERVER_IP \\\
+        'www     IN      A       '\\\$WEB_SERVER_IP | tee \"\\\$ZONE_FILE\" >/dev/null
     
     chmod 644 \"\\\$ZONE_FILE\"
     chown bind:bind \"\\\$ZONE_FILE\" 2>/dev/null || true
     
     if ! grep -q \"zone \\\\\"\\\$MAIN_DOMAIN\\\\\"\" /etc/bind/named.conf.local 2>/dev/null; then
-        {
-            echo \"\"
-            echo \"zone \\\\\"\\\$MAIN_DOMAIN\\\\\" {\"
-            echo \"    type master;\"
-            echo \"    file \\\\\"/etc/bind/db.\\\$MAIN_DOMAIN\\\\\";\"
-            echo \"    allow-transfer { any; };\"
-            echo \"};\"
-        } >> /etc/bind/named.conf.local
+        printf '%s\\\\n' '' 'zone \"'\\\$MAIN_DOMAIN'\" {' '    type master;' '    file \"/etc/bind/db.'\\\$MAIN_DOMAIN'\";' '    allow-transfer { any; };' '};' | tee -a /etc/bind/named.conf.local >/dev/null
     fi
     
-    if ! named-checkzone \"\\\$MAIN_DOMAIN\" \"\\\$ZONE_FILE\" >/dev/null 2>&1; then
-        echo '[HATA] Zone dosyası geçersiz!'
+    if ! named-checkzone \"\\\$MAIN_DOMAIN\" \"\\\$ZONE_FILE\" 2>&1 | head -1; then
+        echo '[HATA] Zone syntax hatası!'
         exit 1
     fi
     
-    systemctl reload named
-    echo '[OK] Zone dosyası oluşturuldu: '\\\$ZONE_FILE
+    systemctl reload named 2>&1
+    echo '[OK] Zone oluşturuldu: '\\\$ZONE_FILE' -> '\\\$WEB_SERVER_IP
 fi
 
 if [ \"\\\$(id -u)\" -eq 0 ]; then
