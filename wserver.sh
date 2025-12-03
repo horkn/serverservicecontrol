@@ -2160,7 +2160,7 @@ MySQL/Redis sunucularında:
   Redis: 6379 portu KAPALI (sadece VPN'den erişilir)
 
 ═══════════════════════════════════════════════════════════════════
-EOF
+FINALSECTION
     
     chmod 600 "$summary_file"
     
