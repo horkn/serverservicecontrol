@@ -8498,6 +8498,52 @@ create_ssl() {
     local domain=""
     ask_input "SSL oluşturulacak domain/subdomain adını girin" domain
     
+    # Türkçe karakter kontrolü ve Punycode dönüşümü
+    if echo "$domain" | grep -q '[şğüöçıİŞĞÜÖÇ]'; then
+        print_warning "Domain adında Türkçe karakter tespit edildi!"
+        echo "  Orijinal: $domain"
+        
+        # idn komutu var mı?
+        if command -v idn &>/dev/null || command -v idn2 &>/dev/null; then
+            local punycode_domain=""
+            if command -v idn2 &>/dev/null; then
+                punycode_domain=$(echo "$domain" | idn2 --no-tld)
+            elif command -v idn &>/dev/null; then
+                punycode_domain=$(echo "$domain" | idn --no-tld)
+            fi
+            
+            if [ -n "$punycode_domain" ]; then
+                print_success "✓ Punycode'a dönüştürüldü: $punycode_domain"
+                domain="$punycode_domain"
+            else
+                print_error "Punycode dönüşümü başarısız!"
+                return 1
+            fi
+        else
+            print_error "idn/idn2 komutu bulunamadı!"
+            print_info "Kurulum: apt install idn2"
+            echo ""
+            print_info "Manuel Punycode dönüşümü:"
+            echo "  Online: https://www.punycoder.com/"
+            echo "  Örnek: türkçe.com → xn--trkce-3ya.com"
+            echo ""
+            
+            if ask_yes_no "idn2 paketini şimdi kurmak ister misiniz?"; then
+                apt update && apt install -y idn2
+                if command -v idn2 &>/dev/null; then
+                    punycode_domain=$(echo "$domain" | idn2 --no-tld)
+                    print_success "✓ Punycode: $punycode_domain"
+                    domain="$punycode_domain"
+                else
+                    print_error "Kurulum başarısız!"
+                    return 1
+                fi
+            else
+                return 1
+            fi
+        fi
+    fi
+    
     if [ -z "$EMAIL" ]; then
         ask_input "E-posta adresinizi girin (SSL için gerekli)" EMAIL
     fi
