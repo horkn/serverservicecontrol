@@ -8648,33 +8648,86 @@ create_ssl_dns_auto() {
     
     # SSH bağlantı testi
     print_info "DNS sunucusuna SSH bağlantı testi..."
+    echo ""
     
-    if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no $dns_server_user@$dns_server_ip "echo test" &>/dev/null; then
-        print_error "DNS sunucusuna SSH bağlantısı başarısız!"
-        echo ""
-        print_info "SSH key kurulumu gerekli:"
-        echo "  1. ssh-keygen -t rsa -b 4096"
-        echo "  2. ssh-copy-id $dns_server_user@$dns_server_ip"
-        echo ""
-        
-        if ask_yes_no "SSH key'i şimdi kopyalamak ister misiniz?"; then
-            if [ ! -f "/root/.ssh/id_rsa" ]; then
-                ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N ""
-            fi
-            
-            ssh-copy-id $dns_server_user@$dns_server_ip
-            
-            if [ $? -ne 0 ]; then
-                print_error "SSH key kopyalama başarısız!"
-                return 1
-            fi
-        else
-            print_info "Manuel DNS challenge kullanın (Seçenek 2)"
-            return 1
-        fi
+    # SSH key kontrolü
+    if [ ! -f "/root/.ssh/id_rsa" ]; then
+        print_warning "SSH key bulunamadı, oluşturuluyor..."
+        ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q
+        print_success "✓ SSH key oluşturuldu"
     fi
     
-    print_success "✓ DNS sunucusuna SSH erişimi var"
+    # SSH bağlantı testi (key ile)
+    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes $dns_server_user@$dns_server_ip "echo test" &>/dev/null; then
+        print_success "✓ DNS sunucusuna SSH erişimi var (key authentication)"
+    else
+        print_warning "SSH key authentication başarısız!"
+        echo ""
+        
+        print_header "SSH Key Kurulumu Gerekli"
+        
+        echo -e "${CYAN}Sorun:${NC}"
+        echo "  DNS sunucusu ($dns_server_ip) SSH key ile erişime izin vermiyor"
+        echo "  veya key henüz kopyalanmamış"
+        echo ""
+        
+        echo -e "${CYAN}Çözüm Seçenekleri:${NC}"
+        echo "1) SSH key'i şimdi kopyala (Önerilen)"
+        echo "2) DNS sunucusunda SSH yapılandırmasını düzelt"
+        echo "3) Manuel DNS challenge kullan (şifre gerektirmez)"
+        echo "4) İptal et"
+        echo ""
+        
+        read -p "Seçiminiz (1-4): " ssh_fix_choice
+        
+        case $ssh_fix_choice in
+            1)
+                print_info "SSH key kopyalanıyor..."
+                echo ""
+                echo -e "${YELLOW}DNS sunucusunun root şifresini girmeniz gerekecek${NC}"
+                echo ""
+                
+                # ssh-copy-id çalıştır
+                if ssh-copy-id -o StrictHostKeyChecking=no $dns_server_user@$dns_server_ip; then
+                    print_success "✓ SSH key başarıyla kopyalandı!"
+                    
+                    # Tekrar test et
+                    if ssh -o ConnectTimeout=5 -o BatchMode=yes $dns_server_user@$dns_server_ip "echo test" &>/dev/null; then
+                        print_success "✓ SSH bağlantı testi başarılı!"
+                    else
+                        print_error "Hala bağlanılamıyor!"
+                        print_info "DNS sunucusunda SSH yapılandırmasını kontrol edin"
+                    fi
+                else
+                    print_error "SSH key kopyalama başarısız!"
+                    echo ""
+                    print_info "Olası nedenler:"
+                    echo "  1. Şifre yanlış"
+                    echo "  2. DNS sunucusunda PasswordAuthentication no"
+                    echo "  3. Root login kapalı"
+                    echo "  4. Firewall SSH portunu engelliyor"
+                    echo ""
+                    print_info "Seçenek 2 ile DNS sunucusunu düzeltebilirsiniz"
+                    return 1
+                fi
+                ;;
+            2)
+                fix_remote_ssh_config "$dns_server_ip" "$dns_server_user"
+                return $?
+                ;;
+            3)
+                print_info "Manuel DNS challenge kullanın"
+                print_info "Ana Menü > 5) SSL > Challenge: 2) DNS-01 Manuel"
+                return 1
+                ;;
+            *)
+                print_info "İşlem iptal edildi"
+                return 1
+                ;;
+        esac
+    fi
+    
+    print_success "✓ DNS sunucusuna SSH erişimi hazır"
     
     # Certbot DNS plugin kurulumu
     print_info "Certbot DNS plugin'i kuruluyor..."
@@ -8848,6 +8901,199 @@ add_dns_txt_record_for_ssl() {
             return 1
             ;;
     esac
+}
+
+fix_remote_ssh_config() {
+    local remote_ip=$1
+    local remote_user=$2
+    
+    print_header "Uzak Sunucuda SSH Yapılandırması Düzelt"
+    
+    echo -e "${CYAN}Bu işlem uzak sunucuda SSH yapılandırmasını düzeltecek${NC}"
+    echo "Değiştirilecek ayarlar:"
+    echo "  • PasswordAuthentication yes"
+    echo "  • PubkeyAuthentication yes"
+    echo "  • PermitRootLogin yes (root kullanıcısı için)"
+    echo ""
+    
+    print_warning "ÖNEMLİ: Uzak sunucuda root şifresini bilmeniz gerekiyor!"
+    echo ""
+    
+    if ! ask_yes_no "Devam etmek istiyor musunuz?"; then
+        return 1
+    fi
+    
+    # sshpass kontrolü (şifre ile SSH için)
+    if ! command -v sshpass &>/dev/null; then
+        print_info "sshpass kuruluyor (şifre ile SSH için)..."
+        apt update
+        apt install -y sshpass
+    fi
+    
+    local ssh_password=""
+    ask_password "Uzak sunucu ($remote_ip) $remote_user şifresi" ssh_password
+    
+    # SSH ile bağlan ve yapılandırmayı düzelt
+    print_info "SSH yapılandırması düzeltiliyor..."
+    
+    sshpass -p "$ssh_password" ssh -o StrictHostKeyChecking=no $remote_user@$remote_ip <<'REMOTE_COMMANDS'
+# SSH yapılandırma dosyası
+SSHD_CONFIG="/etc/ssh/sshd_config"
+
+# Yedek oluştur
+cp $SSHD_CONFIG ${SSHD_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)
+
+# PasswordAuthentication etkinleştir
+if grep -q "^PasswordAuthentication no" $SSHD_CONFIG; then
+    sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' $SSHD_CONFIG
+    echo "[DEĞIŞTI] PasswordAuthentication yes"
+elif ! grep -q "^PasswordAuthentication" $SSHD_CONFIG; then
+    echo "PasswordAuthentication yes" >> $SSHD_CONFIG
+    echo "[EKLENDİ] PasswordAuthentication yes"
+else
+    echo "[ZATEN AKTİF] PasswordAuthentication yes"
+fi
+
+# PubkeyAuthentication etkinleştir
+if ! grep -q "^PubkeyAuthentication yes" $SSHD_CONFIG; then
+    if grep -q "^PubkeyAuthentication" $SSHD_CONFIG; then
+        sed -i 's/^PubkeyAuthentication.*/PubkeyAuthentication yes/' $SSHD_CONFIG
+    else
+        echo "PubkeyAuthentication yes" >> $SSHD_CONFIG
+    fi
+    echo "[DEĞIŞTI] PubkeyAuthentication yes"
+fi
+
+# PermitRootLogin etkinleştir (root için)
+if [ "$USER" = "root" ]; then
+    if grep -q "^PermitRootLogin no" $SSHD_CONFIG || grep -q "^PermitRootLogin prohibit-password" $SSHD_CONFIG; then
+        sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' $SSHD_CONFIG
+        echo "[DEĞIŞTI] PermitRootLogin yes"
+    elif ! grep -q "^PermitRootLogin" $SSHD_CONFIG; then
+        echo "PermitRootLogin yes" >> $SSHD_CONFIG
+        echo "[EKLENDİ] PermitRootLogin yes"
+    fi
+fi
+
+# SSH servisini yeniden başlat
+systemctl restart sshd || systemctl restart ssh
+
+echo ""
+echo "[TAMAMLANDI] SSH yapılandırması düzeltildi"
+REMOTE_COMMANDS
+    
+    local ssh_result=$?
+    
+    if [ $ssh_result -eq 0 ]; then
+        print_success "✓ Uzak sunucuda SSH yapılandırması düzeltildi!"
+        echo ""
+        print_info "SSH servisi yeniden başlatıldı, şimdi key kopyalayalım..."
+        
+        sleep 2
+        
+        # Şimdi key kopyala (şifre authentication artık aktif)
+        if [ ! -f "/root/.ssh/id_rsa" ]; then
+            ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q
+        fi
+        
+        print_info "SSH key kopyalanıyor..."
+        
+        if sshpass -p "$ssh_password" ssh-copy-id -o StrictHostKeyChecking=no $remote_user@$remote_ip 2>/dev/null; then
+            print_success "✓ SSH key başarıyla kopyalandı!"
+            
+            # Test et
+            if ssh -o ConnectTimeout=5 -o BatchMode=yes $remote_user@$remote_ip "echo test" &>/dev/null; then
+                print_success "✓ SSH key authentication çalışıyor!"
+                echo ""
+                print_success "Artık şifresiz bağlanabilirsiniz"
+            else
+                print_warning "Key kopyalandı ama test başarısız"
+            fi
+        else
+            print_error "SSH key kopyalama başarısız!"
+            echo ""
+            print_info "Manuel olarak deneyin:"
+            echo "  ssh-copy-id $remote_user@$remote_ip"
+        fi
+    else
+        print_error "Uzak sunucuda işlem başarısız!"
+        print_info "Şifre yanlış olabilir veya SSH erişimi yok"
+    fi
+}
+
+test_ssh_connection() {
+    print_header "SSH Bağlantı Testi ve Düzeltme"
+    
+    local remote_ip=""
+    local remote_user="root"
+    
+    ask_input "Test edilecek sunucu IP" remote_ip
+    ask_input "SSH kullanıcı adı" remote_user "root"
+    
+    echo ""
+    print_info "SSH bağlantı testi yapılıyor..."
+    echo ""
+    
+    # Test 1: Key authentication
+    echo -e "${CYAN}Test 1: SSH Key Authentication${NC}"
+    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes $remote_user@$remote_ip "echo test" &>/dev/null 2>&1; then
+        print_success "✓ SSH Key authentication çalışıyor!"
+        echo "  Durum: Şifresiz giriş aktif"
+    else
+        print_warning "✗ SSH Key authentication çalışmıyor"
+        echo "  Durum: Key kurulumu gerekli"
+    fi
+    
+    echo ""
+    
+    # Test 2: Password authentication
+    echo -e "${CYAN}Test 2: SSH Password Authentication${NC}"
+    
+    # sshpass var mı?
+    if ! command -v sshpass &>/dev/null; then
+        print_info "sshpass kuruluyor..."
+        apt update && apt install -y sshpass
+    fi
+    
+    local test_password=""
+    ask_password "SSH şifresi (test için)" test_password
+    
+    if sshpass -p "$test_password" ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no $remote_user@$remote_ip "echo test" &>/dev/null 2>&1; then
+        print_success "✓ SSH Password authentication çalışıyor!"
+        echo "  Durum: Şifre doğru, bağlantı başarılı"
+        echo ""
+        
+        # Key kopyalama öner
+        if ask_yes_no "SSH key'i şimdi kopyalamak ister misiniz? (Şifresiz giriş için)"; then
+            if [ ! -f "/root/.ssh/id_rsa" ]; then
+                ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q
+            fi
+            
+            if sshpass -p "$test_password" ssh-copy-id -o StrictHostKeyChecking=no $remote_user@$remote_ip 2>/dev/null; then
+                print_success "✓ SSH key kopyalandı!"
+            fi
+        fi
+    else
+        print_error "✗ SSH Password authentication çalışmıyor!"
+        echo "  Durum: Şifre yanlış veya password authentication kapalı"
+        echo ""
+        
+        print_warning "Uzak sunucuda SSH yapılandırması düzeltilmeli!"
+        echo ""
+        
+        if ask_yes_no "Uzak sunucuda SSH yapılandırmasını düzeltmek ister misiniz?"; then
+            fix_remote_ssh_config "$remote_ip" "$remote_user"
+        fi
+    fi
+    
+    echo ""
+    print_header "SSH Debug Bilgileri"
+    echo ""
+    echo "Manuel bağlantı testi:"
+    echo -e "${GREEN}ssh -vvv $remote_user@$remote_ip${NC}"
+    echo ""
+    echo "Uzak sunucuda kontrol edin:"
+    echo -e "${GREEN}cat /etc/ssh/sshd_config | grep -E 'PasswordAuthentication|PubkeyAuthentication|PermitRootLogin'${NC}"
 }
 
 add_bind9_txt_record() {
@@ -12036,8 +12282,9 @@ main_menu() {
         echo "24) PHP Eklentileri Hızlı Düzeltme (Composer için)"
         echo "25) PHP Çift Yükleme Sorunu Düzelt (dom, xml)"
         echo "26) Redis Bağlantı Sorunu Düzelt"
-        echo "27) Multi-Server (Dağıtık Sistem) Yapılandırması"
-        echo "28) Çıkış"
+        echo "27) SSH Bağlantı Testi ve Düzeltme (Sunucular Arası)"
+        echo "28) Multi-Server (Dağıtık Sistem) Yapılandırması"
+        echo "29) Çıkış"
         echo ""
         
         # Multi-server modu göstergesi
@@ -12047,7 +12294,7 @@ main_menu() {
             echo ""
         fi
         
-        read -p "Seçiminizi yapın (1-28): " choice
+        read -p "Seçiminizi yapın (1-29): " choice
         
         case $choice in
             1)
@@ -12164,14 +12411,18 @@ main_menu() {
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             27)
-                multi_server_menu
+                test_ssh_connection
+                read -p "Devam etmek için Enter'a basın..."
                 ;;
             28)
+                multi_server_menu
+                ;;
+            29)
                 print_success "Çıkılıyor..."
                 exit 0
                 ;;
             *)
-                print_error "Geçersiz seçim. Lütfen 1-28 arasında bir sayı girin."
+                print_error "Geçersiz seçim. Lütfen 1-29 arasında bir sayı girin."
                 sleep 2
                 ;;
         esac
