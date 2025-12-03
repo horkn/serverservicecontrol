@@ -9038,19 +9038,16 @@ BIND9_OK=false
 # Kontrol 1: /etc/bind dizini
 if [ -d '/etc/bind' ]; then
     BIND9_OK=true
-    echo '[OK] /etc/bind dizini mevcut'
 fi
 
 # Kontrol 2: named-checkzone komutu
 if command -v named-checkzone >/dev/null 2>&1; then
     BIND9_OK=true
-    echo '[OK] named-checkzone komutu mevcut'
 fi
 
 # Kontrol 3: bind9 paketi
 if dpkg -l 2>/dev/null | grep -q '^ii.*bind9 '; then
     BIND9_OK=true
-    echo '[OK] bind9 paketi kurulu'
 fi
 
 # BIND9 yoksa kur
@@ -9064,38 +9061,21 @@ if [ \"\$BIND9_OK\" = \"false\" ]; then
     echo '[OK] BIND9 kuruldu'
 fi
 
-# Servis kontrolü (Ubuntu 24.04: bind9 veya named)
-if systemctl is-active --quiet bind9 2>/dev/null; then
-    echo '[OK] bind9 servisi çalışıyor'
-elif systemctl is-active --quiet named 2>/dev/null; then
-    echo '[OK] named servisi çalışıyor'
-else
-    echo '[UYARI] BIND9 servisi çalışmıyor, başlatılıyor...'
-    
+# Servis kontrolü (sessiz)
+if ! systemctl is-active --quiet bind9 2>/dev/null && ! systemctl is-active --quiet named 2>/dev/null; then
     if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
-        systemctl enable bind9 2>/dev/null || true
         systemctl start bind9 2>/dev/null || true
-        echo '[OK] bind9 servisi başlatıldı'
     else
-        systemctl enable named 2>/dev/null || true
         systemctl start named 2>/dev/null || true
-        echo '[OK] named servisi başlatıldı'
     fi
 fi
 
 # Zone dosyası kontrolü ve otomatik oluşturma
 if [ ! -f \"\\\$ZONE_FILE\" ]; then
-    echo '[UYARI] Zone dosyası bulunamadı: '\\\$ZONE_FILE
-    echo '[INFO] Otomatik oluşturuluyor...'
+    echo '[INFO] Zone oluşturuluyor: '\\\$ZONE_FILE
     
     WEB_SERVER_IP=\"$web_server_ip\"
     SERIAL=\\\$(date +%Y%m%d)01
-    
-    # /etc/bind dizini var mı son kontrol
-    if [ ! -d '/etc/bind' ]; then
-        echo '[HATA] /etc/bind hala yok!'
-        exit 1
-    fi
     
     # printf + tee ile dosya oluştur
     printf '%s\\\\n' \\\
@@ -9216,19 +9196,16 @@ BIND9_OK=false
 # Kontrol 1: /etc/bind dizini
 if [ -d '/etc/bind' ]; then
     BIND9_OK=true
-    echo '[OK] /etc/bind dizini mevcut'
 fi
 
 # Kontrol 2: named-checkzone komutu
 if command -v named-checkzone >/dev/null 2>&1; then
     BIND9_OK=true
-    echo '[OK] named-checkzone komutu mevcut'
 fi
 
 # Kontrol 3: bind9 paketi
 if dpkg -l 2>/dev/null | grep -q '^ii.*bind9 '; then
     BIND9_OK=true
-    echo '[OK] bind9 paketi kurulu'
 fi
 
 # BIND9 yoksa kur
@@ -9242,29 +9219,18 @@ if [ \"\$BIND9_OK\" = \"false\" ]; then
     echo '[OK] BIND9 kuruldu'
 fi
 
-# Servis kontrolü (Ubuntu 24.04: bind9 veya named)
-if systemctl is-active --quiet bind9 2>/dev/null; then
-    echo '[OK] bind9 servisi çalışıyor'
-elif systemctl is-active --quiet named 2>/dev/null; then
-    echo '[OK] named servisi çalışıyor'
-else
-    echo '[UYARI] BIND9 servisi çalışmıyor, başlatılıyor...'
-    
+# Servis kontrolü (sessiz)
+if ! systemctl is-active --quiet bind9 2>/dev/null && ! systemctl is-active --quiet named 2>/dev/null; then
     if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
-        systemctl enable bind9 2>/dev/null || true
         systemctl start bind9 2>/dev/null || true
-        echo '[OK] bind9 servisi başlatıldı'
     else
-        systemctl enable named 2>/dev/null || true
         systemctl start named 2>/dev/null || true
-        echo '[OK] named servisi başlatıldı'
     fi
 fi
 
 # Zone dosyası kontrolü ve otomatik oluşturma
 if [ ! -f \"\\\$ZONE_FILE\" ]; then
-    echo '[UYARI] Zone dosyası bulunamadı: '\\\$ZONE_FILE
-    echo '[INFO] Otomatik oluşturuluyor...'
+    echo '[INFO] Zone oluşturuluyor: '\\\$ZONE_FILE
     
     WEB_SERVER_IP=\"$web_server_ip\"
     SERIAL=\\\$(date +%Y%m%d)01
