@@ -8981,38 +8981,38 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     echo '[UYARI] Zone dosyası bulunamadı: '\\\$ZONE_FILE
     echo '[INFO] Otomatik oluşturuluyor...'
     
-    # Web server IP (hook'a parametre olarak geçirilir)
     WEB_SERVER_IP=\"$web_server_ip\"
+    SERIAL=\\\$(date +%Y%m%d)01
     
-    # Zone dosyası oluştur
-    cat > \"\\\$ZONE_FILE\" <<ZONE_EOF
-\\\\\$TTL    604800
-@       IN      SOA     \\\$MAIN_DOMAIN. admin.\\\$MAIN_DOMAIN. (
-                         \\\$(date +%Y%m%d)01 ; Serial
-                         604800         ; Refresh
-                         86400          ; Retry
-                         2419200        ; Expire
-                         604800 )       ; Negative Cache TTL
-;
-@       IN      NS      ns1.\\\$MAIN_DOMAIN.
-@       IN      A       \\\$WEB_SERVER_IP
-ns1     IN      A       \\\$WEB_SERVER_IP
-www     IN      A       \\\$WEB_SERVER_IP
-ZONE_EOF
+    # Zone dosyasını satır satır oluştur (nested heredoc çalışmaz)
+    {
+        echo \"\\\\\$TTL    604800\"
+        echo \"@       IN      SOA     \\\$MAIN_DOMAIN. admin.\\\$MAIN_DOMAIN. (\"
+        echo \"                         \\\$SERIAL ; Serial\"
+        echo \"                         604800         ; Refresh\"
+        echo \"                         86400          ; Retry\"
+        echo \"                         2419200        ; Expire\"
+        echo \"                         604800 )       ; Negative Cache TTL\"
+        echo \";\"
+        echo \"@       IN      NS      ns1.\\\$MAIN_DOMAIN.\"
+        echo \"@       IN      A       \\\$WEB_SERVER_IP\"
+        echo \"ns1     IN      A       \\\$WEB_SERVER_IP\"
+        echo \"www     IN      A       \\\$WEB_SERVER_IP\"
+    } > \"\\\$ZONE_FILE\"
     
     chmod 644 \"\\\$ZONE_FILE\"
-    chown bind:bind \"\\\$ZONE_FILE\"
+    chown bind:bind \"\\\$ZONE_FILE\" 2>/dev/null || true
     
-    # named.conf.local'e ekle (yoksa)
+    # named.conf.local'e ekle
     if ! grep -q \"zone \\\\\"\\\$MAIN_DOMAIN\\\\\"\" /etc/bind/named.conf.local 2>/dev/null; then
-        cat >> /etc/bind/named.conf.local <<NAMED_EOF
-
-zone \"\\\$MAIN_DOMAIN\" {
-    type master;
-    file \"/etc/bind/db.\\\$MAIN_DOMAIN\";
-    allow-transfer { any; };
-};
-NAMED_EOF
+        {
+            echo \"\"
+            echo \"zone \\\\\"\\\$MAIN_DOMAIN\\\\\" {\"
+            echo \"    type master;\"
+            echo \"    file \\\\\"/etc/bind/db.\\\$MAIN_DOMAIN\\\\\";\"
+            echo \"    allow-transfer { any; };\"
+            echo \"};\"
+        } >> /etc/bind/named.conf.local
     fi
     
     # BIND9 yapılandırma testi
@@ -9093,34 +9093,36 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     echo '[INFO] Otomatik oluşturuluyor...'
     
     WEB_SERVER_IP=\"$web_server_ip\"
+    SERIAL=\\\$(date +%Y%m%d)01
     
-    cat > \"\\\$ZONE_FILE\" <<ZONE_EOF
-\\\\\$TTL    604800
-@       IN      SOA     \\\$MAIN_DOMAIN. admin.\\\$MAIN_DOMAIN. (
-                         \\\$(date +%Y%m%d)01 ; Serial
-                         604800         ; Refresh
-                         86400          ; Retry
-                         2419200        ; Expire
-                         604800 )       ; Negative Cache TTL
-;
-@       IN      NS      ns1.\\\$MAIN_DOMAIN.
-@       IN      A       \\\$WEB_SERVER_IP
-ns1     IN      A       \\\$WEB_SERVER_IP
-www     IN      A       \\\$WEB_SERVER_IP
-ZONE_EOF
+    # Zone dosyasını satır satır oluştur
+    {
+        echo \"\\\\\$TTL    604800\"
+        echo \"@       IN      SOA     \\\$MAIN_DOMAIN. admin.\\\$MAIN_DOMAIN. (\"
+        echo \"                         \\\$SERIAL ; Serial\"
+        echo \"                         604800         ; Refresh\"
+        echo \"                         86400          ; Retry\"
+        echo \"                         2419200        ; Expire\"
+        echo \"                         604800 )       ; Negative Cache TTL\"
+        echo \";\"
+        echo \"@       IN      NS      ns1.\\\$MAIN_DOMAIN.\"
+        echo \"@       IN      A       \\\$WEB_SERVER_IP\"
+        echo \"ns1     IN      A       \\\$WEB_SERVER_IP\"
+        echo \"www     IN      A       \\\$WEB_SERVER_IP\"
+    } > \"\\\$ZONE_FILE\"
     
     chmod 644 \"\\\$ZONE_FILE\"
     chown bind:bind \"\\\$ZONE_FILE\" 2>/dev/null || true
     
     if ! grep -q \"zone \\\\\"\\\$MAIN_DOMAIN\\\\\"\" /etc/bind/named.conf.local 2>/dev/null; then
-        cat >> /etc/bind/named.conf.local <<NAMED_EOF
-
-zone \"\\\$MAIN_DOMAIN\" {
-    type master;
-    file \"/etc/bind/db.\\\$MAIN_DOMAIN\";
-    allow-transfer { any; };
-};
-NAMED_EOF
+        {
+            echo \"\"
+            echo \"zone \\\\\"\\\$MAIN_DOMAIN\\\\\" {\"
+            echo \"    type master;\"
+            echo \"    file \\\\\"/etc/bind/db.\\\$MAIN_DOMAIN\\\\\";\"
+            echo \"    allow-transfer { any; };\"
+            echo \"};\"
+        } >> /etc/bind/named.conf.local
     fi
     
     if ! named-checkzone \"\\\$MAIN_DOMAIN\" \"\\\$ZONE_FILE\" >/dev/null 2>&1; then
