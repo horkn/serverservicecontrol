@@ -9523,13 +9523,32 @@ install_ssl_to_remote_nginx() {
     # Web sunucusunda /etc/letsencrypt dizini var mı
     print_info "Web sunucusunda dizinler oluşturuluyor..."
     
-    $ssh_cmd $remote_user@$remote_ip "
-        mkdir -p /etc/letsencrypt/live/$domain
-        chmod 755 /etc/letsencrypt/live/$domain
-    "
+    # Root kullanıcısı mı?
+    if [ "$remote_user" = "root" ]; then
+        # Root - sudo gereksiz
+        $ssh_cmd $remote_user@$remote_ip "
+            mkdir -p /etc/letsencrypt/live/$domain
+            chmod 755 /etc/letsencrypt/live/$domain
+        "
+    else
+        # Root değil - sudo -S ile şifre ver
+        if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
+            $ssh_cmd $remote_user@$remote_ip "
+                echo '$remote_pass' | sudo -S mkdir -p /etc/letsencrypt/live/$domain
+                echo '$remote_pass' | sudo -S chmod 755 /etc/letsencrypt/live/$domain
+            "
+        else
+            # Key ile - NOPASSWD sudo gerekli
+            $ssh_cmd $remote_user@$remote_ip "
+                sudo mkdir -p /etc/letsencrypt/live/$domain
+                sudo chmod 755 /etc/letsencrypt/live/$domain
+            "
+        fi
+    fi
     
     if [ $? -ne 0 ]; then
         print_error "Web sunucusunda dizin oluşturulamadı!"
+        print_info "Root kullanıcısı kullanmanız önerilir"
         return 1
     fi
     
@@ -9548,35 +9567,80 @@ install_ssl_to_remote_nginx() {
     # Nginx yapılandırmasını güncelle (Web sunucusunda)
     print_info "Nginx yapılandırması güncelleniyor..."
     
-    $ssh_cmd $remote_user@$remote_ip bash <<'NGINX_EOF'
-DOMAIN="$domain"
-NGINX_CONFIG="/etc/nginx/sites-available/$DOMAIN"
-
-if [ ! -f "$NGINX_CONFIG" ]; then
-    echo "[HATA] Nginx yapılandırması bulunamadı: $NGINX_CONFIG"
-    exit 1
-fi
-
-# SSL yapılandırmasını ekle/güncelle
-if ! grep -q "ssl_certificate" "$NGINX_CONFIG"; then
-    # SSL yapılandırması yok, ekle
-    sed -i "/listen 80;/a\    listen 443 ssl;\n    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;" "$NGINX_CONFIG"
-else
-    # SSL zaten var, güncelle
-    sed -i "s|ssl_certificate .*;|ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;|" "$NGINX_CONFIG"
-    sed -i "s|ssl_certificate_key .*;|ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;|" "$NGINX_CONFIG"
-fi
-
-# Nginx test
-if nginx -t 2>&1 | grep -q "successful"; then
-    nginx -s reload
-    echo "[OK] Nginx yapılandırması güncellendi ve reload edildi"
-else
-    echo "[HATA] Nginx yapılandırması geçersiz!"
-    nginx -t
-    exit 1
-fi
-NGINX_EOF
+    if [ "$remote_user" = "root" ]; then
+        # Root - sudo gereksiz
+        $ssh_cmd $remote_user@$remote_ip "
+            NGINX_CONFIG='/etc/nginx/sites-available/$domain'
+            
+            if [ ! -f \"\\\$NGINX_CONFIG\" ]; then
+                echo '[HATA] Nginx config yok: '\\\$NGINX_CONFIG
+                exit 1
+            fi
+            
+            # SSL ekle/güncelle
+            if ! grep -q 'ssl_certificate' \"\\\$NGINX_CONFIG\"; then
+                sed -i '/listen 80;/a\    listen 443 ssl;\\n    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;\\n    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;' \"\\\$NGINX_CONFIG\"
+            else
+                sed -i 's|ssl_certificate .*;|ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;|' \"\\\$NGINX_CONFIG\"
+                sed -i 's|ssl_certificate_key .*;|ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;|' \"\\\$NGINX_CONFIG\"
+            fi
+            
+            # Nginx test ve reload
+            if nginx -t 2>&1 | grep -q 'successful'; then
+                nginx -s reload
+                echo '[OK] Nginx reload edildi'
+            else
+                echo '[HATA] Nginx test başarısız!'
+                nginx -t
+                exit 1
+            fi
+        "
+    else
+        # Root değil - sudo -S ile şifre geçir
+        if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
+            $ssh_cmd $remote_user@$remote_ip "
+                NGINX_CONFIG='/etc/nginx/sites-available/$domain'
+                
+                if [ ! -f \"\\\$NGINX_CONFIG\" ]; then
+                    echo '[HATA] Nginx config yok'
+                    exit 1
+                fi
+                
+                # SSL ekle/güncelle (sudo -S ile)
+                if ! grep -q 'ssl_certificate' \"\\\$NGINX_CONFIG\"; then
+                    echo '$remote_pass' | sudo -S sed -i '/listen 80;/a\    listen 443 ssl;\\n    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;\\n    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;' \"\\\$NGINX_CONFIG\"
+                else
+                    echo '$remote_pass' | sudo -S sed -i 's|ssl_certificate .*;|ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;|' \"\\\$NGINX_CONFIG\"
+                    echo '$remote_pass' | sudo -S sed -i 's|ssl_certificate_key .*;|ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;|' \"\\\$NGINX_CONFIG\"
+                fi
+                
+                # Nginx test ve reload
+                echo '$remote_pass' | sudo -S nginx -t
+                echo '$remote_pass' | sudo -S nginx -s reload
+                echo '[OK] Nginx reload edildi'
+            "
+        else
+            # Key ile - NOPASSWD gerekli
+            print_warning "eftysystem kullanıcısı için NOPASSWD sudo gerekli!"
+            print_info "B sunucusunda çalıştırın:"
+            echo "  echo '$remote_user ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/$remote_user"
+            echo ""
+            
+            if ! ask_yes_no "NOPASSWD sudo ayarlandı mı?"; then
+                return 1
+            fi
+            
+            $ssh_cmd $remote_user@$remote_ip "
+                NGINX_CONFIG='/etc/nginx/sites-available/$domain'
+                
+                sudo sed -i '/listen 80;/a\    listen 443 ssl;\\n    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;\\n    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;' \"\\\$NGINX_CONFIG\" 2>/dev/null || true
+                sudo sed -i 's|ssl_certificate .*;|ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;|' \"\\\$NGINX_CONFIG\"
+                sudo sed -i 's|ssl_certificate_key .*;|ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;|' \"\\\$NGINX_CONFIG\"
+                sudo nginx -t && sudo nginx -s reload
+                echo '[OK] Nginx reload edildi'
+            "
+        fi
+    fi
     
     if [ $? -eq 0 ]; then
         print_success "═══════════════════════════════════════════"
