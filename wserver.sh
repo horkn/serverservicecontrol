@@ -11,11 +11,38 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# Multi-Server Yapılandırma Değişkenleri
+MULTI_SERVER_MODE=false
+DNS_SERVER_IP=""
+WEB_SERVER_IP=""
+STORAGE_SERVER_IP=""
+DATABASE_SERVER_IP=""
+DATABASE_SLAVE_IP=""
+REDIS_SERVER_IP=""
+REDIS_SLAVE_IP=""
+DATABASE_LOCAL_IP=""
+REDIS_LOCAL_IP=""
+MULTI_SERVER_CONFIG="/etc/server-cluster.conf"
+
+# Sunucular Arası Haberleşme Modu
+CLUSTER_COMMUNICATION_MODE=""  # vpn, wireguard, ssh_tunnel, private_network, public
+VPN_NETWORK=""                 # Örn: 10.8.0.0/24
+WIREGUARD_NETWORK=""           # Örn: 10.9.0.0/24
+
 # Kök kullanıcı kontrolü
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}Hata: Lütfen bu betiği 'sudo' ile çalıştırın: sudo $0${NC}"
     exit 1
 fi
+
+# Multi-server yapılandırmasını yükle (varsa)
+load_multi_server_config() {
+    if [ -f "$MULTI_SERVER_CONFIG" ]; then
+        source "$MULTI_SERVER_CONFIG"
+        MULTI_SERVER_MODE=true
+        print_info "Multi-server yapılandırması yüklendi"
+    fi
+}
 
 # Fonksiyonlar
 print_header() {
@@ -40,6 +67,2705 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Multi-Server Yapılandırma Fonksiyonları
+configure_multi_server() {
+    print_header "Multi-Server (Dağıtık) Yapılandırma - Master/Slave Destekli"
+    
+    echo -e "${CYAN}Bu yapılandırma ile:${NC}"
+    echo "• Farklı sunucularda farklı servisler"
+    echo "• MySQL Master-Slave Replication"
+    echo "• Redis Master-Slave Replication"
+    echo "• Local ağ + Public IP erişim yönetimi"
+    echo ""
+    
+    if ! ask_yes_no "Multi-server yapılandırmasını etkinleştirmek istiyor musunuz?"; then
+        MULTI_SERVER_MODE=false
+        return 0
+    fi
+    
+    MULTI_SERVER_MODE=true
+    
+    # Mevcut sunucu IP'lerini tespit et
+    local current_public_ip=$(hostname -I | awk '{print $1}')
+    local current_private_ip=$(ip addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d'/' -f1 | grep "^10\.\|^172\.\|^192\.168\." | head -1 || echo "")
+    
+    echo -e "${CYAN}Mevcut sunucu IP'leri:${NC}"
+    echo -e "  Public IP:  ${GREEN}$current_public_ip${NC}"
+    [ -n "$current_private_ip" ] && echo -e "  Private IP: ${GREEN}$current_private_ip${NC}"
+    echo ""
+    
+    # Sunucu rollerini belirle
+    print_header "Sunucu Rolleri ve IP Adresleri"
+    echo -e "${YELLOW}Not: Public IP'ler için, local ağ IP'leri varsa onlar da sorulacak${NC}"
+    echo ""
+    
+    # DNS + Ana Site Sunucusu
+    echo -e "${CYAN}═══ DNS + Ana Site Sunucusu ═══${NC}"
+    read -p "DNS/Ana Site Public IP [Bu sunucu: $current_public_ip]: " dns_ip
+    DNS_SERVER_IP=${dns_ip:-$current_public_ip}
+    
+    # Web/Laravel Sunucusu
+    echo ""
+    echo -e "${CYAN}═══ Laravel Framework Sistem ═══${NC}"
+    read -p "Laravel sistem Public IP [Bu sunucu: $current_public_ip]: " web_ip
+    WEB_SERVER_IP=${web_ip:-$current_public_ip}
+    
+    # Database Master
+    echo ""
+    echo -e "${CYAN}═══ MySQL Database Master ═══${NC}"
+    read -p "MySQL Master Public IP [Bu sunucu: $current_public_ip]: " db_ip
+    DATABASE_SERVER_IP=${db_ip:-$current_public_ip}
+    
+    if ask_yes_no "MySQL Master'ın local network IP'si var mı?"; then
+        read -p "MySQL Master Local IP (örn: 10.x.x.x veya 192.168.x.x): " db_local
+        DATABASE_LOCAL_IP="$db_local"
+    fi
+    
+    # Database Slave
+    if ask_yes_no "MySQL Slave sunucusu var mı?"; then
+        read -p "MySQL Slave Public IP: " db_slave_ip
+        DATABASE_SLAVE_IP="$db_slave_ip"
+    fi
+    
+    # Redis Master
+    echo ""
+    echo -e "${CYAN}═══ Redis Master ═══${NC}"
+    read -p "Redis Master Public IP [Bu sunucu: $current_public_ip]: " redis_ip
+    REDIS_SERVER_IP=${redis_ip:-$current_public_ip}
+    
+    if ask_yes_no "Redis Master'ın local network IP'si var mı?"; then
+        read -p "Redis Master Local IP (örn: 10.x.x.x veya 192.168.x.x): " redis_local
+        REDIS_LOCAL_IP="$redis_local"
+    fi
+    
+    # Redis Slave
+    if ask_yes_no "Redis Slave sunucusu var mı?"; then
+        read -p "Redis Slave Public IP: " redis_slave_ip
+        REDIS_SLAVE_IP="$redis_slave_ip"
+    fi
+    
+    # Storage Sunucusu
+    echo ""
+    echo -e "${CYAN}═══ Dosya/Storage Sunucusu (Opsiyonel) ═══${NC}"
+    if ask_yes_no "Ayrı storage sunucusu var mı?"; then
+        read -p "Storage sunucusu IP: " storage_ip
+        STORAGE_SERVER_IP="$storage_ip"
+    else
+        STORAGE_SERVER_IP="$WEB_SERVER_IP"
+    fi
+    
+    # Yapılandırmayı kaydet
+    save_multi_server_config
+    
+    # Özet göster
+    print_header "Multi-Server Yapılandırma Özeti"
+    echo -e "${GREEN}Mevcut Sunucu:${NC} $current_public_ip"
+    [ -n "$current_private_ip" ] && echo -e "${GREEN}Local IP:${NC} $current_private_ip"
+    echo ""
+    
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  CLUSTER YAPISI${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo ""
+    
+    echo -e "${YELLOW}► DNS + Ana Site:${NC}"
+    echo -e "   Public IP: ${GREEN}$DNS_SERVER_IP${NC} $([ "$DNS_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]")"
+    echo ""
+    
+    echo -e "${YELLOW}► Laravel Sistem:${NC}"
+    echo -e "   Public IP: ${GREEN}$WEB_SERVER_IP${NC} $([ "$WEB_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]")"
+    echo ""
+    
+    echo -e "${YELLOW}► MySQL Database:${NC}"
+    echo -e "   Master Public:  ${GREEN}$DATABASE_SERVER_IP${NC} $([ "$DATABASE_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]")"
+    [ -n "$DATABASE_LOCAL_IP" ] && echo -e "   Master Local:   ${GREEN}$DATABASE_LOCAL_IP${NC} ${CYAN}(Laravel buradan bağlanacak)${NC}"
+    [ -n "$DATABASE_SLAVE_IP" ] && echo -e "   Slave Public:   ${GREEN}$DATABASE_SLAVE_IP${NC}"
+    echo ""
+    
+    echo -e "${YELLOW}► Redis Cache:${NC}"
+    echo -e "   Master Public:  ${GREEN}$REDIS_SERVER_IP${NC} $([ "$REDIS_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]")"
+    [ -n "$REDIS_LOCAL_IP" ] && echo -e "   Master Local:   ${GREEN}$REDIS_LOCAL_IP${NC} ${CYAN}(Laravel buradan bağlanacak)${NC}"
+    [ -n "$REDIS_SLAVE_IP" ] && echo -e "   Slave Public:   ${GREEN}$REDIS_SLAVE_IP${NC}"
+    echo ""
+    
+    [ -n "$STORAGE_SERVER_IP" ] && [ "$STORAGE_SERVER_IP" != "$WEB_SERVER_IP" ] && \
+        echo -e "${YELLOW}► Storage:${NC} ${GREEN}$STORAGE_SERVER_IP${NC}"
+    
+    echo ""
+    print_success "Multi-server yapılandırması kaydedildi: $MULTI_SERVER_CONFIG"
+    
+    # Laravel .env örneği göster
+    echo ""
+    if [ "$WEB_SERVER_IP" = "$current_public_ip" ]; then
+        print_header "Laravel .env Yapılandırması (Bu Sunucu için)"
+        echo ""
+        
+        local db_host="${DATABASE_LOCAL_IP:-$DATABASE_SERVER_IP}"
+        local redis_host="${REDIS_LOCAL_IP:-$REDIS_SERVER_IP}"
+        
+        cat <<EOF
+${CYAN}# Database Bağlantısı${NC}
+DB_CONNECTION=mysql
+DB_HOST=${GREEN}$db_host${NC}  ${YELLOW}← Local IP kullanılıyor${NC}
+DB_PORT=3306
+DB_DATABASE=your_database
+DB_USERNAME=your_user
+DB_PASSWORD=your_password
+
+${CYAN}# Database Slave (Okuma için - Opsiyonel)${NC}
+EOF
+        [ -n "$DATABASE_SLAVE_IP" ] && cat <<EOF
+DB_READ_HOST=${GREEN}$DATABASE_SLAVE_IP${NC}
+EOF
+        
+        cat <<EOF
+
+${CYAN}# Redis Bağlantısı${NC}
+REDIS_HOST=${GREEN}$redis_host${NC}  ${YELLOW}← Local IP kullanılıyor${NC}
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+REDIS_CLIENT=phpredis
+EOF
+        [ -n "$REDIS_SLAVE_IP" ] && cat <<EOF
+
+${CYAN}# Redis Slave (Okuma için - Opsiyonel)${NC}
+REDIS_SLAVE_HOST=${GREEN}$REDIS_SLAVE_IP${NC}
+EOF
+        
+        cat <<EOF
+
+${CYAN}# Cache & Session${NC}
+CACHE_DRIVER=redis
+QUEUE_CONNECTION=redis
+SESSION_DRIVER=redis
+EOF
+    fi
+}
+
+save_multi_server_config() {
+    cat > "$MULTI_SERVER_CONFIG" <<EOF
+# Multi-Server Cluster Yapılandırması - Master/Slave Destekli
+# Oluşturulma: $(date)
+# DİKKAT: Bu dosya hassas bilgiler içerir! (chmod 600 yapın)
+
+MULTI_SERVER_MODE=true
+
+# Sunucular Arası Haberleşme Modu
+CLUSTER_COMMUNICATION_MODE="$CLUSTER_COMMUNICATION_MODE"
+WIREGUARD_NETWORK="$WIREGUARD_NETWORK"
+VPN_NETWORK="$VPN_NETWORK"
+
+# Public IP'ler (Kullanıcı tanımlı)
+DNS_SERVER_IP="$DNS_SERVER_IP"
+WEB_SERVER_IP="$WEB_SERVER_IP"
+DATABASE_SERVER_IP="$DATABASE_SERVER_IP"
+DATABASE_SLAVE_IP="$DATABASE_SLAVE_IP"
+REDIS_SERVER_IP="$REDIS_SERVER_IP"
+REDIS_SLAVE_IP="$REDIS_SLAVE_IP"
+STORAGE_SERVER_IP="$STORAGE_SERVER_IP"
+
+# Local/VPN Network IP'ler (Laravel için hızlı erişim)
+DATABASE_LOCAL_IP="$DATABASE_LOCAL_IP"
+REDIS_LOCAL_IP="$REDIS_LOCAL_IP"
+EOF
+    chmod 600 "$MULTI_SERVER_CONFIG"
+    print_info "Yapılandırma güvenli olarak kaydedildi: $MULTI_SERVER_CONFIG"
+    print_warning "NOT: Bu dosya hassas bilgiler içerir, korumaya alındı (chmod 600)"
+}
+
+get_server_role() {
+    local current_ip=$(hostname -I | awk '{print $1}')
+    local roles=""
+    
+    [ "$DNS_SERVER_IP" = "$current_ip" ] && roles="$roles DNS"
+    [ "$WEB_SERVER_IP" = "$current_ip" ] && roles="$roles WEB"
+    [ "$DATABASE_SERVER_IP" = "$current_ip" ] && roles="$roles DATABASE"
+    [ "$REDIS_SERVER_IP" = "$current_ip" ] && roles="$roles REDIS"
+    [ "$STORAGE_SERVER_IP" = "$current_ip" ] && roles="$roles STORAGE"
+    
+    if [ -z "$roles" ]; then
+        echo "UNDEFINED"
+    else
+        echo "$roles"
+    fi
+}
+
+show_cluster_status() {
+    print_header "Multi-Server Cluster Durumu"
+    
+    if [ "$MULTI_SERVER_MODE" != true ]; then
+        print_warning "Multi-server modu etkin değil!"
+        print_info "Etkinleştirmek için: Ana Menü > Multi-Server Yapılandırması"
+        return 1
+    fi
+    
+    local current_ip=$(hostname -I | awk '{print $1}')
+    local current_role=$(get_server_role)
+    
+    echo -e "${GREEN}Mevcut Sunucu:${NC} $current_ip"
+    echo -e "${GREEN}Rol(ler):${NC} $current_role"
+    echo ""
+    
+    echo -e "${CYAN}Cluster Sunucuları:${NC}"
+    echo ""
+    
+    # DNS Sunucusu
+    echo -e "${YELLOW}► DNS Sunucusu:${NC} $DNS_SERVER_IP"
+    if [ "$DNS_SERVER_IP" = "$current_ip" ]; then
+        echo "   [BU SUNUCU]"
+        if systemctl is-active --quiet named 2>/dev/null; then
+            echo -e "   Durum: ${GREEN}BIND9 Çalışıyor${NC}"
+        elif systemctl is-active --quiet dnsmasq 2>/dev/null; then
+            echo -e "   Durum: ${GREEN}dnsmasq Çalışıyor${NC}"
+        else
+            echo -e "   Durum: ${RED}DNS Servisi Yok${NC}"
+        fi
+    else
+        # Uzak sunucu kontrolü
+        if ping -c 1 -W 1 $DNS_SERVER_IP &>/dev/null; then
+            echo -e "   Durum: ${GREEN}Erişilebilir${NC}"
+            # DNS testi
+            if dig @$DNS_SERVER_IP google.com +short +time=2 &>/dev/null; then
+                echo -e "   DNS Testi: ${GREEN}Başarılı${NC}"
+            fi
+        else
+            echo -e "   Durum: ${RED}Erişilemiyor${NC}"
+        fi
+    fi
+    echo ""
+    
+    # Web Sunucusu
+    echo -e "${YELLOW}► Web Sunucusu:${NC} $WEB_SERVER_IP"
+    if [ "$WEB_SERVER_IP" = "$current_ip" ]; then
+        echo "   [BU SUNUCU]"
+        if systemctl is-active --quiet nginx 2>/dev/null; then
+            echo -e "   Durum: ${GREEN}Nginx Çalışıyor${NC}"
+        else
+            echo -e "   Durum: ${RED}Web Servisi Yok${NC}"
+        fi
+    else
+        if ping -c 1 -W 1 $WEB_SERVER_IP &>/dev/null; then
+            echo -e "   Durum: ${GREEN}Erişilebilir${NC}"
+            # HTTP testi
+            if curl -s -o /dev/null -w "%{http_code}" http://$WEB_SERVER_IP --connect-timeout 2 &>/dev/null; then
+                echo -e "   HTTP Testi: ${GREEN}Başarılı${NC}"
+            fi
+        else
+            echo -e "   Durum: ${RED}Erişilemiyor${NC}"
+        fi
+    fi
+    echo ""
+    
+    # Database Sunucuları (Master/Slave)
+    echo -e "${YELLOW}► MySQL Database (Master/Slave):${NC}"
+    echo ""
+    
+    # Master
+    echo -e "   ${CYAN}Master:${NC} $DATABASE_SERVER_IP"
+    [ -n "$DATABASE_LOCAL_IP" ] && echo -e "   ${CYAN}Master Local:${NC} $DATABASE_LOCAL_IP ${YELLOW}← Laravel buradan bağlanır${NC}"
+    
+    if [ "$DATABASE_SERVER_IP" = "$current_ip" ]; then
+        echo "   [BU SUNUCU - MASTER]"
+        if systemctl is-active --quiet mariadb 2>/dev/null || systemctl is-active --quiet mysql 2>/dev/null; then
+            echo -e "   Durum: ${GREEN}✓ MySQL Çalışıyor${NC}"
+            # Master status
+            if [ -n "$MYSQL_ROOT_PASSWORD" ]; then
+                mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SHOW MASTER STATUS\G" 2>/dev/null | grep -E "File:|Position:" | sed 's/^/   /'
+            fi
+        else
+            echo -e "   Durum: ${RED}✗ MySQL Durdurulmuş${NC}"
+        fi
+    else
+        if ping -c 1 -W 1 $DATABASE_SERVER_IP &>/dev/null; then
+            echo -e "   Durum: ${GREEN}✓ Erişilebilir${NC}"
+        else
+            echo -e "   Durum: ${RED}✗ Erişilemiyor${NC}"
+        fi
+    fi
+    
+    # Slave
+    if [ -n "$DATABASE_SLAVE_IP" ]; then
+        echo ""
+        echo -e "   ${CYAN}Slave:${NC} $DATABASE_SLAVE_IP"
+        
+        if [ "$DATABASE_SLAVE_IP" = "$current_ip" ]; then
+            echo "   [BU SUNUCU - SLAVE]"
+            if systemctl is-active --quiet mariadb 2>/dev/null || systemctl is-active --quiet mysql 2>/dev/null; then
+                echo -e "   Durum: ${GREEN}✓ MySQL Çalışıyor${NC}"
+                # Slave status
+                if [ -n "$MYSQL_ROOT_PASSWORD" ]; then
+                    mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep -E "Slave_IO_Running:|Slave_SQL_Running:|Seconds_Behind_Master:" | sed 's/^/   /'
+                fi
+            else
+                echo -e "   Durum: ${RED}✗ MySQL Durdurulmuş${NC}"
+            fi
+        else
+            if ping -c 1 -W 1 $DATABASE_SLAVE_IP &>/dev/null; then
+                echo -e "   Durum: ${GREEN}✓ Erişilebilir${NC}"
+            else
+                echo -e "   Durum: ${RED}✗ Erişilemiyor${NC}"
+            fi
+        fi
+    fi
+    echo ""
+    
+    # Redis Sunucuları (Master/Slave)
+    echo -e "${YELLOW}► Redis Cache (Master/Slave):${NC}"
+    echo ""
+    
+    # Master
+    echo -e "   ${CYAN}Master:${NC} $REDIS_SERVER_IP"
+    [ -n "$REDIS_LOCAL_IP" ] && echo -e "   ${CYAN}Master Local:${NC} $REDIS_LOCAL_IP ${YELLOW}← Laravel buradan bağlanır${NC}"
+    
+    if [ "$REDIS_SERVER_IP" = "$current_ip" ]; then
+        echo "   [BU SUNUCU - MASTER]"
+        if systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
+            echo -e "   Durum: ${GREEN}✓ Redis Çalışıyor${NC}"
+            # Connected slaves
+            redis-cli INFO replication 2>/dev/null | grep "connected_slaves" | sed 's/^/   /'
+        else
+            echo -e "   Durum: ${RED}✗ Redis Durdurulmuş${NC}"
+        fi
+    else
+        if ping -c 1 -W 1 $REDIS_SERVER_IP &>/dev/null; then
+            echo -e "   Durum: ${GREEN}✓ Erişilebilir${NC}"
+        else
+            echo -e "   Durum: ${RED}✗ Erişilemiyor${NC}"
+        fi
+    fi
+    
+    # Slave
+    if [ -n "$REDIS_SLAVE_IP" ]; then
+        echo ""
+        echo -e "   ${CYAN}Slave:${NC} $REDIS_SLAVE_IP"
+        
+        if [ "$REDIS_SLAVE_IP" = "$current_ip" ]; then
+            echo "   [BU SUNUCU - SLAVE]"
+            if systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
+                echo -e "   Durum: ${GREEN}✓ Redis Çalışıyor${NC}"
+                # Slave durumu
+                redis-cli INFO replication 2>/dev/null | grep -E "role:|master_host:|master_link_status:" | sed 's/^/   /'
+            else
+                echo -e "   Durum: ${RED}✗ Redis Durdurulmuş${NC}"
+            fi
+        else
+            if ping -c 1 -W 1 $REDIS_SLAVE_IP &>/dev/null; then
+                echo -e "   Durum: ${GREEN}✓ Erişilebilir${NC}"
+            else
+                echo -e "   Durum: ${RED}✗ Erişilemiyor${NC}"
+            fi
+        fi
+    fi
+    echo ""
+    
+    # Dosya Sunucusu
+    echo -e "${YELLOW}► Dosya Sunucusu:${NC} $STORAGE_SERVER_IP"
+    if [ "$STORAGE_SERVER_IP" = "$current_ip" ]; then
+        echo "   [BU SUNUCU]"
+    else
+        if ping -c 1 -W 1 $STORAGE_SERVER_IP &>/dev/null; then
+            echo -e "   Durum: ${GREEN}Erişilebilir${NC}"
+        else
+            echo -e "   Durum: ${RED}Erişilemiyor${NC}"
+        fi
+    fi
+}
+
+configure_remote_mysql() {
+    print_header "Uzak MySQL Sunucusu Yapılandırması"
+    
+    if [ -z "$DATABASE_SERVER_IP" ]; then
+        print_error "Database sunucusu IP'si tanımlı değil!"
+        return 1
+    fi
+    
+    local current_ip=$(hostname -I | awk '{print $1}')
+    
+    if [ "$DATABASE_SERVER_IP" = "$current_ip" ]; then
+        print_info "Database sunucusu bu sunucu, uzak yapılandırma gerekmiyor"
+        return 0
+    fi
+    
+    print_info "Uzak MySQL sunucusu yapılandırılıyor: $DATABASE_SERVER_IP"
+    
+    # Laravel .env için örnek
+    echo ""
+    echo -e "${CYAN}Laravel .env Yapılandırması:${NC}"
+    cat <<EOF
+DB_CONNECTION=mysql
+DB_HOST=$DATABASE_SERVER_IP
+DB_PORT=3306
+DB_DATABASE=your_database
+DB_USERNAME=your_user
+DB_PASSWORD=your_password
+EOF
+    
+    # MySQL client kurulumu (eğer yoksa)
+    if ! command -v mysql &>/dev/null; then
+        if ask_yes_no "MySQL client kurulsun mu? (uzak sunucuya bağlanmak için gerekli)"; then
+            print_info "MySQL client kuruluyor..."
+            apt update
+            apt install -y mysql-client
+            print_success "MySQL client kuruldu"
+        fi
+    fi
+    
+    # Bağlantı testi
+    if command -v mysql &>/dev/null; then
+        echo ""
+        print_info "Uzak MySQL sunucusuna bağlantı testi..."
+        read -p "MySQL kullanıcı adı [root]: " mysql_user
+        mysql_user=${mysql_user:-root}
+        
+        ask_password "MySQL şifresi" MYSQL_ROOT_PASSWORD
+        
+        if mysql -h $DATABASE_SERVER_IP -u $mysql_user -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1" 2>/dev/null; then
+            print_success "Uzak MySQL sunucusuna bağlantı başarılı!"
+        else
+            print_error "Uzak MySQL sunucusuna bağlanılamadı!"
+            print_info "Kontrol edin:"
+            echo "  1. MySQL sunucusunda uzak bağlantı izni var mı?"
+            echo "  2. Firewall MySQL portunu (3306) engelliyor mu?"
+            echo "  3. Kullanıcı uzak bağlantı için yetkilendirilmiş mi?"
+        fi
+    fi
+}
+
+configure_remote_redis() {
+    print_header "Uzak Redis Sunucusu Yapılandırması"
+    
+    if [ -z "$REDIS_SERVER_IP" ]; then
+        print_error "Redis sunucusu IP'si tanımlı değil!"
+        return 1
+    fi
+    
+    local current_ip=$(hostname -I | awk '{print $1}')
+    
+    if [ "$REDIS_SERVER_IP" = "$current_ip" ]; then
+        print_info "Redis sunucusu bu sunucu, uzak yapılandırma gerekmiyor"
+        return 0
+    fi
+    
+    print_info "Uzak Redis sunucusu yapılandırılıyor: $REDIS_SERVER_IP"
+    
+    # Laravel .env için örnek
+    echo ""
+    echo -e "${CYAN}Laravel .env Yapılandırması:${NC}"
+    cat <<EOF
+REDIS_HOST=$REDIS_SERVER_IP
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+REDIS_CLIENT=phpredis
+
+CACHE_DRIVER=redis
+QUEUE_CONNECTION=redis
+SESSION_DRIVER=redis
+EOF
+    
+    # Redis client kurulumu
+    if ! command -v redis-cli &>/dev/null; then
+        if ask_yes_no "Redis client kurulsun mu? (uzak sunucuya bağlanmak için gerekli)"; then
+            print_info "Redis client kuruluyor..."
+            apt update
+            apt install -y redis-tools
+            print_success "Redis client kuruldu"
+        fi
+    fi
+    
+    # Bağlantı testi
+    if command -v redis-cli &>/dev/null; then
+        echo ""
+        print_info "Uzak Redis sunucusuna bağlantı testi..."
+        
+        if redis-cli -h $REDIS_SERVER_IP ping 2>/dev/null | grep -q "PONG"; then
+            print_success "Uzak Redis sunucusuna bağlantı başarılı!"
+        else
+            print_error "Uzak Redis sunucusuna bağlanılamadı!"
+            print_info "Kontrol edin:"
+            echo "  1. Redis sunucusunda bind adresi 0.0.0.0 olmalı (sadece 127.0.0.1 değil)"
+            echo "  2. Firewall Redis portunu (6379) engelliyor mu?"
+            echo "  3. Redis yapılandırmasında protected-mode no olmalı (dışarıdan erişim için)"
+        fi
+    fi
+}
+
+multi_server_menu() {
+    while true; do
+        clear
+        print_header "Multi-Server (Dağıtık Sistem) Yönetimi"
+        
+        # Yapılandırma durumu
+        if [ "$MULTI_SERVER_MODE" = true ]; then
+            local current_ip=$(hostname -I | awk '{print $1}')
+            local current_role=$(get_server_role)
+            
+            echo -e "${GREEN}✓ Multi-Server Modu: Aktif${NC}"
+            echo -e "${CYAN}Bu Sunucu:${NC} $current_ip - Rol: $current_role"
+        else
+            echo -e "${YELLOW}⚠ Multi-Server Modu: Pasif${NC}"
+        fi
+        
+        echo ""
+        echo -e "${CYAN}Multi-Server Seçenekleri:${NC}"
+        echo "0) Hızlı Kurulum - 6 Sunuculu Cluster (Master-Slave)"
+        echo "1) Multi-Server Yapılandırması (Yeni veya Düzenle)"
+        echo "2) Sunucular Arası Haberleşme Modunu Seç (VPN/Private Network)"
+        echo "3) WireGuard VPN Kurulumu (Sunucular Arası - Önerilen)"
+        echo "4) SSH Tunnel Kurulumu (Geçici Test için)"
+        echo "5) Cluster Durumunu Görüntüle"
+        echo "6) MySQL Master Sunucusunu Yapılandır (Uzak Erişim + Replication)"
+        echo "7) MySQL Slave Sunucusunu Yapılandır"
+        echo "8) Redis Master Sunucusunu Yapılandır (Uzak Erişim + Replication)"
+        echo "9) Redis Slave Sunucusunu Yapılandır"
+        echo "10) Laravel .env Dosyası Oluştur (Tüm Sunucular için)"
+        echo "11) Bu Sunucunun Rolüne Göre Kurulum Yap"
+        echo "12) Multi-Server Modunu Devre Dışı Bırak"
+        echo "13) Geri Dön"
+        echo ""
+        
+        read -p "Seçiminizi yapın (0-13): " choice
+        
+        case $choice in
+            0)
+                quick_setup_predefined_cluster
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            1)
+                configure_multi_server
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            2)
+                select_cluster_communication_mode
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            3)
+                install_wireguard_cluster
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            4)
+                setup_ssh_tunnel_cluster
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            5)
+                show_cluster_status
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            6)
+                configure_mysql_remote_access
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            7)
+                configure_mysql_slave
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            8)
+                configure_redis_remote_access
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            9)
+                configure_redis_slave
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            10)
+                generate_laravel_env_for_cluster
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            11)
+                install_by_server_role
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            12)
+                MULTI_SERVER_MODE=false
+                rm -f "$MULTI_SERVER_CONFIG"
+                print_success "Multi-server modu devre dışı bırakıldı"
+                read -p "Devam etmek için Enter'a basın..."
+                ;;
+            13)
+                return 0
+                ;;
+            *)
+                print_error "Geçersiz seçim"
+                sleep 2
+                ;;
+        esac
+    done
+}
+
+install_by_server_role() {
+    print_header "Sunucu Rolüne Göre Otomatik Kurulum"
+    
+    if [ "$MULTI_SERVER_MODE" != true ]; then
+        print_error "Multi-server modu etkin değil!"
+        return 1
+    fi
+    
+    local current_ip=$(hostname -I | awk '{print $1}')
+    local roles=$(get_server_role)
+    
+    if [ "$roles" = "UNDEFINED" ]; then
+        print_error "Bu sunucu için rol tanımlı değil!"
+        print_info "Önce multi-server yapılandırması yapın"
+        return 1
+    fi
+    
+    print_info "Tespit edilen roller: $roles"
+    echo ""
+    
+    # DNS Server rolü
+    if echo "$roles" | grep -q "DNS"; then
+        echo -e "${CYAN}[DNS SERVER] Kurulacak servisler:${NC}"
+        echo "  • BIND9 veya dnsmasq"
+        echo "  • UFW Firewall (DNS portları)"
+        if ask_yes_no "DNS Server kurulumunu başlatmak istiyor musunuz?"; then
+            install_dns_server
+        fi
+    fi
+    
+    # Web Server rolü
+    if echo "$roles" | grep -q "WEB"; then
+        echo ""
+        echo -e "${CYAN}[WEB SERVER] Kurulacak servisler:${NC}"
+        echo "  • Nginx"
+        echo "  • PHP 8.3 (FPM)"
+        echo "  • Composer"
+        echo "  • Node.js (opsiyonel)"
+        if ask_yes_no "Web Server kurulumunu başlatmak istiyor musunuz?"; then
+            # Nginx kurulumu
+            if ! command -v nginx &>/dev/null; then
+                install_nginx
+            fi
+            
+            # PHP kurulumu
+            if ! command -v php &>/dev/null; then
+                echo "PHP versiyonu seçin:"
+                echo "1) PHP 8.3"
+                echo "2) PHP 8.4"
+                read -p "Seçiminiz (1-2) [1]: " php_choice
+                local php_ver="8.3"
+                case $php_choice in
+                    2) php_ver="8.4";;
+                    *) php_ver="8.3";;
+                esac
+                install_php $php_ver
+            fi
+            
+            # Composer kurulumu
+            if ! command -v composer &>/dev/null; then
+                if ask_yes_no "Composer kurulsun mu?"; then
+                    install_composer
+                fi
+            fi
+            
+            # Node.js kurulumu
+            if ask_yes_no "Node.js kurulsun mu?"; then
+                install_nodejs
+            fi
+        fi
+    fi
+    
+    # Database Server rolü
+    if echo "$roles" | grep -q "DATABASE"; then
+        echo ""
+        echo -e "${CYAN}[DATABASE SERVER] Kurulacak servisler:${NC}"
+        echo "  • MySQL/MariaDB"
+        echo "  • Uzak erişim yapılandırması"
+        if ask_yes_no "Database Server kurulumunu başlatmak istiyor musunuz?"; then
+            if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+                ask_password "MySQL root şifresini belirleyin" MYSQL_ROOT_PASSWORD
+            fi
+            install_mysql
+            
+            # Uzak erişim yapılandırması
+            if ask_yes_no "MySQL'i uzak erişim için yapılandırmak istiyor musunuz?"; then
+                configure_mysql_remote_access
+            fi
+        fi
+    fi
+    
+    # Redis Server rolü
+    if echo "$roles" | grep -q "REDIS"; then
+        echo ""
+        echo -e "${CYAN}[REDIS SERVER] Kurulacak servisler:${NC}"
+        echo "  • Redis Server"
+        echo "  • Uzak erişim yapılandırması"
+        if ask_yes_no "Redis Server kurulumunu başlatmak istiyor musunuz?"; then
+            install_redis
+            
+            # Uzak erişim yapılandırması
+            if ask_yes_no "Redis'i uzak erişim için yapılandırmak istiyor musunuz?"; then
+                configure_redis_remote_access
+            fi
+        fi
+    fi
+    
+    # Storage Server rolü
+    if echo "$roles" | grep -q "STORAGE"; then
+        echo ""
+        echo -e "${CYAN}[STORAGE SERVER] Kurulacak servisler:${NC}"
+        echo "  • NFS Server (dosya paylaşımı)"
+        echo "  • Samba (Windows uyumlu)"
+        if ask_yes_no "Storage Server kurulumunu başlatmak istiyor musunuz?"; then
+            install_nfs_server
+        fi
+    fi
+    
+    print_success "Sunucu rolüne göre kurulum tamamlandı!"
+}
+
+configure_mysql_remote_access() {
+    print_header "MySQL Uzak Erişim Yapılandırması - Master/Slave"
+    
+    local current_ip=$(hostname -I | awk '{print $1}')
+    local is_master=false
+    
+    # Bu sunucu Master mı?
+    if [ "$DATABASE_SERVER_IP" = "$current_ip" ]; then
+        is_master=true
+        print_info "Bu sunucu MySQL MASTER"
+    else
+        print_info "Bu sunucu MySQL sunucusu değil, uzak yapılandırma yapılacak"
+    fi
+    
+    local mysql_conf="/etc/mysql/mariadb.conf.d/50-server.cnf"
+    if [ ! -f "$mysql_conf" ]; then
+        mysql_conf="/etc/mysql/mysql.conf.d/mysqld.cnf"
+    fi
+    if [ ! -f "$mysql_conf" ]; then
+        mysql_conf="/etc/mysql/my.cnf"
+    fi
+    
+    if [ ! -f "$mysql_conf" ]; then
+        print_error "MySQL yapılandırma dosyası bulunamadı!"
+        return 1
+    fi
+    
+    # Yedek oluştur
+    cp "$mysql_conf" "${mysql_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # bind-address kontrolü ve güncelleme
+    print_info "MySQL bind-address kontrol ediliyor..."
+    
+    if grep -q "^bind-address.*127.0.0.1" "$mysql_conf"; then
+        print_warning "MySQL sadece localhost'a bind edilmiş, değiştiriliyor..."
+        sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' "$mysql_conf"
+        print_success "✓ bind-address = 0.0.0.0 (tüm interfaceler)"
+    elif ! grep -q "^bind-address" "$mysql_conf"; then
+        # bind-address yoksa ekle
+        sed -i '/^\[mysqld\]/a bind-address = 0.0.0.0' "$mysql_conf"
+        print_success "✓ bind-address eklendi: 0.0.0.0"
+    else
+        print_info "✓ MySQL zaten uzak erişim için yapılandırılmış"
+    fi
+    
+    # Master yapılandırması
+    if [ "$is_master" = true ] && [ -n "$DATABASE_SLAVE_IP" ]; then
+        print_info "MySQL Master-Slave replication yapılandırılıyor..."
+        
+        # server-id ayarla
+        if ! grep -q "^server-id" "$mysql_conf"; then
+            sed -i '/^\[mysqld\]/a server-id = 1' "$mysql_conf"
+            print_success "✓ server-id = 1 (Master)"
+        fi
+        
+        # log_bin etkinleştir
+        if ! grep -q "^log_bin" "$mysql_conf"; then
+            sed -i '/^\[mysqld\]/a log_bin = /var/log/mysql/mysql-bin.log' "$mysql_conf"
+            print_success "✓ Binary logging etkinleştirildi"
+        fi
+        
+        # binlog_do_db (opsiyonel)
+        if ask_yes_no "Belirli veritabanları için replication yapılsın mı? (Hayır = tüm DB'ler)"; then
+            local replicate_db=""
+            ask_input "Replicate edilecek veritabanı adı" replicate_db
+            sed -i "/^\[mysqld\]/a binlog_do_db = $replicate_db" "$mysql_conf"
+        fi
+    fi
+    
+    # MySQL'i yeniden başlat
+    print_info "MySQL yeniden başlatılıyor..."
+    systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
+    sleep 3
+    
+    if ! systemctl is-active --quiet mariadb 2>/dev/null && ! systemctl is-active --quiet mysql 2>/dev/null; then
+        print_error "MySQL başlatılamadı!"
+        return 1
+    fi
+    
+    # Kullanıcı oluşturma
+    echo ""
+    print_header "MySQL Kullanıcı Oluşturma"
+    
+    local remote_user=""
+    local remote_password=""
+    local db_name=""
+    
+    ask_input "Veritabanı adı" db_name
+    ask_input "Kullanıcı adı" remote_user
+    ask_password "Kullanıcı şifresi" remote_password
+    
+    # Erişim izinlerini belirle
+    echo ""
+    echo -e "${CYAN}Erişim İzinleri:${NC}"
+    echo "1) Sadece Laravel Sistem'den (${WEB_SERVER_IP})"
+    if [ -n "$DATABASE_LOCAL_IP" ]; then
+        echo "2) Local network'ten (önerilen)"
+        echo "3) Belirli IP'lerden (çoklu)"
+        echo "4) Tüm IP'lerden (güvensiz)"
+        read -p "Seçiminiz (1-4) [2]: " access_choice
+        access_choice=${access_choice:-2}
+    else
+        echo "2) Belirli IP'lerden"
+        echo "3) Tüm IP'lerden (güvensiz)"
+        read -p "Seçiminiz (1-3) [1]: " access_choice
+        access_choice=${access_choice:-1}
+    fi
+    
+    if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+        ask_password "MySQL root şifresini girin" MYSQL_ROOT_PASSWORD
+    fi
+    
+    case $access_choice in
+        2)
+            # Local network'ten
+            if [ -n "$DATABASE_LOCAL_IP" ]; then
+                local subnet=$(echo "$DATABASE_LOCAL_IP" | cut -d'.' -f1-3)
+                print_info "Local subnet erişimi: ${subnet}.%"
+                
+                mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF
+CREATE DATABASE IF NOT EXISTS $db_name CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$remote_user'@'${subnet}.%' IDENTIFIED BY '$remote_password';
+GRANT ALL PRIVILEGES ON $db_name.* TO '$remote_user'@'${subnet}.%';
+CREATE USER IF NOT EXISTS '$remote_user'@'$WEB_SERVER_IP' IDENTIFIED BY '$remote_password';
+GRANT ALL PRIVILEGES ON $db_name.* TO '$remote_user'@'$WEB_SERVER_IP';
+FLUSH PRIVILEGES;
+EOF
+                print_success "✓ Local network (${subnet}.%) ve Laravel sistem ($WEB_SERVER_IP) için izin verildi"
+            fi
+            ;;
+        3|2)
+            # Belirli IP'lerden
+            print_info "Erişim izni verilecek IP'leri girin (virgülle ayırın)"
+            local allowed_ips=""
+            ask_input "IP adresleri (örn: 185.255.4.197,46.37.115.20)" allowed_ips
+            
+            IFS=',' read -ra IP_ARRAY <<< "$allowed_ips"
+            
+            mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF
+CREATE DATABASE IF NOT EXISTS $db_name CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+EOF
+            
+            for ip in "${IP_ARRAY[@]}"; do
+                ip=$(echo "$ip" | xargs)  # Trim whitespace
+                mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF
+CREATE USER IF NOT EXISTS '$remote_user'@'$ip' IDENTIFIED BY '$remote_password';
+GRANT ALL PRIVILEGES ON $db_name.* TO '$remote_user'@'$ip';
+EOF
+                print_success "✓ $ip için izin verildi"
+            done
+            
+            mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "FLUSH PRIVILEGES;"
+            ;;
+        4)
+            # Tüm IP'lerden (güvensiz!)
+            print_warning "TÜM IP'lerden erişim izni veriliyor (çok güvensiz!)"
+            
+            mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF
+CREATE DATABASE IF NOT EXISTS $db_name CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$remote_user'@'%' IDENTIFIED BY '$remote_password';
+GRANT ALL PRIVILEGES ON $db_name.* TO '$remote_user'@'%';
+FLUSH PRIVILEGES;
+EOF
+            ;;
+        *)
+            # Sadece Laravel sistemden
+            mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF
+CREATE DATABASE IF NOT EXISTS $db_name CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$remote_user'@'$WEB_SERVER_IP' IDENTIFIED BY '$remote_password';
+GRANT ALL PRIVILEGES ON $db_name.* TO '$remote_user'@'$WEB_SERVER_IP';
+FLUSH PRIVILEGES;
+EOF
+            print_success "✓ Sadece $WEB_SERVER_IP için izin verildi"
+            ;;
+    esac
+    
+    if [ $? -eq 0 ]; then
+        print_success "MySQL uzak erişim yapılandırması tamamlandı!"
+        
+        echo ""
+        echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+        echo -e "${CYAN}  Laravel .env Yapılandırması${NC}"
+        echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+        echo ""
+        
+        local db_host="${DATABASE_LOCAL_IP:-$DATABASE_SERVER_IP}"
+        
+        cat <<EOF
+DB_CONNECTION=mysql
+DB_HOST=${GREEN}$db_host${NC}
+DB_PORT=3306
+DB_DATABASE=${GREEN}$db_name${NC}
+DB_USERNAME=${GREEN}$remote_user${NC}
+DB_PASSWORD=${GREEN}$remote_password${NC}
+EOF
+        
+        # Slave varsa
+        if [ -n "$DATABASE_SLAVE_IP" ]; then
+            echo ""
+            echo -e "${CYAN}# Read-only queries için Slave (Opsiyonel):${NC}"
+            echo "DB_READ_HOST=${GREEN}$DATABASE_SLAVE_IP${NC}"
+        fi
+    else
+        print_error "MySQL yapılandırması başarısız!"
+        return 1
+    fi
+    
+    # Replication kullanıcısı (Master'daysa ve Slave varsa)
+    if [ "$is_master" = true ] && [ -n "$DATABASE_SLAVE_IP" ]; then
+        echo ""
+        if ask_yes_no "Slave için replication kullanıcısı oluşturulsun mu?"; then
+            local repl_user="replicator"
+            local repl_password=""
+            ask_password "Replication şifresi" repl_password
+            
+            mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF
+CREATE USER IF NOT EXISTS '$repl_user'@'$DATABASE_SLAVE_IP' IDENTIFIED BY '$repl_password';
+GRANT REPLICATION SLAVE ON *.* TO '$repl_user'@'$DATABASE_SLAVE_IP';
+FLUSH PRIVILEGES;
+SHOW MASTER STATUS;
+EOF
+            
+            print_success "Replication kullanıcısı oluşturuldu!"
+            echo ""
+            echo -e "${YELLOW}Slave sunucusunda çalıştırın:${NC}"
+            echo -e "${GREEN}CHANGE MASTER TO MASTER_HOST='$DATABASE_SERVER_IP',${NC}"
+            echo -e "${GREEN}  MASTER_USER='$repl_user',${NC}"
+            echo -e "${GREEN}  MASTER_PASSWORD='$repl_password',${NC}"
+            echo -e "${GREEN}  MASTER_LOG_FILE='mysql-bin.000001',${NC}"
+            echo -e "${GREEN}  MASTER_LOG_POS=XXX;${NC}"
+            echo -e "${GREEN}START SLAVE;${NC}"
+        fi
+    fi
+    
+    # Firewall
+    echo ""
+    print_warning "ÖNEMLİ: Firewall'da MySQL portunu (3306) açmayı unutmayın!"
+    if command -v ufw &>/dev/null; then
+        if ask_yes_no "UFW'de MySQL portlarını şimdi açmak ister misiniz?"; then
+            # Laravel sistem için
+            ufw allow from $WEB_SERVER_IP to any port 3306 comment 'MySQL - Laravel'
+            
+            # Local network için (varsa)
+            if [ -n "$DATABASE_LOCAL_IP" ]; then
+                local subnet=$(echo "$DATABASE_LOCAL_IP" | cut -d'.' -f1-3)
+                ufw allow from ${subnet}.0/24 to any port 3306 comment 'MySQL - Local Network'
+            fi
+            
+            # Slave için (varsa)
+            if [ -n "$DATABASE_SLAVE_IP" ]; then
+                ufw allow from $DATABASE_SLAVE_IP to any port 3306 comment 'MySQL - Slave Replication'
+            fi
+            
+            print_success "Firewall kuralları eklendi"
+        fi
+    fi
+}
+
+configure_redis_remote_access() {
+    print_header "Redis Uzak Erişim Yapılandırması - Master/Slave"
+    
+    local current_ip=$(hostname -I | awk '{print $1}')
+    local is_master=false
+    
+    # Bu sunucu Master mı?
+    if [ "$REDIS_SERVER_IP" = "$current_ip" ]; then
+        is_master=true
+        print_info "Bu sunucu Redis MASTER"
+    else
+        print_info "Bu sunucu Redis sunucusu değil, uzak yapılandırma yapılacak"
+    fi
+    
+    local redis_conf="/etc/redis/redis.conf"
+    
+    if [ ! -f "$redis_conf" ]; then
+        print_error "Redis yapılandırma dosyası bulunamadı!"
+        return 1
+    fi
+    
+    # Yedek oluştur
+    cp "$redis_conf" "${redis_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    print_info "Redis yapılandırması güncelleniyor..."
+    
+    # 1. bind adresini değiştir (0.0.0.0 - tüm interfaceler)
+    if grep -q "^bind 127.0.0.1" "$redis_conf"; then
+        sed -i 's/^bind 127.0.0.1.*/bind 0.0.0.0/' "$redis_conf"
+        print_success "✓ bind = 0.0.0.0 (tüm interfaceler)"
+    elif ! grep -q "^bind" "$redis_conf"; then
+        echo "bind 0.0.0.0" >> "$redis_conf"
+        print_success "✓ bind eklendi: 0.0.0.0"
+    fi
+    
+    # 2. protected-mode'u kapat (uzak erişim için)
+    if grep -q "^protected-mode yes" "$redis_conf"; then
+        sed -i 's/^protected-mode yes/protected-mode no/' "$redis_conf"
+        print_success "✓ protected-mode = no"
+    elif ! grep -q "^protected-mode" "$redis_conf"; then
+        echo "protected-mode no" >> "$redis_conf"
+    fi
+    
+    # 3. Şifre ayarla (ZORUNLU - güvenlik için)
+    local redis_password=""
+    ask_password "Redis şifresi belirleyin (boş bırakmayın!)" redis_password
+    
+    if grep -q "^requirepass" "$redis_conf"; then
+        sed -i "s/^requirepass.*/requirepass $redis_password/" "$redis_conf"
+    else
+        echo "requirepass $redis_password" >> "$redis_conf"
+    fi
+    print_success "✓ Redis şifresi ayarlandı"
+    
+    # 4. Master yapılandırması (Slave varsa)
+    if [ "$is_master" = true ] && [ -n "$REDIS_SLAVE_IP" ]; then
+        print_info "Redis Master-Slave replication yapılandırılıyor..."
+        
+        # Master için özel ayarlar
+        if ! grep -q "^repl-diskless-sync" "$redis_conf"; then
+            cat >> "$redis_conf" <<EOF
+
+# Master-Slave Replication Settings
+repl-diskless-sync yes
+repl-diskless-sync-delay 5
+min-replicas-to-write 1
+min-replicas-max-lag 10
+EOF
+            print_success "✓ Master replication ayarları eklendi"
+        fi
+        
+        echo ""
+        print_info "Slave sunucusunda çalıştırılacak komut:"
+        echo -e "${GREEN}redis-cli -h $REDIS_SLAVE_IP${NC}"
+        echo -e "${GREEN}> AUTH şifre${NC}"
+        echo -e "${GREEN}> SLAVEOF $REDIS_SERVER_IP 6379${NC}"
+        echo -e "${GREEN}> CONFIG SET masterauth $redis_password${NC}"
+        echo -e "${GREEN}> CONFIG REWRITE${NC}"
+    fi
+    
+    # Redis'i yeniden başlat
+    print_info "Redis yeniden başlatılıyor..."
+    systemctl restart redis-server 2>/dev/null || systemctl restart redis 2>/dev/null
+    
+    sleep 2
+    
+    if systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
+        print_success "Redis yeniden başlatıldı!"
+        
+        # Bağlantı testi
+        if redis-cli -a "$redis_password" ping 2>/dev/null | grep -q "PONG"; then
+            print_success "✓ Redis bağlantı testi başarılı (PONG)"
+        fi
+    else
+        print_error "Redis başlatılamadı!"
+        print_info "Log: journalctl -u redis-server -n 50"
+        return 1
+    fi
+    
+    # Laravel .env bilgileri
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Laravel .env Yapılandırması${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo ""
+    
+    local redis_host="${REDIS_LOCAL_IP:-$REDIS_SERVER_IP}"
+    
+    cat <<EOF
+REDIS_HOST=${GREEN}$redis_host${NC}  ${YELLOW}← $([ -n "$REDIS_LOCAL_IP" ] && echo "Local IP (hızlı)" || echo "Public IP")${NC}
+REDIS_PASSWORD=${GREEN}$redis_password${NC}
+REDIS_PORT=6379
+REDIS_CLIENT=phpredis
+
+CACHE_DRIVER=redis
+QUEUE_CONNECTION=redis
+SESSION_DRIVER=redis
+EOF
+    
+    # Slave varsa
+    if [ -n "$REDIS_SLAVE_IP" ]; then
+        echo ""
+        echo -e "${CYAN}# Read-only cache için Slave (Opsiyonel):${NC}"
+        echo "REDIS_SLAVE_HOST=${GREEN}$REDIS_SLAVE_IP${NC}"
+    fi
+    
+    # Firewall
+    echo ""
+    print_warning "═══════════════════════════════════════════"
+    print_warning "  FIREWALL KURALLARI (ÖNEMLİ!)"
+    print_warning "═══════════════════════════════════════════"
+    
+    if command -v ufw &>/dev/null; then
+        if ask_yes_no "UFW firewall kurallarını şimdi eklemek ister misiniz?"; then
+            # Laravel sistem için
+            ufw allow from $WEB_SERVER_IP to any port 6379 comment 'Redis - Laravel'
+            print_success "✓ $WEB_SERVER_IP → Redis"
+            
+            # Local network için (varsa)
+            if [ -n "$REDIS_LOCAL_IP" ]; then
+                local subnet=$(echo "$REDIS_LOCAL_IP" | cut -d'.' -f1-3)
+                ufw allow from ${subnet}.0/24 to any port 6379 comment 'Redis - Local Network'
+                print_success "✓ ${subnet}.0/24 → Redis (Local)"
+            fi
+            
+            # Slave için (varsa)
+            if [ -n "$REDIS_SLAVE_IP" ]; then
+                ufw allow from $REDIS_SLAVE_IP to any port 6379 comment 'Redis - Slave Replication'
+                print_success "✓ $REDIS_SLAVE_IP → Redis (Slave)"
+            fi
+            
+            print_success "Tüm firewall kuralları eklendi!"
+        fi
+    else
+        print_info "Manuel olarak ekleyin:"
+        echo "  ufw allow from $WEB_SERVER_IP to any port 6379"
+        [ -n "$REDIS_LOCAL_IP" ] && echo "  ufw allow from $(echo "$REDIS_LOCAL_IP" | cut -d'.' -f1-3).0/24 to any port 6379"
+        [ -n "$REDIS_SLAVE_IP" ] && echo "  ufw allow from $REDIS_SLAVE_IP to any port 6379"
+    fi
+}
+
+configure_mysql_slave() {
+    print_header "MySQL Slave Sunucu Yapılandırması"
+    
+    if [ -z "$DATABASE_SERVER_IP" ] || [ -z "$DATABASE_SLAVE_IP" ]; then
+        print_error "Master veya Slave IP'si tanımlı değil!"
+        print_info "Önce multi-server yapılandırması yapın"
+        return 1
+    fi
+    
+    local current_ip=$(hostname -I | awk '{print $1}')
+    
+    if [ "$DATABASE_SLAVE_IP" != "$current_ip" ]; then
+        print_error "Bu sunucu Slave olarak tanımlı değil!"
+        print_info "Slave IP: $DATABASE_SLAVE_IP, Bu sunucu: $current_ip"
+        return 1
+    fi
+    
+    print_info "Bu sunucu MySQL SLAVE olarak yapılandırılacak"
+    print_info "Master: $DATABASE_SERVER_IP"
+    echo ""
+    
+    # MySQL kurulu mu?
+    if ! systemctl is-active --quiet mariadb 2>/dev/null && ! systemctl is-active --quiet mysql 2>/dev/null; then
+        print_warning "MySQL kurulu değil!"
+        if ask_yes_no "MySQL kurmak ister misiniz?"; then
+            if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+                ask_password "MySQL root şifresi" MYSQL_ROOT_PASSWORD
+            fi
+            install_mysql
+        else
+            return 1
+        fi
+    fi
+    
+    local mysql_conf="/etc/mysql/mariadb.conf.d/50-server.cnf"
+    if [ ! -f "$mysql_conf" ]; then
+        mysql_conf="/etc/mysql/mysql.conf.d/mysqld.cnf"
+    fi
+    
+    # Yedek
+    cp "$mysql_conf" "${mysql_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Slave yapılandırması
+    print_info "Slave yapılandırması yapılıyor..."
+    
+    # server-id ayarla (Master'dan farklı olmalı)
+    if ! grep -q "^server-id" "$mysql_conf"; then
+        sed -i '/^\[mysqld\]/a server-id = 2' "$mysql_conf"
+        print_success "✓ server-id = 2 (Slave)"
+    fi
+    
+    # read-only ayarla
+    if ! grep -q "^read_only" "$mysql_conf"; then
+        sed -i '/^\[mysqld\]/a read_only = 1' "$mysql_conf"
+        print_success "✓ read_only = 1"
+    fi
+    
+    # relay-log ayarla
+    if ! grep -q "^relay-log" "$mysql_conf"; then
+        sed -i '/^\[mysqld\]/a relay-log = /var/log/mysql/mysql-relay-bin' "$mysql_conf"
+        print_success "✓ relay-log yapılandırıldı"
+    fi
+    
+    # MySQL'i yeniden başlat
+    systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
+    sleep 3
+    
+    # Replication kurulumu
+    echo ""
+    print_info "Master'a bağlanmak için bilgiler gerekli..."
+    
+    local master_user="replicator"
+    local master_password=""
+    local master_log_file=""
+    local master_log_pos=""
+    
+    ask_input "Master replication kullanıcı adı" master_user "replicator"
+    ask_password "Master replication şifresi" master_password
+    
+    echo ""
+    print_info "Master sunucusunda 'SHOW MASTER STATUS;' çalıştırın ve değerleri girin:"
+    ask_input "Master Log File (örn: mysql-bin.000001)" master_log_file
+    ask_input "Master Log Position (örn: 123456)" master_log_pos
+    
+    if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+        ask_password "Bu sunucunun MySQL root şifresi" MYSQL_ROOT_PASSWORD
+    fi
+    
+    # Slave yapılandırmasını uygula
+    mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF
+STOP SLAVE;
+CHANGE MASTER TO 
+    MASTER_HOST='$DATABASE_SERVER_IP',
+    MASTER_USER='$master_user',
+    MASTER_PASSWORD='$master_password',
+    MASTER_LOG_FILE='$master_log_file',
+    MASTER_LOG_POS=$master_log_pos;
+START SLAVE;
+SHOW SLAVE STATUS\G
+EOF
+    
+    if [ $? -eq 0 ]; then
+        print_success "MySQL Slave yapılandırması tamamlandı!"
+        echo ""
+        print_info "Slave durumunu kontrol edin:"
+        echo "  mysql -u root -p -e 'SHOW SLAVE STATUS\\G' | grep Running"
+        echo ""
+        echo "Beklenen:"
+        echo "  Slave_IO_Running: Yes"
+        echo "  Slave_SQL_Running: Yes"
+    else
+        print_error "Slave yapılandırması başarısız!"
+    fi
+}
+
+configure_redis_slave() {
+    print_header "Redis Slave Sunucu Yapılandırması"
+    
+    if [ -z "$REDIS_SERVER_IP" ] || [ -z "$REDIS_SLAVE_IP" ]; then
+        print_error "Master veya Slave IP'si tanımlı değil!"
+        print_info "Önce multi-server yapılandırması yapın"
+        return 1
+    fi
+    
+    local current_ip=$(hostname -I | awk '{print $1}')
+    
+    if [ "$REDIS_SLAVE_IP" != "$current_ip" ]; then
+        print_error "Bu sunucu Slave olarak tanımlı değil!"
+        print_info "Slave IP: $REDIS_SLAVE_IP, Bu sunucu: $current_ip"
+        return 1
+    fi
+    
+    print_info "Bu sunucu Redis SLAVE olarak yapılandırılacak"
+    print_info "Master: $REDIS_SERVER_IP"
+    echo ""
+    
+    # Redis kurulu mu?
+    if ! systemctl is-active --quiet redis-server 2>/dev/null && ! systemctl is-active --quiet redis 2>/dev/null; then
+        print_warning "Redis kurulu değil!"
+        if ask_yes_no "Redis kurmak ister misiniz?"; then
+            install_redis
+        else
+            return 1
+        fi
+    fi
+    
+    local redis_conf="/etc/redis/redis.conf"
+    
+    # Yedek
+    cp "$redis_conf" "${redis_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    print_info "Slave yapılandırması yapılıyor..."
+    
+    # 1. Master bilgileri
+    local master_password=""
+    ask_password "Master Redis şifresi" master_password
+    
+    # 2. Slave yapılandırması
+    if grep -q "^# replicaof" "$redis_conf" || ! grep -q "^replicaof" "$redis_conf"; then
+        echo "" >> "$redis_conf"
+        echo "# Slave Configuration" >> "$redis_conf"
+        echo "replicaof $REDIS_SERVER_IP 6379" >> "$redis_conf"
+        echo "masterauth $master_password" >> "$redis_conf"
+        print_success "✓ Slave yapılandırması eklendi"
+    else
+        sed -i "s/^replicaof.*/replicaof $REDIS_SERVER_IP 6379/" "$redis_conf"
+        sed -i "s/^masterauth.*/masterauth $master_password/" "$redis_conf"
+        print_success "✓ Slave yapılandırması güncellendi"
+    fi
+    
+    # 3. read-only ayarla (Slave için)
+    if ! grep -q "^replica-read-only" "$redis_conf"; then
+        echo "replica-read-only yes" >> "$redis_conf"
+    fi
+    
+    # 4. Slave kendi şifresini de ayarlasın (güvenlik)
+    local slave_password=""
+    if ask_yes_no "Slave için ayrı şifre ayarlamak ister misiniz? (Önerilen)"; then
+        ask_password "Slave Redis şifresi" slave_password
+        
+        if grep -q "^requirepass" "$redis_conf"; then
+            sed -i "s/^requirepass.*/requirepass $slave_password/" "$redis_conf"
+        else
+            echo "requirepass $slave_password" >> "$redis_conf"
+        fi
+        print_success "✓ Slave şifresi ayarlandı"
+    fi
+    
+    # Redis'i yeniden başlat
+    print_info "Redis yeniden başlatılıyor..."
+    systemctl restart redis-server 2>/dev/null || systemctl restart redis 2>/dev/null
+    
+    sleep 3
+    
+    if systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
+        print_success "Redis Slave başlatıldı!"
+        
+        # Replication durumunu kontrol et
+        echo ""
+        print_info "Replication durumu:"
+        if [ -n "$slave_password" ]; then
+            redis-cli -a "$slave_password" INFO replication 2>/dev/null | grep -E "role:|master_host:|master_link_status:"
+        else
+            redis-cli INFO replication 2>/dev/null | grep -E "role:|master_host:|master_link_status:"
+        fi
+    else
+        print_error "Redis başlatılamadı!"
+        return 1
+    fi
+    
+    echo ""
+    print_success "Redis Slave yapılandırması tamamlandı!"
+    print_info "Kontrol: redis-cli -a şifre INFO replication"
+}
+
+select_cluster_communication_mode() {
+    print_header "Sunucular Arası Haberleşme Modunu Seç"
+    
+    echo -e "${CYAN}Sunucularınız nasıl haberleşecek?${NC}"
+    echo ""
+    echo -e "${YELLOW}GÜVENLİK SEVİYESİ: En Yüksek → En Düşük${NC}"
+    echo ""
+    echo "1) ${GREEN}Private Network${NC} (Hetzner Private Network, DO VPC - EN HIZLI)"
+    echo "2) ${GREEN}WireGuard VPN${NC} (Modern, Hızlı - ÖNERİLEN)"
+    echo "3) ${GREEN}OpenVPN${NC} (Klasik, Güvenilir)"
+    echo "4) ${YELLOW}SSH Tunnel${NC} (Basit, Test için)"
+    echo "5) ${RED}Public IP + Firewall${NC} (SADECE TEST!)"
+    echo ""
+    
+    read -p "Seçiminiz (1-5) [2]: " comm_choice
+    comm_choice=${comm_choice:-2}
+    
+    case $comm_choice in
+        1)
+            CLUSTER_COMMUNICATION_MODE="private_network"
+            print_success "✓ Private Network seçildi"
+            configure_private_network
+            ;;
+        2)
+            CLUSTER_COMMUNICATION_MODE="wireguard"
+            print_success "✓ WireGuard VPN seçildi"
+            print_info "Kurulum için: Multi-Server > 3) WireGuard VPN Kurulumu"
+            ;;
+        3)
+            CLUSTER_COMMUNICATION_MODE="openvpn"
+            print_success "✓ OpenVPN seçildi"
+            print_info "Kurulum için: Ana Menü > 18) OpenVPN Server Kurulumu"
+            ;;
+        4)
+            CLUSTER_COMMUNICATION_MODE="ssh_tunnel"
+            print_success "✓ SSH Tunnel seçildi"
+            print_info "Kurulum için: Multi-Server > 4) SSH Tunnel Kurulumu"
+            ;;
+        5)
+            CLUSTER_COMMUNICATION_MODE="public"
+            print_warning "⚠ Public IP seçildi (GÜVENSİZ!)"
+            print_warning "Firewall ile korunacak ama ÜRETİM için UYGUN DEĞİL!"
+            ;;
+    esac
+    
+    save_multi_server_config
+    print_info "Haberleşme modu kaydedildi"
+}
+
+configure_private_network() {
+    print_header "Private Network Yapılandırması"
+    
+    echo -e "${CYAN}Private Network örnekleri:${NC}"
+    echo "• Hetzner Cloud: Private Network (10.0.0.0/16)"
+    echo "• DigitalOcean: VPC"
+    echo "• AWS EC2: VPC"
+    echo "• Veri merkezi: VLAN"
+    echo ""
+    
+    print_info "Private IP'leri girin (sunucular aynı ağda):"
+    echo ""
+    
+    # Her sunucu için private IP
+    if [ -n "$DATABASE_SERVER_IP" ]; then
+        ask_input "MySQL Master private IP" DATABASE_LOCAL_IP
+    fi
+    
+    if [ -n "$REDIS_SERVER_IP" ]; then
+        ask_input "Redis Master private IP" REDIS_LOCAL_IP
+    fi
+    
+    save_multi_server_config
+    print_success "Private IP'ler kaydedildi!"
+}
+
+install_wireguard_cluster() {
+    print_header "WireGuard VPN - Mesh Network (Tüm Sunucular Arası)"
+    
+    echo -e "${CYAN}WireGuard Nedir?${NC}"
+    echo "• Modern VPN protokolü (Linux kernel'de native)"
+    echo "• Çok hızlı (IPSec ve OpenVPN'den 4-5x hızlı)"
+    echo "• Düşük gecikme (~0.5ms overhead)"
+    echo "• Basit yapılandırma"
+    echo ""
+    echo -e "${YELLOW}Mesh Network:${NC}"
+    echo "• Her sunucu birbirine direkt bağlanır"
+    echo "• Tek bir merkez sunucu yok"
+    echo "• Bir sunucu çökerse diğerleri etkilenmez"
+    echo ""
+    
+    if ! ask_yes_no "WireGuard kurmak istiyor musunuz?"; then
+        return 0
+    fi
+    
+    # WireGuard kurulumu
+    if ! command -v wg &>/dev/null; then
+        print_info "WireGuard kuruluyor..."
+        apt update
+        apt install -y wireguard wireguard-tools qrencode
+        
+        if [ $? -ne 0 ]; then
+            print_error "WireGuard kurulumu başarısız!"
+            return 1
+        fi
+    fi
+    
+    print_success "✓ WireGuard kuruldu"
+    
+    # Bu sunucunun rolünü OTOMATİK tespit et
+    local current_public_ip=$(hostname -I | awk '{print $1}')
+    local vpn_ip=""
+    local server_role=""
+    local server_name=""
+    
+    echo ""
+    print_info "Bu sunucunun public IP'si: $current_public_ip"
+    echo ""
+    
+    # Cluster yapılandırmasından IP'leri al ve otomatik tespit et
+    local auto_detected=false
+    
+    if [ "$MULTI_SERVER_MODE" = true ]; then
+        # Yapılandırılmış IP'lere göre otomatik tespit
+        if [ "$current_public_ip" = "$DNS_SERVER_IP" ]; then
+            vpn_ip="10.9.0.1"
+            server_role="dns"
+            server_name="DNS + Ana Site"
+            auto_detected=true
+            print_success "✓ Otomatik tespit: DNS + Ana Site"
+        elif [ "$current_public_ip" = "$WEB_SERVER_IP" ]; then
+            vpn_ip="10.9.0.2"
+            server_role="web"
+            server_name="Web/Laravel Sistem"
+            auto_detected=true
+            print_success "✓ Otomatik tespit: Web/Laravel Sistem"
+        elif [ "$current_public_ip" = "$DATABASE_SERVER_IP" ]; then
+            vpn_ip="10.9.0.10"
+            server_role="db-master"
+            server_name="MySQL Master"
+            auto_detected=true
+            print_success "✓ Otomatik tespit: MySQL Master"
+        elif [ "$current_public_ip" = "$DATABASE_SLAVE_IP" ] && [ -n "$DATABASE_SLAVE_IP" ]; then
+            vpn_ip="10.9.0.11"
+            server_role="db-slave"
+            server_name="MySQL Slave"
+            auto_detected=true
+            print_success "✓ Otomatik tespit: MySQL Slave"
+        elif [ "$current_public_ip" = "$REDIS_SERVER_IP" ]; then
+            vpn_ip="10.9.0.20"
+            server_role="redis-master"
+            server_name="Redis Master"
+            auto_detected=true
+            print_success "✓ Otomatik tespit: Redis Master"
+        elif [ "$current_public_ip" = "$REDIS_SLAVE_IP" ] && [ -n "$REDIS_SLAVE_IP" ]; then
+            vpn_ip="10.9.0.21"
+            server_role="redis-slave"
+            server_name="Redis Slave"
+            auto_detected=true
+            print_success "✓ Otomatik tespit: Redis Slave"
+        fi
+    fi
+    
+    # Otomatik tespit başarısızsa manuel seçim
+    if [ "$auto_detected" = false ]; then
+        print_warning "Otomatik tespit başarısız!"
+        echo ""
+        print_info "Bu sunucunun rolünü manuel seçin:"
+        echo "1) DNS + Ana Site → VPN: 10.9.0.1"
+        echo "2) Web/Laravel Sistem → VPN: 10.9.0.2"
+        echo "3) MySQL Master → VPN: 10.9.0.10"
+        echo "4) MySQL Slave → VPN: 10.9.0.11"
+        echo "5) Redis Master → VPN: 10.9.0.20"
+        echo "6) Redis Slave → VPN: 10.9.0.21"
+        echo ""
+        
+        read -p "Seçiminiz (1-6): " server_num
+        
+        case $server_num in
+            1) vpn_ip="10.9.0.1"; server_role="dns"; server_name="DNS + Ana Site";;
+            2) vpn_ip="10.9.0.2"; server_role="web"; server_name="Web/Laravel Sistem";;
+            3) vpn_ip="10.9.0.10"; server_role="db-master"; server_name="MySQL Master";;
+            4) vpn_ip="10.9.0.11"; server_role="db-slave"; server_name="MySQL Slave";;
+            5) vpn_ip="10.9.0.20"; server_role="redis-master"; server_name="Redis Master";;
+            6) vpn_ip="10.9.0.21"; server_role="redis-slave"; server_name="Redis Slave";;
+            *) print_error "Geçersiz seçim"; return 1;;
+        esac
+    fi
+    
+    echo -e "${GREEN}Sunucu:${NC} $server_name"
+    echo -e "${GREEN}Rol:${NC} $server_role"
+    echo -e "${GREEN}VPN IP:${NC} $vpn_ip"
+    
+    # Keys oluştur
+    print_info "WireGuard keys oluşturuluyor..."
+    local private_key=$(wg genkey)
+    local public_key=$(echo "$private_key" | wg pubkey)
+    
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  BU SUNUCUNUN BİLGİLERİ (Diğerlerinde Kullanın!)${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo -e "${GREEN}Sunucu:${NC} $server_name"
+    echo -e "${GREEN}Rol:${NC} $server_role"
+    echo -e "${GREEN}Public IP:${NC} $current_public_ip"
+    echo -e "${GREEN}VPN IP:${NC} $vpn_ip"
+    echo -e "${GREEN}Public Key:${NC}"
+    echo "$public_key"
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${RED}ÖNEMLİ: Bu bilgileri not alın!${NC}"
+    echo "Diğer sunucularda [Peer] olarak ekleyeceksiniz"
+    echo ""
+    
+    # Kayıt dosyası oluştur
+    local peer_info_file="/tmp/wireguard-peer-${server_role}.txt"
+    cat > "$peer_info_file" <<EOF
+# WireGuard Peer Bilgileri - $server_name
+# Bu bilgileri diğer sunucularda kullanın
+
+[Peer]
+# $server_name
+PublicKey = $public_key
+Endpoint = $current_public_ip:51820
+AllowedIPs = $vpn_ip/32
+PersistentKeepalive = 25
+EOF
+    
+    echo -e "${GREEN}✓ Peer bilgileri kaydedildi:${NC} $peer_info_file"
+    echo ""
+    read -p "Devam etmek için Enter'a basın..."
+    
+    # WireGuard config dosyası
+    local wg_conf="/etc/wireguard/wg0.conf"
+    
+    cat > "$wg_conf" <<EOF
+# WireGuard Cluster Config - $server_role
+[Interface]
+Address = $vpn_ip/24
+PrivateKey = $private_key
+ListenPort = 51820
+SaveConfig = false
+
+# IP Forwarding
+PostUp = sysctl -w net.ipv4.ip_forward=1
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT
+PostUp = iptables -A FORWARD -o wg0 -j ACCEPT
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT
+PostDown = iptables -D FORWARD -o wg0 -j ACCEPT
+
+EOF
+    
+    chmod 600 "$wg_conf"
+    
+    # Peer ekleme rehberi
+    echo ""
+    print_header "Diğer Sunucuları Peer Olarak Ekleyin"
+    
+    echo -e "${CYAN}Her sunucu için [Peer] bloğu ekleyin:${NC}"
+    echo ""
+    echo -e "${YELLOW}Örnek - Laravel Sistem eklemek için (10.9.0.2):${NC}"
+    echo ""
+    cat <<'EXAMPLE'
+[Peer]
+# Laravel System
+PublicKey = <Laravel'ın public key'i>
+Endpoint = 185.255.4.197:51820
+AllowedIPs = 10.9.0.2/32
+PersistentKeepalive = 25
+EXAMPLE
+    
+    # Cluster IP'leri varsa peer listesi göster
+    if [ "$MULTI_SERVER_MODE" = true ]; then
+        echo ""
+        echo -e "${YELLOW}Cluster peer listesi (yapılandırmadan):${NC}"
+        echo ""
+        
+        [ -n "$DNS_SERVER_IP" ] && cat <<EOF
+# DNS + Ana Site (10.9.0.1)
+[Peer]
+PublicKey = <dns-public-key>
+Endpoint = $DNS_SERVER_IP:51820
+AllowedIPs = 10.9.0.1/32
+PersistentKeepalive = 25
+
+EOF
+        
+        [ -n "$WEB_SERVER_IP" ] && cat <<EOF
+# Web/Laravel Sistem (10.9.0.2)
+[Peer]
+PublicKey = <web-public-key>
+Endpoint = $WEB_SERVER_IP:51820
+AllowedIPs = 10.9.0.2/32
+PersistentKeepalive = 25
+
+EOF
+        
+        [ -n "$DATABASE_SERVER_IP" ] && cat <<EOF
+# MySQL Master (10.9.0.10)
+[Peer]
+PublicKey = <mysql-master-key>
+Endpoint = $DATABASE_SERVER_IP:51820
+AllowedIPs = 10.9.0.10/32
+PersistentKeepalive = 25
+
+EOF
+        
+        [ -n "$DATABASE_SLAVE_IP" ] && cat <<EOF
+# MySQL Slave (10.9.0.11)
+[Peer]
+PublicKey = <mysql-slave-key>
+Endpoint = $DATABASE_SLAVE_IP:51820
+AllowedIPs = 10.9.0.11/32
+PersistentKeepalive = 25
+
+EOF
+        
+        [ -n "$REDIS_SERVER_IP" ] && cat <<EOF
+# Redis Master (10.9.0.20)
+[Peer]
+PublicKey = <redis-master-key>
+Endpoint = $REDIS_SERVER_IP:51820
+AllowedIPs = 10.9.0.20/32
+PersistentKeepalive = 25
+
+EOF
+        
+        [ -n "$REDIS_SLAVE_IP" ] && cat <<EOF
+# Redis Slave (10.9.0.21)
+[Peer]
+PublicKey = <redis-slave-key>
+Endpoint = $REDIS_SLAVE_IP:51820
+AllowedIPs = 10.9.0.21/32
+PersistentKeepalive = 25
+
+EOF
+    fi
+    
+    echo ""
+    print_info "Diğer sunucuları peer olarak ekleyin"
+    echo ""
+    
+    # Efty System için otomatik peer önerileri
+    echo -e "${CYAN}Efty System Cluster - Eklenecek Peer'ler:${NC}"
+    echo ""
+    
+    # Bu sunucu hariç diğerlerini göster
+    local peer_list_file="/tmp/wireguard-peers-needed.txt"
+    cat > "$peer_list_file" <<EOF
+# Eklenecek Peer'ler - $server_name için
+
+EOF
+    
+    # DNS + Ana Site
+    if [ "$server_role" != "dns" ] && [ -n "$DNS_SERVER_IP" ]; then
+        cat >> "$peer_list_file" <<EOF
+[Peer]
+# DNS + Ana Site
+PublicKey = <$DNS_SERVER_IP'den alacaksınız>
+Endpoint = $DNS_SERVER_IP:51820
+AllowedIPs = 10.9.0.1/32
+PersistentKeepalive = 25
+
+EOF
+        echo "  • DNS + Ana Site ($DNS_SERVER_IP → 10.9.0.1)"
+    fi
+    
+    # Laravel Sistem
+    if [ "$server_role" != "web" ] && [ -n "$WEB_SERVER_IP" ]; then
+        cat >> "$peer_list_file" <<EOF
+[Peer]
+# Web/Laravel Sistem
+PublicKey = <$WEB_SERVER_IP'den alacaksınız>
+Endpoint = $WEB_SERVER_IP:51820
+AllowedIPs = 10.9.0.2/32
+PersistentKeepalive = 25
+
+EOF
+        echo "  • Web/Laravel Sistem ($WEB_SERVER_IP → 10.9.0.2)"
+    fi
+    
+    # MySQL Master
+    if [ "$server_role" != "db-master" ] && [ -n "$DATABASE_SERVER_IP" ]; then
+        cat >> "$peer_list_file" <<EOF
+[Peer]
+# MySQL Master
+PublicKey = <$DATABASE_SERVER_IP'den alacaksınız>
+Endpoint = $DATABASE_SERVER_IP:51820
+AllowedIPs = 10.9.0.10/32
+PersistentKeepalive = 25
+
+EOF
+        echo "  • MySQL Master ($DATABASE_SERVER_IP → 10.9.0.10)"
+    fi
+    
+    # MySQL Slave
+    if [ "$server_role" != "db-slave" ] && [ -n "$DATABASE_SLAVE_IP" ]; then
+        cat >> "$peer_list_file" <<EOF
+[Peer]
+# MySQL Slave
+PublicKey = <$DATABASE_SLAVE_IP'den alacaksınız>
+Endpoint = $DATABASE_SLAVE_IP:51820
+AllowedIPs = 10.9.0.11/32
+PersistentKeepalive = 25
+
+EOF
+        echo "  • MySQL Slave ($DATABASE_SLAVE_IP → 10.9.0.11)"
+    fi
+    
+    # Redis Master
+    if [ "$server_role" != "redis-master" ] && [ -n "$REDIS_SERVER_IP" ]; then
+        cat >> "$peer_list_file" <<EOF
+[Peer]
+# Redis Master
+PublicKey = <$REDIS_SERVER_IP'den alacaksınız>
+Endpoint = $REDIS_SERVER_IP:51820
+AllowedIPs = 10.9.0.20/32
+PersistentKeepalive = 25
+
+EOF
+        echo "  • Redis Master ($REDIS_SERVER_IP → 10.9.0.20)"
+    fi
+    
+    # Redis Slave
+    if [ "$server_role" != "redis-slave" ] && [ -n "$REDIS_SLAVE_IP" ]; then
+        cat >> "$peer_list_file" <<EOF
+[Peer]
+# Redis Slave
+PublicKey = <$REDIS_SLAVE_IP'den alacaksınız>
+Endpoint = $REDIS_SLAVE_IP:51820
+AllowedIPs = 10.9.0.21/32
+PersistentKeepalive = 25
+
+EOF
+        echo "  • Redis Slave ($REDIS_SLAVE_IP → 10.9.0.21)"
+    fi
+    
+    echo ""
+    echo -e "${GREEN}✓ Peer şablonu oluşturuldu:${NC} $peer_list_file"
+    echo ""
+    
+    if ask_yes_no "Peer'leri şimdi manuel eklemek ister misiniz?"; then
+        echo ""
+        print_warning "Her peer için Public Key gerekli!"
+        print_info "Önce diğer sunucularda WireGuard kurup Public Key'lerini alın"
+        echo ""
+        print_info "Peer ekleme (bitirmek için boş bırakın):"
+        
+        while true; do
+            echo ""
+            local peer_name=""
+            read -p "Peer adı [Enter=Bitir]: " peer_name
+            [ -z "$peer_name" ] && break
+            
+            local peer_pubkey=""
+            local peer_endpoint=""
+            local peer_vpn_ip=""
+            
+            read -p "$peer_name Public Key: " peer_pubkey
+            [ -z "$peer_pubkey" ] && continue
+            
+            read -p "$peer_name Endpoint (IP:Port) [otomatik]: " peer_endpoint
+            read -p "$peer_name VPN IP [otomatik]: " peer_vpn_ip
+            
+            # Otomatik endpoint belirleme (yapılandırmadan)
+            if [ -z "$peer_endpoint" ]; then
+                case $peer_name in
+                    *dns*)
+                        [ -n "$DNS_SERVER_IP" ] && peer_endpoint="$DNS_SERVER_IP:51820"
+                        ;;
+                    *laravel*|*web*)
+                        [ -n "$WEB_SERVER_IP" ] && peer_endpoint="$WEB_SERVER_IP:51820"
+                        ;;
+                    *mysql*master*|*db*master*)
+                        [ -n "$DATABASE_SERVER_IP" ] && peer_endpoint="$DATABASE_SERVER_IP:51820"
+                        ;;
+                    *mysql*slave*|*db*slave*)
+                        [ -n "$DATABASE_SLAVE_IP" ] && peer_endpoint="$DATABASE_SLAVE_IP:51820"
+                        ;;
+                    *redis*master*)
+                        [ -n "$REDIS_SERVER_IP" ] && peer_endpoint="$REDIS_SERVER_IP:51820"
+                        ;;
+                    *redis*slave*)
+                        [ -n "$REDIS_SLAVE_IP" ] && peer_endpoint="$REDIS_SLAVE_IP:51820"
+                        ;;
+                esac
+                
+                # Hala boşsa kullanıcıdan al
+                if [ -z "$peer_endpoint" ]; then
+                    read -p "Endpoint belirtin (IP:Port): " peer_endpoint
+                fi
+            fi
+            
+            # Otomatik VPN IP belirleme
+            if [ -z "$peer_vpn_ip" ]; then
+                case $peer_name in
+                    *dns*) peer_vpn_ip="10.9.0.1";;
+                    *laravel*|*web*) peer_vpn_ip="10.9.0.2";;
+                    *mysql*master*) peer_vpn_ip="10.9.0.10";;
+                    *mysql*slave*) peer_vpn_ip="10.9.0.11";;
+                    *redis*master*) peer_vpn_ip="10.9.0.20";;
+                    *redis*slave*) peer_vpn_ip="10.9.0.21";;
+                    *) read -p "VPN IP belirtin: " peer_vpn_ip;;
+                esac
+            fi
+            
+            cat >> "$wg_conf" <<EOF
+
+# $peer_name
+[Peer]
+PublicKey = $peer_pubkey
+Endpoint = $peer_endpoint
+AllowedIPs = $peer_vpn_ip/32
+PersistentKeepalive = 25
+
+EOF
+            print_success "✓ $peer_name eklendi ($peer_endpoint → $peer_vpn_ip)"
+        done
+    fi
+    
+    # IP forwarding
+    sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+    sysctl -p >/dev/null 2>&1
+    
+    # WireGuard'ı başlat
+    print_info "WireGuard başlatılıyor..."
+    wg-quick up wg0 2>/dev/null || true
+    systemctl enable wg-quick@wg0
+    
+    sleep 2
+    
+    if ip link show wg0 &>/dev/null; then
+        print_success "✓ WireGuard başlatıldı!"
+        echo ""
+        wg show wg0
+        
+        # Ping testi
+        echo ""
+        print_info "Peer'lere ping testi yapabilirsiniz:"
+        echo "  ping 10.9.0.1  (DNS)"
+        echo "  ping 10.9.0.2  (Web)"
+        echo "  ping 10.9.0.10 (MySQL)"
+        echo "  ping 10.9.0.20 (Redis)"
+    else
+        print_error "WireGuard başlatılamadı!"
+        print_info "Log: journalctl -u wg-quick@wg0"
+        return 1
+    fi
+    
+    # Firewall
+    if command -v ufw &>/dev/null; then
+        if ask_yes_no "UFW'de WireGuard portunu açmak ister misiniz?"; then
+            ufw allow 51820/udp comment 'WireGuard'
+            print_success "✓ Firewall: 51820/udp açıldı"
+        fi
+    fi
+    
+    echo ""
+    print_header "ÖNEMLİ: Sıradaki Adımlar"
+    
+    # Özet dosya oluştur
+    local summary_file="/root/cluster-wireguard-setup.txt"
+    cat > "$summary_file" <<EOF
+═══════════════════════════════════════════════════════════════════
+  WireGuard VPN Kurulum Özeti
+═══════════════════════════════════════════════════════════════════
+
+Bu Sunucu: $server_name ($current_public_ip)
+VPN IP: $vpn_ip
+Public Key: $public_key
+
+═══════════════════════════════════════════════════════════════════
+  CLUSTER SUNUCULARI VE VPN IP'LERİ
+═══════════════════════════════════════════════════════════════════
+
+EOF
+    
+    # Dinamik sunucu listesi
+    local server_count=1
+    
+    [ -n "$DNS_SERVER_IP" ] && cat >> "$summary_file" <<EOF
+${server_count}. DNS + Ana Site
+   Public IP: $DNS_SERVER_IP
+   VPN IP: 10.9.0.1
+
+EOF
+    [ -n "$DNS_SERVER_IP" ] && ((server_count++))
+    
+    [ -n "$WEB_SERVER_IP" ] && cat >> "$summary_file" <<EOF
+${server_count}. Web/Laravel Sistem
+   Public IP: $WEB_SERVER_IP
+   VPN IP: 10.9.0.2
+
+EOF
+    [ -n "$WEB_SERVER_IP" ] && ((server_count++))
+    
+    [ -n "$DATABASE_SERVER_IP" ] && cat >> "$summary_file" <<EOF
+${server_count}. MySQL Master
+   Public IP: $DATABASE_SERVER_IP
+   VPN IP: 10.9.0.10
+
+EOF
+    [ -n "$DATABASE_SERVER_IP" ] && ((server_count++))
+    
+    [ -n "$DATABASE_SLAVE_IP" ] && cat >> "$summary_file" <<EOF
+${server_count}. MySQL Slave
+   Public IP: $DATABASE_SLAVE_IP
+   VPN IP: 10.9.0.11
+
+EOF
+    [ -n "$DATABASE_SLAVE_IP" ] && ((server_count++))
+    
+    [ -n "$REDIS_SERVER_IP" ] && cat >> "$summary_file" <<EOF
+${server_count}. Redis Master
+   Public IP: $REDIS_SERVER_IP
+   VPN IP: 10.9.0.20
+
+EOF
+    [ -n "$REDIS_SERVER_IP" ] && ((server_count++))
+    
+    [ -n "$REDIS_SLAVE_IP" ] && cat >> "$summary_file" <<EOF
+${server_count}. Redis Slave
+   Public IP: $REDIS_SLAVE_IP
+   VPN IP: 10.9.0.21
+
+EOF
+
+═══════════════════════════════════════════════════════════════════
+  DİĞER SUNUCULARDA YAPILACAKLAR
+═══════════════════════════════════════════════════════════════════
+
+1. Her sunucuda WireGuard kurun:
+   sudo bash deepseek_bash_20251127_badcb6.sh
+   → 27) Multi-Server → 3) WireGuard Kurulumu
+
+2. Her sunucuda BU sunucuyu peer olarak ekleyin:
+   
+   [Peer]
+   # $server_name
+   PublicKey = $public_key
+   Endpoint = $current_public_ip:51820
+   AllowedIPs = $vpn_ip/32
+   PersistentKeepalive = 25
+
+3. Dosya: /etc/wireguard/wg0.conf (nano ile düzenleyin)
+
+4. WireGuard'ı başlatın:
+   wg-quick up wg0
+   systemctl enable wg-quick@wg0
+
+5. Ping testi:
+   ping $vpn_ip
+
+═══════════════════════════════════════════════════════════════════
+  TÜM SUNUCULAR HAZIR OLUNCA - YAPILANDIRMA ADIMLARI
+═══════════════════════════════════════════════════════════════════
+
+EOF
+    
+    [ -n "$DATABASE_SERVER_IP" ] && cat >> "$summary_file" <<EOF
+MySQL Master ($DATABASE_SERVER_IP):
+  → Multi-Server → MySQL Master Yapılandır
+  → İzin ver: 10.9.0.2 (Laravel VPN IP)
+EOF
+    [ -n "$DATABASE_SLAVE_IP" ] && echo "  → İzin ver: 10.9.0.11 (Slave VPN IP)" >> "$summary_file"
+    [ -n "$DATABASE_SERVER_IP" ] && echo "" >> "$summary_file"
+    
+    [ -n "$REDIS_SERVER_IP" ] && cat >> "$summary_file" <<EOF
+Redis Master ($REDIS_SERVER_IP):
+  → Multi-Server → Redis Master Yapılandır
+  → İzin ver: 10.9.0.2 (Laravel VPN IP)
+EOF
+    [ -n "$REDIS_SLAVE_IP" ] && echo "  → İzin ver: 10.9.0.21 (Slave VPN IP)" >> "$summary_file"
+    [ -n "$REDIS_SERVER_IP" ] && echo "" >> "$summary_file"
+    
+    [ -n "$DATABASE_SLAVE_IP" ] && cat >> "$summary_file" <<EOF
+MySQL Slave ($DATABASE_SLAVE_IP):
+  → Multi-Server → MySQL Slave Yapılandır
+  → Master: 10.9.0.10 (MySQL Master VPN IP)
+
+EOF
+    
+    [ -n "$REDIS_SLAVE_IP" ] && cat >> "$summary_file" <<EOF
+Redis Slave ($REDIS_SLAVE_IP):
+  → Multi-Server → Redis Slave Yapılandır
+  → Master: 10.9.0.20 (Redis Master VPN IP)
+
+EOF
+    
+    [ -n "$WEB_SERVER_IP" ] && cat >> "$summary_file" <<EOF
+Web/Laravel Sistem ($WEB_SERVER_IP):
+  → Multi-Server → Laravel .env Oluştur
+  → DB_HOST=10.9.0.10 (MySQL Master VPN)
+  → REDIS_HOST=10.9.0.20 (Redis Master VPN)
+
+EOF
+    
+    cat >> "$summary_file" <<EOF
+
+
+═══════════════════════════════════════════════════════════════════
+  FIREWALL KURALLARI
+═══════════════════════════════════════════════════════════════════
+
+HER SUNUCUDA:
+  ufw allow 51820/udp comment 'WireGuard'
+
+MySQL/Redis sunucularında:
+  MySQL: 3306 portu KAPALI (sadece VPN'den erişilir)
+  Redis: 6379 portu KAPALI (sadece VPN'den erişilir)
+
+═══════════════════════════════════════════════════════════════════
+EOF
+    
+    chmod 600 "$summary_file"
+    
+    echo ""
+    echo -e "${GREEN}✓ Kurulum özeti kaydedildi:${NC} $summary_file"
+    echo ""
+    
+    if ask_yes_no "Özeti şimdi görmek ister misiniz?"; then
+        echo ""
+        cat "$summary_file"
+        echo ""
+    fi
+    
+    echo ""
+    print_warning "═══════════════════════════════════════════"
+    print_warning "  SONRAKİ ADIMLAR"
+    print_warning "═══════════════════════════════════════════"
+    echo ""
+    echo "1. ${GREEN}/tmp/wireguard-peer-${server_role}.txt${NC} dosyasını diğer sunuculara gönderin"
+    echo "2. Diğer sunucularda WireGuard kurun ve peer ekleyin"
+    echo "3. Tüm sunucular hazır olunca MySQL/Redis yapılandırın"
+    echo "4. Laravel .env oluşturun (VPN IP'leri ile)"
+    echo ""
+    echo -e "${CYAN}Detaylı adımlar:${NC} $summary_file"
+}
+
+setup_ssh_tunnel_cluster() {
+    print_header "SSH Tunnel - Sunucular Arası"
+    
+    echo -e "${RED}UYARI: SSH Tunnel üretim için UYGUN DEĞİL!${NC}"
+    echo "• Her yeniden başlatmada kaybolur"
+    echo "• Bağlantı kopabilir"
+    echo "• Sadece test ve geçici kullanım için"
+    echo ""
+    echo -e "${GREEN}Önerilen: WireGuard VPN${NC}"
+    echo ""
+    
+    if ! ask_yes_no "Yine de devam etmek istiyor musunuz?"; then
+        return 0
+    fi
+    
+    echo ""
+    print_info "SSH Tunnel Senaryoları:"
+    echo "1) MySQL Master → Laravel (port 3306)"
+    echo "2) Redis Master → Laravel (port 6379)"
+    echo "3) İkisi birden"
+    echo ""
+    
+    read -p "Seçiminiz (1-3): " tunnel_choice
+    
+    local current_ip=$(hostname -I | awk '{print $1}')
+    
+    # Laravel sunucusunda mıyız?
+    if [ "$WEB_SERVER_IP" != "$current_ip" ]; then
+        print_warning "Bu script Laravel sunucusunda ($WEB_SERVER_IP) çalıştırılmalı!"
+        print_info "Şu anki sunucu: $current_ip"
+        return 1
+    fi
+    
+    case $tunnel_choice in
+        1|3)
+            print_info "MySQL SSH Tunnel oluşturuluyor..."
+            echo ""
+            echo "Komut:"
+            echo -e "${GREEN}ssh -f -N -L 3307:localhost:3306 root@${DATABASE_SERVER_IP}${NC}"
+            echo ""
+            
+            if ask_yes_no "SSH tunnel'ı şimdi oluşturmak ister misiniz?"; then
+                # SSH key kontrolü
+                if [ ! -f "/root/.ssh/id_rsa" ]; then
+                    print_info "SSH key oluşturuluyor..."
+                    ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N ""
+                fi
+                
+                print_info "SSH key'i uzak sunucuya kopyalayın:"
+                echo "  ssh-copy-id root@${DATABASE_SERVER_IP}"
+                read -p "Key kopyalandı mı? (E/H): " key_copied
+                
+                if [[ "$key_copied" =~ ^[Ee] ]]; then
+                    ssh -f -N -L 3307:localhost:3306 root@${DATABASE_SERVER_IP}
+                    
+                    if netstat -tlnp | grep -q ":3307"; then
+                        print_success "✓ MySQL tunnel oluşturuldu!"
+                        echo "Laravel .env: DB_HOST=127.0.0.1, DB_PORT=3307"
+                    else
+                        print_error "Tunnel oluşturulamadı!"
+                    fi
+                fi
+            fi
+            ;&
+        2|3)
+            [ "$tunnel_choice" = "3" ] && echo ""
+            print_info "Redis SSH Tunnel oluşturuluyor..."
+            echo ""
+            echo "Komut:"
+            echo -e "${GREEN}ssh -f -N -L 6380:localhost:6379 root@${REDIS_SERVER_IP}${NC}"
+            echo ""
+            
+            if ask_yes_no "SSH tunnel'ı şimdi oluşturmak ister misiniz?"; then
+                ssh -f -N -L 6380:localhost:6379 root@${REDIS_SERVER_IP}
+                
+                if netstat -tlnp | grep -q ":6380"; then
+                    print_success "✓ Redis tunnel oluşturuldu!"
+                    echo "Laravel .env: REDIS_HOST=127.0.0.1, REDIS_PORT=6380"
+                else
+                    print_error "Tunnel oluşturulamadı!"
+                fi
+            fi
+            ;;
+    esac
+    
+    echo ""
+    print_info "Aktif tunnel'ları görmek için:"
+    echo "  netstat -tlnp | grep -E '(3307|6380)'"
+    echo ""
+    print_info "Tunnel'ı kapatmak için:"
+    echo "  pkill -f 'ssh.*-L.*3307'"
+    echo "  pkill -f 'ssh.*-L.*6380'"
+}
+
+quick_setup_predefined_cluster() {
+    print_header "Hızlı Kurulum - Önceden Tanımlı Cluster Yapısı"
+    
+    echo -e "${CYAN}6 sunuculu cluster yapısı için hızlı kurulum${NC}"
+    echo "Sunucu IP'lerini gireceksiniz, yapı otomatik ayarlanacak"
+    echo ""
+    
+    if ! ask_yes_no "Hızlı kurulum yapmak istiyor musunuz?"; then
+        print_info "Manuel yapılandırma için seçenek 1'i kullanın"
+        return 0
+    fi
+    
+    # Cluster adı
+    local cluster_name=""
+    ask_input "Cluster/Proje adını girin (örn: MyApp, Production)" cluster_name "MyCluster"
+    
+    echo ""
+    print_header "$cluster_name - Sunucu IP'lerini Girin"
+    
+    # Sunucu IP'lerini kullanıcıdan al
+    local dns_ip=""
+    local web_ip=""
+    local db_master_ip=""
+    local db_slave_ip=""
+    local redis_master_ip=""
+    local redis_slave_ip=""
+    
+    echo ""
+    echo -e "${CYAN}1. DNS + Ana Site Sunucusu${NC}"
+    ask_input "DNS sunucusu Public IP" dns_ip
+    
+    echo ""
+    echo -e "${CYAN}2. Web/Laravel Sunucusu${NC}"
+    ask_input "Laravel sunucusu Public IP" web_ip
+    
+    echo ""
+    echo -e "${CYAN}3. MySQL Master Sunucusu${NC}"
+    ask_input "MySQL Master Public IP" db_master_ip
+    
+    if ask_yes_no "MySQL Slave sunucusu var mı?"; then
+        ask_input "MySQL Slave Public IP" db_slave_ip
+    fi
+    
+    echo ""
+    echo -e "${CYAN}4. Redis Master Sunucusu${NC}"
+    ask_input "Redis Master Public IP" redis_master_ip
+    
+    if ask_yes_no "Redis Slave sunucusu var mı?"; then
+        ask_input "Redis Slave Public IP" redis_slave_ip
+    fi
+    
+    # Yapılandırmayı uygula
+    MULTI_SERVER_MODE=true
+    DNS_SERVER_IP="$dns_ip"
+    WEB_SERVER_IP="$web_ip"
+    DATABASE_SERVER_IP="$db_master_ip"
+    DATABASE_SLAVE_IP="$db_slave_ip"
+    REDIS_SERVER_IP="$redis_master_ip"
+    REDIS_SLAVE_IP="$redis_slave_ip"
+    STORAGE_SERVER_IP="$web_ip"
+    
+    # Sunucular arası haberleşme modunu seç
+    echo ""
+    print_header "Sunucular Arası Haberleşme"
+    
+    echo -e "${CYAN}Sunucular farklı IP'lerde, nasıl haberleşecekler?${NC}"
+    echo ""
+    echo "1) ${GREEN}WireGuard VPN${NC} (Önerilen - Hızlı, Güvenli, Şifreli)"
+    echo "   └─ 10.9.0.x ağı üzerinden mesh network"
+    echo ""
+    echo "2) ${YELLOW}Private Network/VLAN${NC} (Varsa - En Hızlı)"
+    echo "   └─ Hetzner/DO private network"
+    echo ""
+    echo "3) ${YELLOW}SSH Tunnel${NC} (Geçici test)"
+    echo ""
+    echo "4) ${RED}Public IP + Firewall${NC} (Güvensiz!)"
+    echo ""
+    
+    read -p "Seçiminiz (1-4) [1]: " comm_choice
+    comm_choice=${comm_choice:-1}
+    
+    case $comm_choice in
+        1)
+            CLUSTER_COMMUNICATION_MODE="wireguard"
+            WIREGUARD_NETWORK="10.9.0.0/24"
+            print_success "✓ WireGuard VPN seçildi"
+            echo ""
+            print_info "Her sunucuda WireGuard kurulacak:"
+            echo "  DNS:          10.9.0.1"
+            echo "  Laravel:      10.9.0.2"
+            echo "  MySQL Master: 10.9.0.10"
+            echo "  MySQL Slave:  10.9.0.11"
+            echo "  Redis Master: 10.9.0.20"
+            echo "  Redis Slave:  10.9.0.21"
+            echo ""
+            print_warning "ÖNEMLİ: Her sunucuda Multi-Server > 3) WireGuard Kurulumu yapın!"
+            
+            # VPN IP'leri kullan
+            DATABASE_LOCAL_IP="10.9.0.10"
+            REDIS_LOCAL_IP="10.9.0.20"
+            ;;
+        2)
+            CLUSTER_COMMUNICATION_MODE="private_network"
+            print_success "✓ Private Network seçildi"
+            echo ""
+            
+            if ask_yes_no "MySQL Master'ın private IP'si var mı?"; then
+                read -p "MySQL Master Private IP: " db_local
+                DATABASE_LOCAL_IP="$db_local"
+            fi
+            
+            if ask_yes_no "Redis Master'ın private IP'si var mı?"; then
+                read -p "Redis Master Private IP: " redis_local
+                REDIS_LOCAL_IP="$redis_local"
+            fi
+            ;;
+        3)
+            CLUSTER_COMMUNICATION_MODE="ssh_tunnel"
+            print_warning "✓ SSH Tunnel seçildi (Geçici!)"
+            print_info "Laravel sunucusunda SSH tunnel kurun:"
+            echo "  Multi-Server > 4) SSH Tunnel Kurulumu"
+            
+            # Localhost kullan (tunnel üzerinden)
+            DATABASE_LOCAL_IP="127.0.0.1"
+            REDIS_LOCAL_IP="127.0.0.1"
+            ;;
+        4)
+            CLUSTER_COMMUNICATION_MODE="public"
+            print_error "✗ Public IP seçildi (GÜVENSİZ!)"
+            print_warning "SADECE TEST için kullanın!"
+            
+            # Public IP kullan
+            DATABASE_LOCAL_IP="$DATABASE_SERVER_IP"
+            REDIS_LOCAL_IP="$REDIS_SERVER_IP"
+            ;;
+    esac
+    
+    # Yapılandırmayı kaydet
+    save_multi_server_config
+    
+    # Özet göster
+    print_header "$cluster_name - Cluster Yapılandırması"
+    
+    cat <<EOF
+${CYAN}═══════════════════════════════════════════${NC}
+${CYAN}  CLUSTER YAPISI - $cluster_name${NC}
+${CYAN}═══════════════════════════════════════════${NC}
+
+${YELLOW}► DNS + Ana Site:${NC}
+   Public IP: ${GREEN}$dns_ip${NC}
+
+${YELLOW}► Web/Laravel Sistem:${NC}
+   Public IP: ${GREEN}$web_ip${NC}
+
+${YELLOW}► MySQL Database:${NC}
+   Master Public:  ${GREEN}$db_master_ip${NC}
+EOF
+    
+    [ -n "$DATABASE_LOCAL_IP" ] && echo "   Master Local:   ${GREEN}$DATABASE_LOCAL_IP${NC} ${CYAN}(Laravel buradan bağlanacak)${NC}"
+    [ -n "$db_slave_ip" ] && echo "   Slave Public:   ${GREEN}$db_slave_ip${NC}"
+    
+    cat <<EOF
+
+${YELLOW}► Redis Cache:${NC}
+   Master Public:  ${GREEN}$redis_master_ip${NC}
+EOF
+    
+    [ -n "$REDIS_LOCAL_IP" ] && echo "   Master Local:   ${GREEN}$REDIS_LOCAL_IP${NC} ${CYAN}(Laravel buradan bağlanacak)${NC}"
+    [ -n "$redis_slave_ip" ] && echo "   Slave Public:   ${GREEN}$redis_slave_ip${NC}"
+    
+    cat <<EOF
+
+${CYAN}═══════════════════════════════════════════${NC}
+EOF
+    
+    print_success "Yapılandırma kaydedildi!"
+    
+    # Mevcut sunucunun rolünü tespit et ve bilgi ver
+    local current_ip=$(hostname -I | awk '{print $1}')
+    echo ""
+    echo -e "${CYAN}Mevcut Sunucu:${NC} $current_ip"
+    
+    # Girilen IP'lere göre rol tespit et
+    local detected_role=""
+    
+    if [ "$current_ip" = "$dns_ip" ]; then
+        detected_role="DNS + Ana Site"
+        echo -e "${GREEN}Rol: DNS + Ana Site${NC}"
+        echo ""
+        print_info "Bu sunucuda kurulması gerekenler:"
+        echo "  1. BIND9 veya dnsmasq (DNS)"
+        echo "  2. Nginx + PHP (Ana site için)"
+    elif [ "$current_ip" = "$web_ip" ]; then
+        detected_role="Web/Laravel Sistem"
+        echo -e "${GREEN}Rol: Web/Laravel Sistem${NC}"
+        echo ""
+        print_info "Bu sunucuda kurulması gerekenler:"
+        echo "  1. Nginx"
+        echo "  2. PHP 8.3 + FPM"
+        echo "  3. Composer"
+        echo "  4. MySQL Client (uzak DB için)"
+        echo "  5. Redis Client (uzak Redis için)"
+        echo ""
+        print_info "Ardından:"
+        echo "  • Multi-Server > MySQL Master Yapılandır"
+        echo "  • Multi-Server > Redis Master Yapılandır"
+        echo "  • Multi-Server > Laravel .env Oluştur"
+    elif [ "$current_ip" = "$db_master_ip" ]; then
+        detected_role="MySQL Master"
+        echo -e "${GREEN}Rol: MySQL Master${NC}"
+        echo ""
+        print_info "Bu sunucuda kurulması gerekenler:"
+        echo "  1. MySQL/MariaDB"
+        echo "  2. Uzak erişim yapılandırması"
+        echo "  3. Master-Slave replication (varsa)"
+    elif [ "$current_ip" = "$db_slave_ip" ]; then
+        detected_role="MySQL Slave"
+        echo -e "${GREEN}Rol: MySQL Slave${NC}"
+        echo ""
+        print_info "Bu sunucuda kurulması gerekenler:"
+        echo "  1. MySQL/MariaDB"
+        echo "  2. Slave yapılandırması"
+    elif [ "$current_ip" = "$redis_master_ip" ]; then
+        detected_role="Redis Master"
+        echo -e "${GREEN}Rol: Redis Master${NC}"
+        echo ""
+        print_info "Bu sunucuda kurulması gerekenler:"
+        echo "  1. Redis Server"
+        echo "  2. Uzak erişim yapılandırması"
+        echo "  3. Master yapılandırması (varsa)"
+    elif [ "$current_ip" = "$redis_slave_ip" ]; then
+        detected_role="Redis Slave"
+        echo -e "${GREEN}Rol: Redis Slave${NC}"
+        echo ""
+        print_info "Bu sunucuda kurulması gerekenler:"
+        echo "  1. Redis Server"
+        echo "  2. Slave yapılandırması"
+    else
+        detected_role="Tanımsız"
+        echo -e "${YELLOW}Rol: Tanımsız${NC}"
+        print_warning "Bu sunucu girdiğiniz IP'lerle eşleşmiyor!"
+        print_info "Mevcut IP: $current_ip"
+    fi
+    
+    echo ""
+    print_info "Otomatik kurulum için: Multi-Server > Bu Sunucunun Rolüne Göre Kurulum"
+}
+
+generate_laravel_env_for_cluster() {
+    print_header "Laravel .env Dosyası Oluştur (Cluster İçin)"
+    
+    if [ "$MULTI_SERVER_MODE" != true ]; then
+        print_error "Multi-server modu etkin değil!"
+        return 1
+    fi
+    
+    local env_file="/tmp/laravel-cluster.env"
+    
+    print_info "Laravel .env dosyası oluşturuluyor: $env_file"
+    
+    # Database yapılandırması
+    local db_host="${DATABASE_LOCAL_IP:-$DATABASE_SERVER_IP}"
+    local db_name=""
+    local db_user=""
+    local db_pass=""
+    
+    ask_input "Veritabanı adı" db_name "laravel_db"
+    ask_input "Veritabanı kullanıcı adı" db_user "laravel_user"
+    ask_password "Veritabanı şifresi" db_pass
+    
+    # Redis yapılandırması
+    local redis_host="${REDIS_LOCAL_IP:-$REDIS_SERVER_IP}"
+    local redis_pass=""
+    
+    if ask_yes_no "Redis şifreli mi?"; then
+        ask_password "Redis şifresi" redis_pass
+    fi
+    
+    # .env dosyası oluştur
+    cat > "$env_file" <<EOF
+APP_NAME=Laravel
+APP_ENV=production
+APP_KEY=
+APP_DEBUG=false
+APP_URL=https://your-domain.com
+
+LOG_CHANNEL=stack
+LOG_DEPRECATIONS_CHANNEL=null
+LOG_LEVEL=debug
+
+# ═══════════════════════════════════════════
+# DATABASE - Master/Slave Yapılandırması
+# ═══════════════════════════════════════════
+
+# Master Database (Okuma/Yazma)
+DB_CONNECTION=mysql
+DB_HOST=$db_host
+DB_PORT=3306
+DB_DATABASE=$db_name
+DB_USERNAME=$db_user
+DB_PASSWORD=$db_pass
+
+EOF
+    
+    # Slave varsa ekle
+    if [ -n "$DATABASE_SLAVE_IP" ]; then
+        cat >> "$env_file" <<EOF
+# Slave Database (Sadece Okuma - Laravel'de kullanmak için)
+DB_READ_HOST=$DATABASE_SLAVE_IP
+# Laravel config/database.php'de 'read' host olarak kullanın
+
+EOF
+    fi
+    
+    # Redis yapılandırması
+    cat >> "$env_file" <<EOF
+# ═══════════════════════════════════════════
+# REDIS - Master/Slave Yapılandırması
+# ═══════════════════════════════════════════
+
+# Redis Master (Okuma/Yazma)
+REDIS_HOST=$redis_host
+REDIS_PASSWORD=$redis_pass
+REDIS_PORT=6379
+REDIS_CLIENT=phpredis
+
+EOF
+    
+    # Redis Slave varsa ekle
+    if [ -n "$REDIS_SLAVE_IP" ]; then
+        cat >> "$env_file" <<EOF
+# Redis Slave (Sadece Okuma - Opsiyonel)
+REDIS_SLAVE_HOST=$REDIS_SLAVE_IP
+REDIS_SLAVE_PASSWORD=$redis_pass
+
+EOF
+    fi
+    
+    # Cache ve Session
+    cat >> "$env_file" <<EOF
+# Cache & Session & Queue
+CACHE_DRIVER=redis
+QUEUE_CONNECTION=redis
+SESSION_DRIVER=redis
+SESSION_LIFETIME=120
+
+# ═══════════════════════════════════════════
+# BROADCAST (Socket.io, Pusher vb.)
+# ═══════════════════════════════════════════
+BROADCAST_DRIVER=log
+
+# ═══════════════════════════════════════════
+# MAIL (SMTP)
+# ═══════════════════════════════════════════
+MAIL_MAILER=smtp
+MAIL_HOST=mailpit
+MAIL_PORT=1025
+MAIL_USERNAME=null
+MAIL_PASSWORD=null
+MAIL_ENCRYPTION=null
+MAIL_FROM_ADDRESS="hello@example.com"
+MAIL_FROM_NAME="\${APP_NAME}"
+
+# ═══════════════════════════════════════════
+# CLUSTER SUNUCU BİLGİLERİ
+# ═══════════════════════════════════════════
+
+# DNS + Ana Site
+DNS_SERVER=$DNS_SERVER_IP
+
+# Laravel Sistem
+WEB_SERVER=$WEB_SERVER_IP
+
+# MySQL Master/Slave
+DB_MASTER_PUBLIC=$DATABASE_SERVER_IP
+EOF
+    
+    [ -n "$DATABASE_LOCAL_IP" ] && echo "DB_MASTER_LOCAL=$DATABASE_LOCAL_IP" >> "$env_file"
+    [ -n "$DATABASE_SLAVE_IP" ] && echo "DB_SLAVE_PUBLIC=$DATABASE_SLAVE_IP" >> "$env_file"
+    
+    cat >> "$env_file" <<EOF
+
+# Redis Master/Slave
+REDIS_MASTER_PUBLIC=$REDIS_SERVER_IP
+EOF
+    
+    [ -n "$REDIS_LOCAL_IP" ] && echo "REDIS_MASTER_LOCAL=$REDIS_LOCAL_IP" >> "$env_file"
+    [ -n "$REDIS_SLAVE_IP" ] && echo "REDIS_SLAVE_PUBLIC=$REDIS_SLAVE_IP" >> "$env_file"
+    
+    print_success ".env dosyası oluşturuldu: $env_file"
+    
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  .env Dosyası Hazır!${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${GREEN}Dosya Konumu:${NC} $env_file"
+    echo ""
+    echo -e "${YELLOW}Kullanım:${NC}"
+    echo "  1. Dosyayı görüntüle: cat $env_file"
+    echo "  2. Laravel projenize kopyalayın:"
+    echo "     ${GREEN}cp $env_file /var/www/your-project/.env${NC}"
+    echo "  3. APP_KEY oluşturun:"
+    echo "     ${GREEN}php artisan key:generate${NC}"
+    echo ""
+    
+    if ask_yes_no "Dosyayı şimdi görüntülemek ister misiniz?"; then
+        echo ""
+        cat "$env_file"
+    fi
+}
+
+install_nfs_server() {
+    print_header "NFS Server Kurulumu"
+    
+    if command -v nfsstat &>/dev/null; then
+        print_warning "NFS zaten kurulu görünüyor"
+        if ! ask_yes_no "Yeniden yapılandırmak ister misiniz?"; then
+            return 0
+        fi
+    fi
+    
+    print_info "NFS Server kuruluyor..."
+    apt update
+    apt install -y nfs-kernel-server
+    
+    # Paylaşılacak dizin
+    local nfs_share="/srv/nfs/shared"
+    ask_input "NFS paylaşım dizini" nfs_share "$nfs_share"
+    
+    mkdir -p "$nfs_share"
+    chown -R nobody:nogroup "$nfs_share"
+    chmod 777 "$nfs_share"
+    
+    # exports dosyasını yapılandır
+    local exports_file="/etc/exports"
+    cp "$exports_file" "${exports_file}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+    
+    echo ""
+    print_info "İzin verilecek istemcileri belirleyin:"
+    echo "1) Belirli IP (Önerilen)"
+    echo "2) Subnet (örn: 10.0.0.0/24)"
+    echo "3) Tüm IP'ler (Güvensiz)"
+    read -p "Seçiminiz (1-3) [1]: " nfs_access_choice
+    
+    local nfs_client=""
+    case $nfs_access_choice in
+        2)
+            ask_input "Subnet (örn: 10.0.0.0/24)" nfs_client "10.0.0.0/24"
+            ;;
+        3)
+            nfs_client="*"
+            print_warning "Tüm IP'lerden erişim (güvensiz!)"
+            ;;
+        *)
+            if [ -n "$WEB_SERVER_IP" ]; then
+                nfs_client="$WEB_SERVER_IP"
+            else
+                ask_input "İzin verilecek IP adresi" nfs_client
+            fi
+            ;;
+    esac
+    
+    # exports'a ekle
+    echo "$nfs_share    $nfs_client(rw,sync,no_subtree_check)" >> "$exports_file"
+    
+    # NFS'i yeniden yükle
+    exportfs -ra
+    systemctl restart nfs-kernel-server
+    
+    print_success "NFS Server kurulumu tamamlandı!"
+    echo ""
+    echo -e "${GREEN}Paylaşım Dizini:${NC} $nfs_share"
+    echo -e "${GREEN}İzin Verilen:${NC} $nfs_client"
+    echo ""
+    echo -e "${CYAN}İstemcide Mount Komutu:${NC}"
+    echo -e "${GREEN}sudo mount -t nfs $(hostname -I | awk '{print $1}'):$nfs_share /mnt/shared${NC}"
+    
+    # Firewall
+    if command -v ufw &>/dev/null; then
+        if ask_yes_no "UFW'de NFS portlarını açmak ister misiniz?"; then
+            ufw allow from $nfs_client to any port 2049 comment 'NFS'
+            ufw allow from $nfs_client to any port 111 comment 'RPC'
+            print_success "Firewall kuralları eklendi"
+        fi
+    fi
 }
 
 ask_yes_no() {
@@ -7555,6 +10281,629 @@ PYTHON_FIX
     fi
 }
 
+detect_dns_server() {
+    # Kurulu DNS servisini tespit et
+    if systemctl is-active --quiet named 2>/dev/null; then
+        echo "bind9"
+    elif systemctl is-active --quiet bind9 2>/dev/null; then
+        echo "bind9"
+    elif systemctl is-active --quiet dnsmasq 2>/dev/null; then
+        echo "dnsmasq"
+    elif command -v named &>/dev/null; then
+        echo "bind9-stopped"
+    elif command -v dnsmasq &>/dev/null; then
+        echo "dnsmasq-stopped"
+    else
+        echo "none"
+    fi
+}
+
+dns_management_menu() {
+    while true; do
+        clear
+        print_header "DNS Yönetim Paneli"
+        
+        # DNS durumunu tespit et
+        local dns_type=$(detect_dns_server)
+        
+        echo -e "${CYAN}DNS Sunucu Durumu:${NC}"
+        case $dns_type in
+            "bind9")
+                echo -e "  ${GREEN}✓ BIND9 Çalışıyor${NC}"
+                ;;
+            "bind9-stopped")
+                echo -e "  ${YELLOW}⚠ BIND9 Kurulu ama Durdurulmuş${NC}"
+                ;;
+            "dnsmasq")
+                echo -e "  ${GREEN}✓ dnsmasq Çalışıyor${NC}"
+                ;;
+            "dnsmasq-stopped")
+                echo -e "  ${YELLOW}⚠ dnsmasq Kurulu ama Durdurulmuş${NC}"
+                ;;
+            "none")
+                echo -e "  ${RED}✗ DNS Servisi Kurulu Değil${NC}"
+                ;;
+        esac
+        
+        echo ""
+        echo -e "${CYAN}DNS Yönetim Seçenekleri:${NC}"
+        
+        if [ "$dns_type" = "bind9" ] || [ "$dns_type" = "bind9-stopped" ]; then
+            echo "1) DNS Kayıtlarını Listele (Zone dosyaları)"
+            echo "2) Yeni Domain/Zone Ekle"
+            echo "3) Subdomain/A Kaydı Ekle"
+            echo "4) DNS Kaydını Sil"
+            echo "5) DNS Kaydını Düzenle"
+            echo "6) Zone Dosyasını Görüntüle"
+            echo "7) Nginx Domain'lerini Otomatik DNS'e Ekle"
+            echo "8) BIND9 Yapılandırma Hatası Düzelt"
+            echo "9) Zone Dosyalarını RFC Uyumlu Hale Getir"
+            echo "10) BIND9'u Yeniden Başlat"
+        elif [ "$dns_type" = "dnsmasq" ] || [ "$dns_type" = "dnsmasq-stopped" ]; then
+            echo "1) DNS Kayıtlarını Listele (hosts dosyası)"
+            echo "2) Yeni Domain/A Kaydı Ekle"
+            echo "3) DNS Kaydını Sil"
+            echo "4) DNS Kaydını Düzenle"
+            echo "5) Hosts Dosyasını Görüntüle"
+            echo "6) Nginx Domain'lerini Otomatik DNS'e Ekle"
+            echo "7) dnsmasq'u Yeniden Başlat"
+        else
+            echo "1) DNS Sunucusu Kur (BIND9 veya dnsmasq)"
+        fi
+        
+        echo "0) Geri Dön"
+        echo ""
+        
+        read -p "Seçiminizi yapın: " dns_choice
+        
+        if [ "$dns_type" = "none" ]; then
+            case $dns_choice in
+                1) install_dns_server;;
+                0) return 0;;
+                *) print_error "Geçersiz seçim"; sleep 2;;
+            esac
+        elif [ "$dns_type" = "bind9" ] || [ "$dns_type" = "bind9-stopped" ]; then
+            case $dns_choice in
+                1) list_bind9_zones;;
+                2) add_bind9_zone;;
+                3) add_bind9_record;;
+                4) delete_bind9_record;;
+                5) edit_bind9_record;;
+                6) view_bind9_zone;;
+                7) add_nginx_domains_to_dns;;
+                8) fix_bind9_config;;
+                9) update_zone_soa_values;;
+                10) systemctl restart named; print_success "BIND9 yeniden başlatıldı";;
+                0) return 0;;
+                *) print_error "Geçersiz seçim"; sleep 2;;
+            esac
+        elif [ "$dns_type" = "dnsmasq" ] || [ "$dns_type" = "dnsmasq-stopped" ]; then
+            case $dns_choice in
+                1) list_dnsmasq_records;;
+                2) add_dnsmasq_record;;
+                3) delete_dnsmasq_record;;
+                4) edit_dnsmasq_record;;
+                5) view_dnsmasq_hosts;;
+                6) add_nginx_domains_to_dns;;
+                7) systemctl restart dnsmasq; print_success "dnsmasq yeniden başlatıldı";;
+                0) return 0;;
+                *) print_error "Geçersiz seçim"; sleep 2;;
+            esac
+        fi
+        
+        read -p "Devam etmek için Enter'a basın..."
+    done
+}
+
+list_bind9_zones() {
+    print_header "BIND9 - Zone Listesi"
+    
+    local zones_dir="/etc/bind"
+    local named_conf_local="/etc/bind/named.conf.local"
+    
+    if [ ! -f "$named_conf_local" ]; then
+        print_error "named.conf.local bulunamadı!"
+        return 1
+    fi
+    
+    echo -e "${CYAN}Yapılandırılmış Zone'lar:${NC}"
+    echo ""
+    
+    local zone_count=0
+    while IFS= read -r line; do
+        if echo "$line" | grep -q "^zone"; then
+            local zone_name=$(echo "$line" | sed 's/zone "\(.*\)".*/\1/')
+            local zone_file=$(grep -A5 "zone \"$zone_name\"" "$named_conf_local" | grep "file" | sed 's/.*file "\(.*\)".*/\1/' | tr -d ';' | xargs)
+            
+            ((zone_count++))
+            echo -e "${GREEN}$zone_count) $zone_name${NC}"
+            echo "   Zone dosyası: $zone_file"
+            
+            # SOA serial numarasını göster
+            if [ -f "$zone_file" ]; then
+                local serial=$(grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1)
+                local record_count=$(grep -cE "^\s*[a-zA-Z0-9@-]+\s+IN\s+(A|AAAA|CNAME|MX)" "$zone_file" 2>/dev/null || echo "0")
+                echo "   Serial: $serial, Kayıt sayısı: $record_count"
+            fi
+            echo ""
+        fi
+    done < "$named_conf_local"
+    
+    if [ $zone_count -eq 0 ]; then
+        print_warning "Henüz zone tanımlı değil"
+    fi
+}
+
+add_bind9_zone() {
+    print_header "BIND9 - Yeni Zone/Domain Ekle"
+    
+    local domain_name=""
+    local server_ip=""
+    
+    ask_input "Yeni domain adı (örn: example.com)" domain_name
+    
+    server_ip=$(hostname -I | awk '{print $1}')
+    ask_input "DNS sunucusu IP adresi" server_ip "$server_ip"
+    
+    local forward_zone="/etc/bind/db.$domain_name"
+    local named_conf_local="/etc/bind/named.conf.local"
+    
+    # Zone zaten var mı kontrol et
+    if grep -q "zone \"$domain_name\"" "$named_conf_local" 2>/dev/null; then
+        print_error "Bu zone zaten mevcut: $domain_name"
+        return 1
+    fi
+    
+    # Zone dosyası oluştur
+    print_info "Zone dosyası oluşturuluyor..."
+    
+    cat > "$forward_zone" <<EOF
+\$TTL    3600
+@       IN      SOA     ns1.$domain_name. admin.$domain_name. (
+                          $(date +%Y%m%d01)        ; Serial
+                          3600          ; Refresh
+                          600           ; Retry
+                          604800        ; Expire
+                          3600 )        ; Minimum TTL
+;
+@       IN      NS      ns1.$domain_name.
+@       IN      A       $server_ip
+ns1     IN      A       $server_ip
+www     IN      A       $server_ip
+EOF
+    
+    chmod 644 "$forward_zone"
+    print_success "✓ Zone dosyası oluşturuldu: $forward_zone"
+    
+    # named.conf.local'e ekle
+    cat >> "$named_conf_local" <<EOF
+
+// Zone: $domain_name
+zone "$domain_name" {
+    type master;
+    file "$forward_zone";
+    allow-update { none; };
+};
+EOF
+    
+    print_success "✓ Zone tanımı eklendi: $named_conf_local"
+    
+    # Yapılandırmayı test et
+    if named-checkconf 2>/dev/null && named-checkzone "$domain_name" "$forward_zone" 2>/dev/null; then
+        print_success "✓ Zone yapılandırması geçerli"
+        systemctl reload named
+        print_success "✓ BIND9 yeniden yüklendi"
+    else
+        print_error "Zone yapılandırması geçersiz!"
+        print_info "Kontrol: named-checkzone $domain_name $forward_zone"
+    fi
+}
+
+add_bind9_record() {
+    print_header "BIND9 - DNS Kaydı Ekle"
+    
+    # Zone listesi
+    list_bind9_zones
+    
+    echo ""
+    local domain_name=""
+    ask_input "Hangi domain'e kayıt eklenecek?" domain_name
+    
+    local zone_file="/etc/bind/db.$domain_name"
+    
+    if [ ! -f "$zone_file" ]; then
+        print_error "Zone dosyası bulunamadı: $zone_file"
+        return 1
+    fi
+    
+    echo ""
+    echo -e "${CYAN}Kayıt Tipi:${NC}"
+    echo "1) A Record (IPv4)"
+    echo "2) AAAA Record (IPv6)"
+    echo "3) CNAME (Alias)"
+    echo "4) MX (Mail)"
+    echo "5) TXT (Text)"
+    
+    read -p "Seçiminiz (1-5): " record_type_choice
+    
+    local record_name=""
+    local record_value=""
+    local record_type=""
+    local priority=""
+    
+    case $record_type_choice in
+        1)
+            record_type="A"
+            ask_input "Kayıt adı (örn: api, blog, @)" record_name
+            ask_input "IPv4 adresi" record_value
+            ;;
+        2)
+            record_type="AAAA"
+            ask_input "Kayıt adı" record_name
+            ask_input "IPv6 adresi" record_value
+            ;;
+        3)
+            record_type="CNAME"
+            ask_input "Alias adı (örn: www, ftp)" record_name
+            ask_input "Hedef domain (örn: $domain_name.)" record_value
+            ;;
+        4)
+            record_type="MX"
+            record_name="@"
+            ask_input "Priority (örn: 10)" priority "10"
+            ask_input "Mail sunucusu (örn: mail.$domain_name.)" record_value
+            ;;
+        5)
+            record_type="TXT"
+            ask_input "Kayıt adı (@  = root)" record_name "@"
+            ask_input "TXT değeri (tırnak içinde)" record_value
+            ;;
+        *)
+            print_error "Geçersiz seçim"
+            return 1
+            ;;
+    esac
+    
+    # Yedek oluştur
+    cp "$zone_file" "${zone_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Serial numarasını güncelle
+    local current_serial=$(grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1)
+    local new_serial=$(date +%Y%m%d01)
+    
+    if [ -n "$current_serial" ] && [ "$new_serial" -le "$current_serial" ]; then
+        new_serial=$((current_serial + 1))
+    fi
+    
+    sed -i "s/$current_serial/$new_serial/" "$zone_file"
+    
+    # Kaydı ekle
+    if [ "$record_type" = "MX" ]; then
+        echo "$record_name     IN      $record_type    $priority $record_value" >> "$zone_file"
+    else
+        echo "$record_name     IN      $record_type       $record_value" >> "$zone_file"
+    fi
+    
+    print_success "✓ Kayıt eklendi"
+    
+    # Zone'u kontrol et
+    if named-checkzone "$domain_name" "$zone_file" 2>/dev/null; then
+        print_success "✓ Zone geçerli"
+        systemctl reload named
+        print_success "✓ BIND9 yeniden yüklendi"
+        
+        # Test
+        echo ""
+        print_info "DNS testi:"
+        dig @127.0.0.1 $record_name.$domain_name +short 2>/dev/null || echo "Test başarısız"
+    else
+        print_error "Zone geçersiz, yedek geri yükleniyor..."
+        cp "${zone_file}.backup."$(ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//') "$zone_file"
+    fi
+}
+
+delete_bind9_record() {
+    print_header "BIND9 - DNS Kaydını Sil"
+    
+    list_bind9_zones
+    
+    echo ""
+    local domain_name=""
+    ask_input "Hangi domain'den kayıt silinecek?" domain_name
+    
+    local zone_file="/etc/bind/db.$domain_name"
+    
+    if [ ! -f "$zone_file" ]; then
+        print_error "Zone dosyası bulunamadı!"
+        return 1
+    fi
+    
+    echo ""
+    echo -e "${CYAN}Mevcut Kayıtlar:${NC}"
+    grep -nE "^\s*[a-zA-Z0-9@-]+\s+IN\s+(A|AAAA|CNAME|MX|TXT)" "$zone_file" | nl
+    
+    echo ""
+    local record_name=""
+    ask_input "Silinecek kayıt adı (örn: api, www)" record_name
+    
+    # Yedek oluştur
+    cp "$zone_file" "${zone_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Serial güncelle
+    local current_serial=$(grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1)
+    local new_serial=$(date +%Y%m%d01)
+    if [ "$new_serial" -le "$current_serial" ]; then
+        new_serial=$((current_serial + 1))
+    fi
+    sed -i "s/$current_serial/$new_serial/" "$zone_file"
+    
+    # Kaydı sil
+    sed -i "/^${record_name}\s\+IN\s\+/d" "$zone_file"
+    
+    print_success "✓ Kayıt silindi"
+    
+    # Zone kontrol ve reload
+    if named-checkzone "$domain_name" "$zone_file" 2>/dev/null; then
+        systemctl reload named
+        print_success "✓ BIND9 yeniden yüklendi"
+    else
+        print_error "Zone bozuldu, yedek geri yükleniyor"
+        cp "${zone_file}.backup."$(ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//') "$zone_file"
+    fi
+}
+
+view_bind9_zone() {
+    print_header "BIND9 - Zone Dosyasını Görüntüle"
+    
+    list_bind9_zones
+    
+    echo ""
+    local domain_name=""
+    ask_input "Hangi zone'u görmek istiyorsunuz?" domain_name
+    
+    local zone_file="/etc/bind/db.$domain_name"
+    
+    if [ ! -f "$zone_file" ]; then
+        print_error "Zone dosyası bulunamadı!"
+        return 1
+    fi
+    
+    echo ""
+    echo -e "${CYAN}═══ $domain_name Zone Dosyası ═══${NC}"
+    echo ""
+    cat "$zone_file"
+    echo ""
+    echo -e "${CYAN}Dosya yolu:${NC} $zone_file"
+    echo -e "${CYAN}Düzenlemek için:${NC} nano $zone_file"
+}
+
+list_dnsmasq_records() {
+    print_header "dnsmasq - DNS Kayıt Listesi"
+    
+    local dnsmasq_conf="/etc/dnsmasq.conf"
+    local hosts_file="/etc/dnsmasq.hosts"
+    
+    # addn-hosts dosyasını bul
+    if grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
+        hosts_file=$(grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2)
+    fi
+    
+    if [ ! -f "$hosts_file" ]; then
+        print_warning "Hosts dosyası bulunamadı: $hosts_file"
+        return 1
+    fi
+    
+    echo -e "${CYAN}DNS Kayıtları:${NC}"
+    echo ""
+    
+    local count=1
+    while IFS= read -r line; do
+        # Boş satır veya yorum satırını atla
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        
+        local ip=$(echo "$line" | awk '{print $1}')
+        local hostname=$(echo "$line" | awk '{print $2}')
+        
+        echo -e "${GREEN}$count)${NC} $hostname → $ip"
+        ((count++))
+    done < "$hosts_file"
+    
+    if [ $count -eq 1 ]; then
+        print_info "Henüz DNS kaydı yok"
+    fi
+    
+    echo ""
+    echo -e "${CYAN}Hosts dosyası:${NC} $hosts_file"
+}
+
+add_dnsmasq_record() {
+    print_header "dnsmasq - DNS Kaydı Ekle"
+    
+    local dnsmasq_conf="/etc/dnsmasq.conf"
+    local hosts_file="/etc/dnsmasq.hosts"
+    
+    if grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
+        hosts_file=$(grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2)
+    fi
+    
+    if [ ! -f "$hosts_file" ]; then
+        print_error "Hosts dosyası bulunamadı: $hosts_file"
+        return 1
+    fi
+    
+    local hostname=""
+    local ip_address=""
+    
+    ask_input "Hostname (örn: api.example.com, blog.example.com)" hostname
+    
+    server_ip=$(hostname -I | awk '{print $1}')
+    ask_input "IP adresi" ip_address "$server_ip"
+    
+    # Kayıt zaten var mı?
+    if grep -q "^\s*$ip_address\s\+$hostname" "$hosts_file" 2>/dev/null; then
+        print_error "Bu kayıt zaten mevcut!"
+        return 1
+    fi
+    
+    # Yedek oluştur
+    cp "$hosts_file" "${hosts_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Kaydı ekle
+    echo "$ip_address    $hostname" >> "$hosts_file"
+    
+    print_success "✓ DNS kaydı eklendi: $hostname → $ip_address"
+    
+    # dnsmasq'u yeniden başlat
+    systemctl restart dnsmasq
+    
+    if systemctl is-active --quiet dnsmasq; then
+        print_success "✓ dnsmasq yeniden başlatıldı"
+        
+        # Test
+        echo ""
+        print_info "DNS testi:"
+        dig @127.0.0.1 $hostname +short 2>/dev/null || nslookup $hostname 127.0.0.1 2>/dev/null
+    else
+        print_error "dnsmasq başlatılamadı!"
+    fi
+}
+
+delete_dnsmasq_record() {
+    print_header "dnsmasq - DNS Kaydını Sil"
+    
+    local dnsmasq_conf="/etc/dnsmasq.conf"
+    local hosts_file="/etc/dnsmasq.hosts"
+    
+    if grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
+        hosts_file=$(grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2)
+    fi
+    
+    # Mevcut kayıtları listele
+    list_dnsmasq_records
+    
+    echo ""
+    local hostname=""
+    ask_input "Silinecek hostname" hostname
+    
+    # Yedek oluştur
+    cp "$hosts_file" "${hosts_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Kaydı sil
+    sed -i "/\s$hostname\s*$/d" "$hosts_file"
+    
+    print_success "✓ DNS kaydı silindi: $hostname"
+    
+    # dnsmasq'u yeniden başlat
+    systemctl restart dnsmasq
+    print_success "✓ dnsmasq yeniden başlatıldı"
+}
+
+edit_dnsmasq_record() {
+    print_header "dnsmasq - DNS Kaydını Düzenle"
+    
+    local dnsmasq_conf="/etc/dnsmasq.conf"
+    local hosts_file="/etc/dnsmasq.hosts"
+    
+    if grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
+        hosts_file=$(grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2)
+    fi
+    
+    list_dnsmasq_records
+    
+    echo ""
+    local hostname=""
+    local new_ip=""
+    
+    ask_input "Düzenlenecek hostname" hostname
+    ask_input "Yeni IP adresi" new_ip
+    
+    # Yedek oluştur
+    cp "$hosts_file" "${hosts_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # IP'yi güncelle
+    sed -i "s/^\([0-9.]*\)\s\+$hostname\s*$/$new_ip    $hostname/" "$hosts_file"
+    
+    print_success "✓ DNS kaydı güncellendi"
+    
+    systemctl restart dnsmasq
+    print_success "✓ dnsmasq yeniden başlatıldı"
+}
+
+view_dnsmasq_hosts() {
+    print_header "dnsmasq - Hosts Dosyası"
+    
+    local dnsmasq_conf="/etc/dnsmasq.conf"
+    local hosts_file="/etc/dnsmasq.hosts"
+    
+    if grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
+        hosts_file=$(grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2)
+    fi
+    
+    if [ ! -f "$hosts_file" ]; then
+        print_error "Hosts dosyası bulunamadı!"
+        return 1
+    fi
+    
+    echo -e "${CYAN}═══ dnsmasq Hosts Dosyası ═══${NC}"
+    echo ""
+    cat "$hosts_file"
+    echo ""
+    echo -e "${CYAN}Dosya yolu:${NC} $hosts_file"
+    echo -e "${CYAN}Düzenlemek için:${NC} nano $hosts_file"
+}
+
+edit_bind9_record() {
+    print_header "BIND9 - DNS Kaydını Düzenle"
+    
+    list_bind9_zones
+    
+    echo ""
+    local domain_name=""
+    ask_input "Hangi domain?" domain_name
+    
+    local zone_file="/etc/bind/db.$domain_name"
+    
+    if [ ! -f "$zone_file" ]; then
+        print_error "Zone dosyası bulunamadı!"
+        return 1
+    fi
+    
+    echo ""
+    echo -e "${CYAN}Mevcut A/CNAME Kayıtları:${NC}"
+    grep -E "^\s*[a-zA-Z0-9@-]+\s+IN\s+(A|CNAME)" "$zone_file" | nl
+    
+    echo ""
+    local record_name=""
+    local new_value=""
+    
+    ask_input "Düzenlenecek kayıt adı" record_name
+    ask_input "Yeni değer (IP veya CNAME)" new_value
+    
+    # Yedek oluştur
+    cp "$zone_file" "${zone_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Serial güncelle
+    local current_serial=$(grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1)
+    local new_serial=$(date +%Y%m%d01)
+    if [ "$new_serial" -le "$current_serial" ]; then
+        new_serial=$((current_serial + 1))
+    fi
+    sed -i "s/$current_serial/$new_serial/" "$zone_file"
+    
+    # Kaydı güncelle (A record için)
+    sed -i "s/^\(${record_name}\s\+IN\s\+A\s\+\).*/\1$new_value/" "$zone_file"
+    
+    print_success "✓ Kayıt güncellendi"
+    
+    if named-checkzone "$domain_name" "$zone_file" 2>/dev/null; then
+        systemctl reload named
+        print_success "✓ BIND9 yeniden yüklendi"
+    else
+        print_error "Zone bozuldu, yedek geri yükleniyor"
+        cp "${zone_file}.backup."$(ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//') "$zone_file"
+    fi
+}
+
 install_dns_server() {
     print_header "DNS Sunucusu Kurulumu"
     
@@ -8259,15 +11608,23 @@ main_menu() {
         echo "19) OpenVPN Web Yönetim Paneli"
         echo "20) OpenVPN İstemci Yönetimi"
         echo "21) Servis Optimizasyonu (Performans & Güvenlik)"
-        echo "22) DNS Sunucusu Kurulumu"
+        echo "22) DNS Yönetimi (Kurulum, Kayıt Ekleme, Düzenleme)"
         echo "23) Nginx Domain'lerini DNS'e Ekle"
         echo "24) PHP Eklentileri Hızlı Düzeltme (Composer için)"
         echo "25) PHP Çift Yükleme Sorunu Düzelt (dom, xml)"
         echo "26) Redis Bağlantı Sorunu Düzelt"
-        echo "27) Çıkış"
+        echo "27) Multi-Server (Dağıtık Sistem) Yapılandırması"
+        echo "28) Çıkış"
         echo ""
         
-        read -p "Seçiminizi yapın (1-27): " choice
+        # Multi-server modu göstergesi
+        if [ "$MULTI_SERVER_MODE" = true ]; then
+            local current_role=$(get_server_role)
+            echo -e "${GREEN}✓ Multi-Server Modu Aktif${NC} - Rol: $current_role"
+            echo ""
+        fi
+        
+        read -p "Seçiminizi yapın (1-28): " choice
         
         case $choice in
             1)
@@ -8354,8 +11711,7 @@ main_menu() {
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             22)
-                install_dns_server
-                read -p "Devam etmek için Enter'a basın..."
+                dns_management_menu
                 ;;
             23)
                 add_nginx_domains_to_dns
@@ -8385,11 +11741,14 @@ main_menu() {
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             27)
+                multi_server_menu
+                ;;
+            28)
                 print_success "Çıkılıyor..."
                 exit 0
                 ;;
             *)
-                print_error "Geçersiz seçim. Lütfen 1-27 arasında bir sayı girin."
+                print_error "Geçersiz seçim. Lütfen 1-28 arasında bir sayı girin."
                 sleep 2
                 ;;
         esac
@@ -8584,5 +11943,8 @@ run_new_installation() {
 }
 
 # Ana program başlangıcı
+# Multi-server yapılandırmasını yükle (varsa)
+load_multi_server_config
+
 # Ana menüyü başlat
 main_menu
