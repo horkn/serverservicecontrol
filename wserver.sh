@@ -102,17 +102,20 @@ if [ "$DOMAIN" != "$MAIN_DOMAIN" ]; then
     RECORD_NAME="_acme-challenge.$SUBDOMAIN"
 fi
 
-# Eski TXT kayıtlarını sil
-sed -i "/$RECORD_NAME.*IN.*TXT/d" "$ZONE_FILE"
-
-# Serial güncelle
+# Serial güncelle (önce)
 CURRENT_SERIAL=$(grep "Serial" "$ZONE_FILE" | grep -oE '[0-9]+' | head -1)
 NEW_SERIAL=$(date +%Y%m%d%H)
 [ "$NEW_SERIAL" -le "$CURRENT_SERIAL" ] && NEW_SERIAL=$((CURRENT_SERIAL + 1))
 sed -i "s/$CURRENT_SERIAL/$NEW_SERIAL/" "$ZONE_FILE"
 
-# TXT kaydı ekle
-echo "$RECORD_NAME     IN      TXT     \"$TOKEN\"" >> "$ZONE_FILE"
+# TXT kaydı ekle (ESKİLERİ SİLME! Wildcard için gerekli)
+# Aynı token varsa tekrar ekleme
+if ! grep -q "$RECORD_NAME.*IN.*TXT.*\"$TOKEN\"" "$ZONE_FILE"; then
+    echo "$RECORD_NAME     IN      TXT     \"$TOKEN\"" >> "$ZONE_FILE"
+    echo "[OK] Token eklendi: $TOKEN"
+else
+    echo "[INFO] Token zaten mevcut"
+fi
 
 # BIND9 reload
 if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
@@ -148,8 +151,9 @@ if [ "$DOMAIN" != "$MAIN_DOMAIN" ]; then
     RECORD_NAME="_acme-challenge.$SUBDOMAIN"
 fi
 
-# TXT kaydını sil
+# TÜM _acme-challenge TXT kayıtlarını sil (wildcard için birden fazla olabilir)
 sed -i "/$RECORD_NAME.*IN.*TXT/d" "$ZONE_FILE"
+echo "[OK] TXT kayıtları silindi: $RECORD_NAME"
 
 # Serial güncelle
 CURRENT_SERIAL=$(grep "Serial" "$ZONE_FILE" | grep -oE '[0-9]+' | head -1)
