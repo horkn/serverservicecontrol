@@ -8851,7 +8851,13 @@ create_ssl_dns_auto() {
         pass_param="$ssh_password"
     fi
     
-    create_dns_challenge_hooks "$dns_server_ip" "$dns_server_user" "$use_pass" "$pass_param"
+    # Web server IP'sini belirle (zone dosyası için)
+    local web_ip=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    if [ -n "$WEB_SERVER_IP" ]; then
+        web_ip="$WEB_SERVER_IP"
+    fi
+    
+    create_dns_challenge_hooks "$dns_server_ip" "$dns_server_user" "$use_pass" "$pass_param" "$web_ip"
     
     # Certbot çalıştır (hook scriptler ile)
     print_info "Certbot çalıştırılıyor (otomatik DNS challenge)..."
@@ -8919,8 +8925,11 @@ create_dns_challenge_hooks() {
     local dns_user=$2
     local use_password=${3:-false}
     local password=${4:-""}
+    local web_server_ip=${5:-"$dns_server"}
     
     print_info "DNS challenge hook scriptleri oluşturuluyor..."
+    echo "  DNS Server: $dns_server"
+    echo "  Web Server: $web_server_ip (zone dosyası için)"
     
     # Şifre yöntemi için güvenli geçiş (dosya kullan)
     local password_file="/tmp/.dns_ssh_pass"
@@ -8967,12 +8976,53 @@ RECORD_NAME='\$RECORD_NAME'
 TOKEN='\$TOKEN'
 ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
-# Zone dosyası kontrolü
+# Zone dosyası kontrolü ve otomatik oluşturma
 if [ ! -f \"\\\$ZONE_FILE\" ]; then
-    echo '[HATA] Zone dosyası bulunamadı: '\\\$ZONE_FILE
-    echo '[INFO] Mevcut zone dosyaları:'
-    ls -la /etc/bind/db.* 2>/dev/null || echo 'Hiç zone dosyası yok'
-    exit 1
+    echo '[UYARI] Zone dosyası bulunamadı: '\\\$ZONE_FILE
+    echo '[INFO] Otomatik oluşturuluyor...'
+    
+    # Web server IP (hook'a parametre olarak geçirilir)
+    WEB_SERVER_IP=\"$web_server_ip\"
+    
+    # Zone dosyası oluştur
+    cat > \"\\\$ZONE_FILE\" <<ZONE_EOF
+\\\\\$TTL    604800
+@       IN      SOA     \\\$MAIN_DOMAIN. admin.\\\$MAIN_DOMAIN. (
+                         \\\$(date +%Y%m%d)01 ; Serial
+                         604800         ; Refresh
+                         86400          ; Retry
+                         2419200        ; Expire
+                         604800 )       ; Negative Cache TTL
+;
+@       IN      NS      ns1.\\\$MAIN_DOMAIN.
+@       IN      A       \\\$WEB_SERVER_IP
+ns1     IN      A       \\\$WEB_SERVER_IP
+www     IN      A       \\\$WEB_SERVER_IP
+ZONE_EOF
+    
+    chmod 644 \"\\\$ZONE_FILE\"
+    chown bind:bind \"\\\$ZONE_FILE\"
+    
+    # named.conf.local'e ekle (yoksa)
+    if ! grep -q \"zone \\\\\"\\\$MAIN_DOMAIN\\\\\"\" /etc/bind/named.conf.local 2>/dev/null; then
+        cat >> /etc/bind/named.conf.local <<NAMED_EOF
+
+zone \"\\\$MAIN_DOMAIN\" {
+    type master;
+    file \"/etc/bind/db.\\\$MAIN_DOMAIN\";
+    allow-transfer { any; };
+};
+NAMED_EOF
+    fi
+    
+    # BIND9 yapılandırma testi
+    if ! named-checkzone \"\\\$MAIN_DOMAIN\" \"\\\$ZONE_FILE\" >/dev/null 2>&1; then
+        echo '[HATA] Zone dosyası geçersiz!'
+        exit 1
+    fi
+    
+    systemctl reload named
+    echo '[OK] Zone dosyası oluşturuldu: '\\\$ZONE_FILE
 fi
 
 # Root mu kontrol et
@@ -9037,11 +9087,49 @@ RECORD_NAME='\$RECORD_NAME'
 TOKEN='\$TOKEN'
 ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
+# Zone dosyası kontrolü ve otomatik oluşturma
 if [ ! -f \"\\\$ZONE_FILE\" ]; then
-    echo '[HATA] Zone dosyası bulunamadı: '\\\$ZONE_FILE
-    echo '[INFO] Mevcut zone dosyaları:'
-    ls -la /etc/bind/db.* 2>/dev/null || echo 'Hiç zone dosyası yok'
-    exit 1
+    echo '[UYARI] Zone dosyası bulunamadı: '\\\$ZONE_FILE
+    echo '[INFO] Otomatik oluşturuluyor...'
+    
+    WEB_SERVER_IP=\"$web_server_ip\"
+    
+    cat > \"\\\$ZONE_FILE\" <<ZONE_EOF
+\\\\\$TTL    604800
+@       IN      SOA     \\\$MAIN_DOMAIN. admin.\\\$MAIN_DOMAIN. (
+                         \\\$(date +%Y%m%d)01 ; Serial
+                         604800         ; Refresh
+                         86400          ; Retry
+                         2419200        ; Expire
+                         604800 )       ; Negative Cache TTL
+;
+@       IN      NS      ns1.\\\$MAIN_DOMAIN.
+@       IN      A       \\\$WEB_SERVER_IP
+ns1     IN      A       \\\$WEB_SERVER_IP
+www     IN      A       \\\$WEB_SERVER_IP
+ZONE_EOF
+    
+    chmod 644 \"\\\$ZONE_FILE\"
+    chown bind:bind \"\\\$ZONE_FILE\" 2>/dev/null || true
+    
+    if ! grep -q \"zone \\\\\"\\\$MAIN_DOMAIN\\\\\"\" /etc/bind/named.conf.local 2>/dev/null; then
+        cat >> /etc/bind/named.conf.local <<NAMED_EOF
+
+zone \"\\\$MAIN_DOMAIN\" {
+    type master;
+    file \"/etc/bind/db.\\\$MAIN_DOMAIN\";
+    allow-transfer { any; };
+};
+NAMED_EOF
+    fi
+    
+    if ! named-checkzone \"\\\$MAIN_DOMAIN\" \"\\\$ZONE_FILE\" >/dev/null 2>&1; then
+        echo '[HATA] Zone dosyası geçersiz!'
+        exit 1
+    fi
+    
+    systemctl reload named
+    echo '[OK] Zone dosyası oluşturuldu: '\\\$ZONE_FILE
 fi
 
 if [ \"\\\$(id -u)\" -eq 0 ]; then
