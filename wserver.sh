@@ -9020,8 +9020,14 @@ create_ssl_dns_auto() {
         
         # Şifre ile bağlantı testi (Web sunucusuna)
         print_info "Şifre ile bağlantı testi..."
+        echo "  Hedef: $web_server_user@$web_server_ip"
+        echo ""
         
-        if sshpass -p "$ssh_password" ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no $web_server_user@$web_server_ip "echo test" &>/dev/null 2>&1; then
+        # Detaylı hata göster
+        local ssh_error=$(sshpass -p "$ssh_password" ssh -v -o ConnectTimeout=5 -o StrictHostKeyChecking=no $web_server_user@$web_server_ip "echo test" 2>&1)
+        local ssh_result=$?
+        
+        if [ $ssh_result -eq 0 ]; then
             print_success "✓ Şifre ile SSH bağlantısı başarılı (Web sunucusuna)!"
             
             # Sertifika kurulumu için bilgileri sakla
@@ -9031,26 +9037,68 @@ create_ssl_dns_auto() {
         else
             print_error "Şifre ile SSH bağlantısı başarısız!"
             echo ""
+            echo -e "${RED}DETAYLI HATA:${NC}"
+            echo "$ssh_error" | grep -i "permission\|denied\|auth\|failed\|refused" | head -10
+            echo ""
             print_info "Olası nedenler:"
             echo "  1. Şifre yanlış"
-            echo "  2. Web sunucusunda PasswordAuthentication no"
-            echo "  3. Root/kullanıcı login kapalı"
-            echo "  4. Firewall SSH portunu (22) engelliyor"
-            echo "  5. Kullanıcı adı yanlış (eftysystem doğru mu?)"
+            echo "  2. Kullanıcı yanlış (B sunucusunda 'cat /etc/passwd | grep $web_server_user')"
+            echo "  3. PasswordAuthentication no (/etc/ssh/sshd_config)"
+            echo "  4. Kullanıcı SSH erişimi yok (AllowUsers/DenyUsers)"
+            echo "  5. Firewall SSH portunu engelliyor"
+            echo ""
+            echo -e "${CYAN}B Server'da kontrol:${NC}"
+            echo "  ssh $web_server_user@$web_server_ip  # Manuel test"
+            echo "  sudo cat /etc/ssh/sshd_config | grep -i password"
+            echo "  sudo cat /etc/ssh/sshd_config | grep -i permitroot"
             echo ""
             
-            if ask_yes_no "Web sunucusunda SSH yapılandırmasını düzeltmeyi denemek ister misiniz?"; then
-                fix_remote_ssh_config "$web_server_ip" "$web_server_user"
-                return $?
+            echo -e "${YELLOW}═══════════════════════════════════════════${NC}"
+            echo -e "${YELLOW}  ÖNERİ: ROOT KULLANICISI KULLANIN!${NC}"
+            echo -e "${YELLOW}═══════════════════════════════════════════${NC}"
+            echo ""
+            echo "Root kullanıcısı ile:"
+            echo "  ✓ Sudo gerektirmez"
+            echo "  ✓ İzin sorunları olmaz"
+            echo "  ✓ Her komut direkt çalışır"
+            echo ""
+            
+            if ask_yes_no "Root kullanıcısı ile yeniden denemek ister misiniz?"; then
+                print_info "Web sunucusu için bilgileri tekrar girin:"
+                web_server_user="root"
+                ask_password "Web sunucusu ROOT şifresi" ssh_password
+                
+                # Tekrar test et
+                if sshpass -p "$ssh_password" ssh -v -o ConnectTimeout=5 -o StrictHostKeyChecking=no $web_server_user@$web_server_ip "echo test" 2>&1 | tail -20; then
+                    print_success "✓ ROOT ile bağlantı başarılı!"
+                    export WEB_SSH_PASSWORD="$ssh_password"
+                    export WEB_SSH_USER="$web_server_user"
+                    export WEB_SSH_HOST="$web_server_ip"
+                else
+                    print_error "ROOT ile de bağlanılamadı!"
+                    echo ""
+                    print_info "B sunucusunda manuel kontrol:"
+                    echo "  sudo nano /etc/ssh/sshd_config"
+                    echo "  → PasswordAuthentication yes"
+                    echo "  → PermitRootLogin yes"
+                    echo "  sudo systemctl restart sshd"
+                    return 1
+                fi
             else
-                print_info "SSL sertifikası oluşturuldu ama Web sunucusuna kurulamadı"
-                print_info "Manuel kurulum: scp /etc/letsencrypt/live/$domain/* $web_server_user@$web_server_ip:/etc/letsencrypt/live/$domain/"
-                return 1
+                print_info "SSL oluşturulacak ama Web sunucusuna kurulamayacak"
+                print_info "Manuel kurulum yapmanız gerekecek"
+                
+                if ! ask_yes_no "Sadece SSL almak ister misiniz? (Web kurulumu manuel)"; then
+                    return 1
+                fi
+                
+                # Web sunucusuz devam et (sadece SSL al)
+                same_server=true
             fi
         fi
+    else
+        print_success "✓ Web sunucusuna SSH erişimi hazır"
     fi
-    
-    print_success "✓ Web sunucusuna SSH erişimi hazır"
     
     # SSL sertifikası oluştur ve Web sunucusuna kur
     print_info "SSL işlemi devam ediyor..."
