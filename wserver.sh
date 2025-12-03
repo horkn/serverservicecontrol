@@ -8966,16 +8966,15 @@ create_ssl_dns_auto() {
             print_success "✓ SSH key oluşturuldu"
         fi
         
-        # Key ile bağlantı testi
-        if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes $dns_server_user@$dns_server_ip "echo test" &>/dev/null 2>&1; then
-            print_success "✓ SSH key authentication çalışıyor!"
-            ssh_connected=true
+        # Key ile bağlantı testi (Web sunucusuna)
+        if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes $web_server_user@$web_server_ip "echo test" &>/dev/null 2>&1; then
+            print_success "✓ SSH key authentication çalışıyor (Web sunucusuna)!"
         else
-            print_warning "SSH key henüz kurulu değil"
+            print_warning "SSH key henüz kurulu değil (Web sunucusunda)"
             echo ""
-            print_info "SSH key'i kopyalamak için DNS sunucusu şifresi gerekli"
+            print_info "SSH key'i Web sunucusuna kopyalamak için şifre gerekli"
             
-            ask_password "DNS sunucusu $dns_server_user şifresi" ssh_password
+            ask_password "Web sunucusu $web_server_user şifresi" ssh_password
             
             # sshpass kontrolü
             if ! command -v sshpass &>/dev/null; then
@@ -8983,10 +8982,9 @@ create_ssl_dns_auto() {
                 apt update && apt install -y sshpass
             fi
             
-            # Key'i kopyala
-            if sshpass -p "$ssh_password" ssh-copy-id -o StrictHostKeyChecking=no $dns_server_user@$dns_server_ip 2>/dev/null; then
-                print_success "✓ SSH key kopyalandı!"
-                ssh_connected=true
+            # Key'i Web sunucusuna kopyala
+            if sshpass -p "$ssh_password" ssh-copy-id -o StrictHostKeyChecking=no $web_server_user@$web_server_ip 2>/dev/null; then
+                print_success "✓ SSH key Web sunucusuna kopyalandı!"
             else
                 print_error "SSH key kopyalama başarısız!"
                 print_info "Şifre yanlış veya PasswordAuthentication kapalı olabilir"
@@ -9017,129 +9015,52 @@ create_ssl_dns_auto() {
         
         # Şifre al (henüz alınmadıysa)
         if [ -z "$ssh_password" ]; then
-            ask_password "DNS sunucusu $dns_server_user şifresi" ssh_password
+            ask_password "Web sunucusu $web_server_user şifresi" ssh_password
         fi
         
-        # Şifre ile bağlantı testi
+        # Şifre ile bağlantı testi (Web sunucusuna)
         print_info "Şifre ile bağlantı testi..."
         
-        if sshpass -p "$ssh_password" ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no $dns_server_user@$dns_server_ip "echo test" &>/dev/null 2>&1; then
-            print_success "✓ Şifre ile SSH bağlantısı başarılı!"
-            ssh_connected=true
+        if sshpass -p "$ssh_password" ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no $web_server_user@$web_server_ip "echo test" &>/dev/null 2>&1; then
+            print_success "✓ Şifre ile SSH bağlantısı başarılı (Web sunucusuna)!"
             
-            # Hook scriptlerde şifre kullanımı için global değişken
-            export DNS_SSH_PASSWORD="$ssh_password"
-            export DNS_SSH_USER="$dns_server_user"
-            export DNS_SSH_HOST="$dns_server_ip"
+            # Sertifika kurulumu için bilgileri sakla
+            export WEB_SSH_PASSWORD="$ssh_password"
+            export WEB_SSH_USER="$web_server_user"
+            export WEB_SSH_HOST="$web_server_ip"
         else
             print_error "Şifre ile SSH bağlantısı başarısız!"
             echo ""
             print_info "Olası nedenler:"
             echo "  1. Şifre yanlış"
-            echo "  2. DNS sunucusunda PasswordAuthentication no"
-            echo "  3. Root login kapalı (PermitRootLogin no)"
+            echo "  2. Web sunucusunda PasswordAuthentication no"
+            echo "  3. Root/kullanıcı login kapalı"
             echo "  4. Firewall SSH portunu (22) engelliyor"
+            echo "  5. Kullanıcı adı yanlış (eftysystem doğru mu?)"
             echo ""
             
-            if ask_yes_no "DNS sunucusunda SSH yapılandırmasını düzeltmeyi denemek ister misiniz?"; then
-                fix_remote_ssh_config "$dns_server_ip" "$dns_server_user"
+            if ask_yes_no "Web sunucusunda SSH yapılandırmasını düzeltmeyi denemek ister misiniz?"; then
+                fix_remote_ssh_config "$web_server_ip" "$web_server_user"
                 return $?
             else
-                print_info "Manuel DNS challenge kullanın (seçenek 2)"
+                print_info "SSL sertifikası oluşturuldu ama Web sunucusuna kurulamadı"
+                print_info "Manuel kurulum: scp /etc/letsencrypt/live/$domain/* $web_server_user@$web_server_ip:/etc/letsencrypt/live/$domain/"
                 return 1
             fi
         fi
     fi
     
-    if [ "$ssh_connected" = false ]; then
-        print_error "SSH bağlantısı kurulamadı!"
-        return 1
-    fi
+    print_success "✓ Web sunucusuna SSH erişimi hazır"
     
-    print_success "✓ DNS sunucusuna SSH erişimi hazır ($ssh_method yöntemi)"
+    # SSL sertifikası oluştur ve Web sunucusuna kur
+    print_info "SSL işlemi devam ediyor..."
     
-    # Certbot DNS plugin kurulumu
-    print_info "Certbot DNS plugin'i kuruluyor..."
-    
-    # RFC2136 plugin (BIND9 için - opsiyonel)
-    snap install certbot-dns-rfc2136 2>/dev/null || pip3 install certbot-dns-rfc2136 2>/dev/null || true
-    
-    # Hook script oluştur (TXT kaydı ekleme/silme)
-    # Şifre veya key kullanımını belirle
-    local use_pass=false
-    local pass_param=""
-    
-    if [ "$ssh_method" = "2" ] && [ -n "$ssh_password" ]; then
-        use_pass=true
-        pass_param="$ssh_password"
-    fi
-    
-    # Web server IP'sini belirle (zone dosyası için)
-    local web_ip=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
-    if [ -n "$WEB_SERVER_IP" ]; then
-        web_ip="$WEB_SERVER_IP"
-    fi
-    
-    create_dns_challenge_hooks "$dns_server_ip" "$dns_server_user" "$use_pass" "$pass_param" "$web_ip"
-    
-    # Certbot çalıştır (hook scriptler ile)
-    print_info "Certbot çalıştırılıyor (otomatik DNS challenge)..."
-    echo ""
-    
-    certbot certonly \
-        --manual \
-        --preferred-challenges dns \
-        --manual-auth-hook /usr/local/bin/certbot-dns-add.sh \
-        --manual-cleanup-hook /usr/local/bin/certbot-dns-cleanup.sh \
-        --agree-tos \
-        --email $email \
-        $certbot_domains \
-        --non-interactive
-    
-    local certbot_result=$?
-    
-    # Şifre dosyasını temizle (güvenlik)
-    if [ "$use_pass" = true ]; then
-        rm -f "$password_file" 2>/dev/null
-        print_info "✓ Geçici şifre dosyası temizlendi"
-    fi
-    
-    if [ $certbot_result -eq 0 ]; then
-        print_success "═══════════════════════════════════════════"
-        print_success "  ✓ SSL SERTİFİKASI BAŞARIYLA OLUŞTURULDU!"
-        print_success "═══════════════════════════════════════════"
-        echo ""
-        echo -e "${CYAN}Sertifika Konumu:${NC}"
-        echo "  Cert: /etc/letsencrypt/live/$domain/fullchain.pem"
-        echo "  Key:  /etc/letsencrypt/live/$domain/privkey.pem"
-        echo ""
+    # Sertifika başarılıysa Web sunucusuna kur
+    if [ "$same_server" = false ]; then
+        print_info "SSL sertifikası Web sunucusuna kurulacak..."
         
-        # Nginx'e kur
-        if command -v nginx &>/dev/null; then
-            if ask_yes_no "Sertifikayı Nginx'e kurmak ister misiniz?"; then
-                install_ssl_to_nginx "$domain"
-            fi
-        fi
-    else
-        print_error "═══════════════════════════════════════════"
-        print_error "  ✗ SSL OLUŞTURMA BAŞARISIZ!"
-        print_error "═══════════════════════════════════════════"
-        echo ""
-        echo -e "${YELLOW}Olası Nedenler:${NC}"
-        echo "  1. SSH bağlantısı kesildi (Permission denied)"
-        echo "  2. DNS zone dosyası bulunamadı"
-        echo "  3. BIND9 servisi çalışmıyor"
-        echo "  4. TXT kaydı DNS'e yayılmadı (timing sorunu)"
-        echo ""
-        echo -e "${CYAN}Çözüm Önerileri:${NC}"
-        echo "  • 27) SSH Bağlantı Testi ile SSH'ı kontrol edin"
-        echo "  • 22) DNS Yönetimi ile zone dosyasını kontrol edin"
-        echo "  • Manuel DNS challenge deneyin (Challenge: 2)"
-        echo ""
-        echo -e "${CYAN}Log dosyası:${NC}"
-        echo "  /var/log/letsencrypt/letsencrypt.log"
-        
-        return 1
+        # SSL dosyalarını Web sunucusuna kopyala ve kur
+        install_ssl_to_remote_nginx "$domain" "$web_server_ip" "$web_server_user" "$ssh_password" "$ssh_method"
     fi
 }
 
@@ -9570,10 +9491,112 @@ CLEANUP_PASS
     fi
 }
 
+install_ssl_to_remote_nginx() {
+    local domain=$1
+    local remote_ip=$2
+    local remote_user=$3
+    local remote_pass=$4
+    local ssh_method=$5
+    
+    print_header "SSL Sertifikasını Web Sunucusuna Kurma"
+    
+    echo ""
+    print_info "Sertifika: /etc/letsencrypt/live/$domain/"
+    print_info "Hedef: $remote_user@$remote_ip"
+    echo ""
+    
+    # Sertifika dizini var mı
+    if [ ! -d "/etc/letsencrypt/live/$domain" ]; then
+        print_error "Sertifika dizini bulunamadı!"
+        return 1
+    fi
+    
+    # SSH komutunu belirle
+    local ssh_cmd="ssh -o StrictHostKeyChecking=no"
+    local scp_cmd="scp -o StrictHostKeyChecking=no"
+    
+    if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
+        ssh_cmd="sshpass -p '$remote_pass' ssh -o StrictHostKeyChecking=no"
+        scp_cmd="sshpass -p '$remote_pass' scp -o StrictHostKeyChecking=no"
+    fi
+    
+    # Web sunucusunda /etc/letsencrypt dizini var mı
+    print_info "Web sunucusunda dizinler oluşturuluyor..."
+    
+    $ssh_cmd $remote_user@$remote_ip "
+        mkdir -p /etc/letsencrypt/live/$domain
+        chmod 755 /etc/letsencrypt/live/$domain
+    "
+    
+    if [ $? -ne 0 ]; then
+        print_error "Web sunucusunda dizin oluşturulamadı!"
+        return 1
+    fi
+    
+    # Sertifikaları kopyala
+    print_info "Sertifikalar kopyalanıyor..."
+    
+    $scp_cmd -r /etc/letsencrypt/live/$domain/* $remote_user@$remote_ip:/etc/letsencrypt/live/$domain/
+    
+    if [ $? -ne 0 ]; then
+        print_error "Sertifika kopyalama başarısız!"
+        return 1
+    fi
+    
+    print_success "✓ Sertifikalar Web sunucusuna kopyalandı"
+    
+    # Nginx yapılandırmasını güncelle (Web sunucusunda)
+    print_info "Nginx yapılandırması güncelleniyor..."
+    
+    $ssh_cmd $remote_user@$remote_ip bash <<'NGINX_EOF'
+DOMAIN="$domain"
+NGINX_CONFIG="/etc/nginx/sites-available/$DOMAIN"
+
+if [ ! -f "$NGINX_CONFIG" ]; then
+    echo "[HATA] Nginx yapılandırması bulunamadı: $NGINX_CONFIG"
+    exit 1
+fi
+
+# SSL yapılandırmasını ekle/güncelle
+if ! grep -q "ssl_certificate" "$NGINX_CONFIG"; then
+    # SSL yapılandırması yok, ekle
+    sed -i "/listen 80;/a\    listen 443 ssl;\n    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;" "$NGINX_CONFIG"
+else
+    # SSL zaten var, güncelle
+    sed -i "s|ssl_certificate .*;|ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;|" "$NGINX_CONFIG"
+    sed -i "s|ssl_certificate_key .*;|ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;|" "$NGINX_CONFIG"
+fi
+
+# Nginx test
+if nginx -t 2>&1 | grep -q "successful"; then
+    nginx -s reload
+    echo "[OK] Nginx yapılandırması güncellendi ve reload edildi"
+else
+    echo "[HATA] Nginx yapılandırması geçersiz!"
+    nginx -t
+    exit 1
+fi
+NGINX_EOF
+    
+    if [ $? -eq 0 ]; then
+        print_success "═══════════════════════════════════════════"
+        print_success "  ✓ SSL WEB SUNUCUSUNA KURULDU!"
+        print_success "═══════════════════════════════════════════"
+        echo ""
+        echo -e "${CYAN}Domain:${NC} https://$domain"
+        echo -e "${CYAN}Web Server:${NC} $remote_ip"
+        echo ""
+        return 0
+    else
+        print_error "Web sunucusunda Nginx yapılandırması başarısız!"
+        return 1
+    fi
+}
+
 install_ssl_to_nginx() {
     local domain=$1
     
-    print_info "SSL sertifikası Nginx'e kuruluyor..."
+    print_info "SSL sertifikası Nginx'e kuruluyor (lokal)..."
     
     local nginx_config="/etc/nginx/sites-available/$domain"
     
