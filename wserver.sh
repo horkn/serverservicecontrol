@@ -8890,32 +8890,42 @@ fi
 
 # SSH ile DNS sunucusunda TXT kaydı ekle
 sshpass -f "\$PASSWORD_FILE" ssh -o StrictHostKeyChecking=no \$DNS_USER@\$DNS_SERVER "
+set -e
 MAIN_DOMAIN='\$MAIN_DOMAIN'
 RECORD_NAME='\$RECORD_NAME'
 TOKEN='\$TOKEN'
 ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
+# Zone dosyası kontrolü
 if [ ! -f \"\\\$ZONE_FILE\" ]; then
-    echo '[HATA] Zone dosyası yok'
+    echo '[HATA] Zone dosyası bulunamadı: '\\\$ZONE_FILE
+    echo '[INFO] Mevcut zone dosyaları:'
+    ls -la /etc/bind/db.* 2>/dev/null || echo 'Hiç zone dosyası yok'
     exit 1
 fi
 
-# Eski TXT kayıtlarını sil
-sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+# Root mu kontrol et
+if [ \"\\\$(id -u)\" -eq 0 ]; then
+    # Root - sudo gereksiz
+    sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+    CURRENT_SERIAL=\\\$(grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
+    NEW_SERIAL=\\\$(date +%Y%m%d%H)
+    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+    sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
+    echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" >> \"\\\$ZONE_FILE\"
+    systemctl reload named
+else
+    # Root değil - sudo gerekli (NOPASSWD olmalı)
+    sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+    CURRENT_SERIAL=\\\$(sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
+    NEW_SERIAL=\\\$(date +%Y%m%d%H)
+    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+    sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
+    echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
+    sudo systemctl reload named
+fi
 
-# Serial güncelle
-CURRENT_SERIAL=\\\$(grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
-NEW_SERIAL=\\\$(date +%Y%m%d%H)
-[ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
-sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
-
-# TXT kaydı ekle
-echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
-
-# BIND9 reload
-sudo systemctl reload named
-
-echo '[OK] TXT kaydı eklendi'
+echo '[OK] TXT kaydı eklendi: '\\\$RECORD_NAME' -> '\\\$ZONE_FILE
 "
 
 RET=\$?
@@ -8950,25 +8960,38 @@ if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
 fi
 
 ssh -o StrictHostKeyChecking=no -o BatchMode=yes \$DNS_USER@\$DNS_SERVER "
+set -e
 MAIN_DOMAIN='\$MAIN_DOMAIN'
 RECORD_NAME='\$RECORD_NAME'
 TOKEN='\$TOKEN'
 ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
-[ ! -f \"\\\$ZONE_FILE\" ] && echo '[HATA] Zone yok' && exit 1
+if [ ! -f \"\\\$ZONE_FILE\" ]; then
+    echo '[HATA] Zone dosyası bulunamadı: '\\\$ZONE_FILE
+    echo '[INFO] Mevcut zone dosyaları:'
+    ls -la /etc/bind/db.* 2>/dev/null || echo 'Hiç zone dosyası yok'
+    exit 1
+fi
 
-sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+if [ \"\\\$(id -u)\" -eq 0 ]; then
+    sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+    CURRENT_SERIAL=\\\$(grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
+    NEW_SERIAL=\\\$(date +%Y%m%d%H)
+    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+    sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
+    echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" >> \"\\\$ZONE_FILE\"
+    systemctl reload named
+else
+    sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+    CURRENT_SERIAL=\\\$(sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
+    NEW_SERIAL=\\\$(date +%Y%m%d%H)
+    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+    sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
+    echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
+    sudo systemctl reload named
+fi
 
-CURRENT_SERIAL=\\\$(grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
-NEW_SERIAL=\\\$(date +%Y%m%d%H)
-[ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
-sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
-
-echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
-
-sudo systemctl reload named
-
-echo '[OK] TXT kaydı eklendi'
+echo '[OK] TXT kaydı eklendi: '\\\$RECORD_NAME' -> '\\\$ZONE_FILE
 "
 
 RET=\$?
@@ -9009,15 +9032,28 @@ fi
 sshpass -f "\$PASSWORD_FILE" ssh -o StrictHostKeyChecking=no \$DNS_USER@\$DNS_SERVER "
 MAIN_DOMAIN='\$MAIN_DOMAIN'
 RECORD_NAME='\$RECORD_NAME'
+ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
-sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" /etc/bind/db.\\\$MAIN_DOMAIN
+if [ ! -f \"\\\$ZONE_FILE\" ]; then
+    echo '[UYARI] Zone dosyası bulunamadı: '\\\$ZONE_FILE
+    exit 0
+fi
 
-CURRENT_SERIAL=\\\$(grep 'Serial' /etc/bind/db.\\\$MAIN_DOMAIN | grep -oE '[0-9]+' | head -1)
-NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
-sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" /etc/bind/db.\\\$MAIN_DOMAIN
+if [ \"\\\$(id -u)\" -eq 0 ]; then
+    sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+    CURRENT_SERIAL=\\\$(grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
+    NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+    sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
+    systemctl reload named
+else
+    sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+    CURRENT_SERIAL=\\\$(sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
+    NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+    sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
+    sudo systemctl reload named
+fi
 
-sudo systemctl reload named
-echo '[OK] TXT kaydı silindi'
+echo '[OK] TXT kaydı silindi: '\\\$RECORD_NAME
 "
 
 echo "[OK] DNS temizlendi"
@@ -9045,15 +9081,28 @@ fi
 ssh -o StrictHostKeyChecking=no -o BatchMode=yes \$DNS_USER@\$DNS_SERVER "
 MAIN_DOMAIN='\$MAIN_DOMAIN'
 RECORD_NAME='\$RECORD_NAME'
+ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
-sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" /etc/bind/db.\\\$MAIN_DOMAIN
+if [ ! -f \"\\\$ZONE_FILE\" ]; then
+    echo '[UYARI] Zone dosyası bulunamadı: '\\\$ZONE_FILE
+    exit 0
+fi
 
-CURRENT_SERIAL=\\\$(grep 'Serial' /etc/bind/db.\\\$MAIN_DOMAIN | grep -oE '[0-9]+' | head -1)
-NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
-sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" /etc/bind/db.\\\$MAIN_DOMAIN
+if [ \"\\\$(id -u)\" -eq 0 ]; then
+    sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+    CURRENT_SERIAL=\\\$(grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
+    NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+    sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
+    systemctl reload named
+else
+    sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
+    CURRENT_SERIAL=\\\$(sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
+    NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
+    sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
+    sudo systemctl reload named
+fi
 
-sudo systemctl reload named
-echo '[OK] TXT kaydı silindi'
+echo '[OK] TXT kaydı silindi: '\\\$RECORD_NAME
 "
 
 echo "[OK] DNS temizlendi"
@@ -9312,50 +9361,115 @@ test_dns_hook_manually() {
     local dns_password=""
     ask_password "DNS sunucusu şifresi" dns_password
     
-    # Test: TXT kaydı ekle
-    print_info "Test 1: TXT kaydı ekleme..."
-    
-    local main_domain=$(echo "$test_domain" | rev | cut -d'.' -f1-2 | rev)
+    # Ana domain'i bul
+    local main_domain=\$(echo "\$test_domain" | rev | cut -d'.' -f1-2 | rev)
     local record_name="_acme-challenge-test"
     
-    if sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
+    echo ""
+    print_info "═══════════════════════════════════════════"
+    print_info "Domain Analizi:"
+    echo "  Test domain: $test_domain"
+    echo "  Ana domain:  $main_domain"
+    echo "  Zone file:   /etc/bind/db.$main_domain"
+    echo "  Record:      $record_name"
+    print_info "═══════════════════════════════════════════"
+    echo ""
+    
+    # Test 0: Zone dosyası var mı?
+    print_info "Test 0: Zone dosyası kontrolü..."
+    
+    local zone_check=\$(sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
+        if [ -f '/etc/bind/db.$main_domain' ]; then
+            echo 'EXISTS'
+            ls -lh /etc/bind/db.$main_domain
+        else
+            echo 'NOT_FOUND'
+            echo 'Mevcut zone dosyaları:'
+            ls -lh /etc/bind/db.* 2>/dev/null || echo 'Hiç zone dosyası yok!'
+        fi
+    " 2>&1)
+    
+    if echo "$zone_check" | grep -q "EXISTS"; then
+        print_success "✓ Zone dosyası mevcut!"
+        echo "$zone_check" | grep -v "EXISTS"
+    else
+        print_error "✗ Zone dosyası bulunamadı!"
+        echo ""
+        echo "$zone_check"
+        echo ""
+        print_warning "ÇÖZÜM: DNS yönetiminden (22) önce domain'i eklemelisiniz"
+        return 1
+    fi
+    
+    # Test 1: TXT kaydı ekle
+    echo ""
+    print_info "Test 1: TXT kaydı ekleme..."
+    
+    local add_result=\$(sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
         ZONE_FILE='/etc/bind/db.$main_domain'
-        [ ! -f \"\\\$ZONE_FILE\" ] && echo 'Zone yok: \$ZONE_FILE' && exit 1
-        echo '$record_name     IN      TXT     \"$test_token\"' | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
-        sudo systemctl reload named
+        
+        # Root mu kontrol et
+        if [ \\\$(id -u) -eq 0 ]; then
+            echo '$record_name     IN      TXT     \"$test_token\"' >> \\\$ZONE_FILE
+            systemctl reload named
+        else
+            echo '$record_name     IN      TXT     \"$test_token\"' | sudo tee -a \\\$ZONE_FILE >/dev/null
+            sudo systemctl reload named
+        fi
+        
         echo 'TXT kaydı eklendi'
-    " 2>&1; then
+    " 2>&1)
+    
+    if echo "$add_result" | grep -q "TXT kaydı eklendi"; then
         print_success "✓ TXT kaydı ekleme başarılı!"
     else
         print_error "✗ TXT kaydı ekleme başarısız!"
         echo ""
-        print_info "Hata detayları yukarıda"
+        echo "$add_result"
         return 1
     fi
     
     # Test 2: DNS doğrulama
     echo ""
-    print_info "Test 2: DNS doğrulama (5 saniye bekleniyor)..."
-    sleep 5
+    print_info "Test 2: DNS doğrulama (10 saniye bekleniyor)..."
+    sleep 10
     
-    if dig @$dns_ip ${record_name}.${test_domain} TXT +short 2>/dev/null | grep -q "$test_token"; then
-        print_success "✓ TXT kaydı DNS'de görünüyor!"
+    if command -v dig &>/dev/null; then
+        local dns_result=\$(dig @$dns_ip ${record_name}.${main_domain} TXT +short 2>/dev/null)
+        if echo "$dns_result" | grep -q "$test_token"; then
+            print_success "✓ TXT kaydı DNS'de görünüyor!"
+            echo "  Sonuç: $dns_result"
+        else
+            print_warning "✗ TXT kaydı henüz görünmüyor (normal, propagation gerekebilir)"
+        fi
     else
-        print_warning "✗ TXT kaydı henüz görünmüyor"
+        print_info "dig komutu yok, DNS testi atlanıyor"
     fi
     
     # Test 3: TXT kaydı silme
     echo ""
     print_info "Test 3: TXT kaydı silme..."
     
-    if sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
-        sudo sed -i '/$record_name.*IN.*TXT/d' /etc/bind/db.$main_domain
-        sudo systemctl reload named
+    local del_result=\$(sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
+        ZONE_FILE='/etc/bind/db.$main_domain'
+        
+        if [ \\\$(id -u) -eq 0 ]; then
+            sed -i '/$record_name.*IN.*TXT/d' \\\$ZONE_FILE
+            systemctl reload named
+        else
+            sudo sed -i '/$record_name.*IN.*TXT/d' \\\$ZONE_FILE
+            sudo systemctl reload named
+        fi
+        
         echo 'TXT kaydı silindi'
-    " 2>&1; then
+    " 2>&1)
+    
+    if echo "$del_result" | grep -q "TXT kaydı silindi"; then
         print_success "✓ TXT kaydı silme başarılı!"
     else
         print_error "✗ TXT kaydı silme başarısız!"
+        echo ""
+        echo "$del_result"
     fi
     
     echo ""
