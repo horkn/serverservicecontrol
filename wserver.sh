@@ -61,6 +61,16 @@ print_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
+# BIND9 servisini reload et (Ubuntu 24.04 uyumlu)
+reload_bind9() {
+    # Ubuntu 24.04'te bind9, eski sistemlerde named
+    if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
+        systemctl reload bind9 2>&1 || systemctl restart bind9 2>&1
+    else
+        systemctl reload named 2>&1 || systemctl restart named 2>&1
+    fi
+}
+
 print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
@@ -9022,6 +9032,57 @@ RECORD_NAME='\$RECORD_NAME'
 TOKEN='\$TOKEN'
 ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
+# BIND9 kurulu mu detaylı kontrol
+BIND9_OK=false
+
+# Kontrol 1: /etc/bind dizini
+if [ -d '/etc/bind' ]; then
+    BIND9_OK=true
+    echo '[OK] /etc/bind dizini mevcut'
+fi
+
+# Kontrol 2: named-checkzone komutu
+if command -v named-checkzone >/dev/null 2>&1; then
+    BIND9_OK=true
+    echo '[OK] named-checkzone komutu mevcut'
+fi
+
+# Kontrol 3: bind9 paketi
+if dpkg -l 2>/dev/null | grep -q '^ii.*bind9 '; then
+    BIND9_OK=true
+    echo '[OK] bind9 paketi kurulu'
+fi
+
+# BIND9 yoksa kur
+if [ \"\$BIND9_OK\" = \"false\" ]; then
+    echo '[UYARI] BIND9 tespit edilemedi, kuruluyor...'
+    
+    export DEBIAN_FRONTEND=noninteractive
+    apt update -qq
+    apt install -y bind9 bind9utils bind9-doc dnsutils
+    
+    echo '[OK] BIND9 kuruldu'
+fi
+
+# Servis kontrolü (Ubuntu 24.04: bind9 veya named)
+if systemctl is-active --quiet bind9 2>/dev/null; then
+    echo '[OK] bind9 servisi çalışıyor'
+elif systemctl is-active --quiet named 2>/dev/null; then
+    echo '[OK] named servisi çalışıyor'
+else
+    echo '[UYARI] BIND9 servisi çalışmıyor, başlatılıyor...'
+    
+    if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
+        systemctl enable bind9 2>/dev/null || true
+        systemctl start bind9 2>/dev/null || true
+        echo '[OK] bind9 servisi başlatıldı'
+    else
+        systemctl enable named 2>/dev/null || true
+        systemctl start named 2>/dev/null || true
+        echo '[OK] named servisi başlatıldı'
+    fi
+fi
+
 # Zone dosyası kontrolü ve otomatik oluşturma
 if [ ! -f \"\\\$ZONE_FILE\" ]; then
     echo '[UYARI] Zone dosyası bulunamadı: '\\\$ZONE_FILE
@@ -9030,7 +9091,13 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     WEB_SERVER_IP=\"$web_server_ip\"
     SERIAL=\\\$(date +%Y%m%d)01
     
-    # printf + tee ile dosya oluştur (redirect sorunu yok)
+    # /etc/bind dizini var mı son kontrol
+    if [ ! -d '/etc/bind' ]; then
+        echo '[HATA] /etc/bind hala yok!'
+        exit 1
+    fi
+    
+    # printf + tee ile dosya oluştur
     printf '%s\\\\n' \\\
         '\\\\\$TTL    604800' \\\
         '@       IN      SOA     '\\\$MAIN_DOMAIN'. admin.'\\\$MAIN_DOMAIN'. (' \\\
@@ -9056,10 +9123,16 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     # Zone test
     if ! named-checkzone \"\\\$MAIN_DOMAIN\" \"\\\$ZONE_FILE\" 2>&1 | head -1; then
         echo '[HATA] Zone syntax hatası!'
+        cat \"\\\$ZONE_FILE\"
         exit 1
     fi
     
-    systemctl reload named 2>&1
+    # BIND9 reload (Ubuntu 24.04 uyumlu)
+    if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
+        systemctl reload bind9 2>&1 || systemctl restart bind9 2>&1
+    else
+        systemctl reload named 2>&1 || systemctl restart named 2>&1
+    fi
     echo '[OK] Zone oluşturuldu: '\\\$ZONE_FILE' -> '\\\$WEB_SERVER_IP
 fi
 
@@ -9072,16 +9145,28 @@ if [ \"\\\$(id -u)\" -eq 0 ]; then
     [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
     sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
     echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" >> \"\\\$ZONE_FILE\"
-    systemctl reload named
+    
+    # BIND9 reload (Ubuntu 24.04 uyumlu)
+    if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
+        systemctl reload bind9 2>&1 || systemctl restart bind9 2>&1
+    else
+        systemctl reload named 2>&1 || systemctl restart named 2>&1
+    fi
 else
-    # Root değil - sudo gerekli (NOPASSWD olmalı)
+    # Root değil - sudo gerekli
     sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
     CURRENT_SERIAL=\\\$(sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1)
     NEW_SERIAL=\\\$(date +%Y%m%d%H)
     [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1))
     sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
     echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
-    sudo systemctl reload named
+    
+    # BIND9 reload (Ubuntu 24.04 uyumlu)
+    if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
+        sudo systemctl reload bind9 2>&1 || sudo systemctl restart bind9 2>&1
+    else
+        sudo systemctl reload named 2>&1 || sudo systemctl restart named 2>&1
+    fi
 fi
 
 echo '[OK] TXT kaydı eklendi: '\\\$RECORD_NAME' -> '\\\$ZONE_FILE
@@ -9125,6 +9210,57 @@ RECORD_NAME='\$RECORD_NAME'
 TOKEN='\$TOKEN'
 ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
+# BIND9 kurulu mu detaylı kontrol
+BIND9_OK=false
+
+# Kontrol 1: /etc/bind dizini
+if [ -d '/etc/bind' ]; then
+    BIND9_OK=true
+    echo '[OK] /etc/bind dizini mevcut'
+fi
+
+# Kontrol 2: named-checkzone komutu
+if command -v named-checkzone >/dev/null 2>&1; then
+    BIND9_OK=true
+    echo '[OK] named-checkzone komutu mevcut'
+fi
+
+# Kontrol 3: bind9 paketi
+if dpkg -l 2>/dev/null | grep -q '^ii.*bind9 '; then
+    BIND9_OK=true
+    echo '[OK] bind9 paketi kurulu'
+fi
+
+# BIND9 yoksa kur
+if [ \"\$BIND9_OK\" = \"false\" ]; then
+    echo '[UYARI] BIND9 tespit edilemedi, kuruluyor...'
+    
+    export DEBIAN_FRONTEND=noninteractive
+    apt update -qq
+    apt install -y bind9 bind9utils bind9-doc dnsutils
+    
+    echo '[OK] BIND9 kuruldu'
+fi
+
+# Servis kontrolü (Ubuntu 24.04: bind9 veya named)
+if systemctl is-active --quiet bind9 2>/dev/null; then
+    echo '[OK] bind9 servisi çalışıyor'
+elif systemctl is-active --quiet named 2>/dev/null; then
+    echo '[OK] named servisi çalışıyor'
+else
+    echo '[UYARI] BIND9 servisi çalışmıyor, başlatılıyor...'
+    
+    if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
+        systemctl enable bind9 2>/dev/null || true
+        systemctl start bind9 2>/dev/null || true
+        echo '[OK] bind9 servisi başlatıldı'
+    else
+        systemctl enable named 2>/dev/null || true
+        systemctl start named 2>/dev/null || true
+        echo '[OK] named servisi başlatıldı'
+    fi
+fi
+
 # Zone dosyası kontrolü ve otomatik oluşturma
 if [ ! -f \"\\\$ZONE_FILE\" ]; then
     echo '[UYARI] Zone dosyası bulunamadı: '\\\$ZONE_FILE
@@ -9157,6 +9293,7 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     
     if ! named-checkzone \"\\\$MAIN_DOMAIN\" \"\\\$ZONE_FILE\" 2>&1 | head -1; then
         echo '[HATA] Zone syntax hatası!'
+        cat \"\\\$ZONE_FILE\"
         exit 1
     fi
     
