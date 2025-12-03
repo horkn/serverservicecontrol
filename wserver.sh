@@ -8646,99 +8646,146 @@ create_ssl_dns_auto() {
     
     ask_input "DNS sunucusu SSH kullanıcı adı" dns_server_user "root"
     
-    # SSH bağlantı testi
-    print_info "DNS sunucusuna SSH bağlantı testi..."
+    # SSH bağlantı yöntemi seçimi
+    echo ""
+    print_header "SSH Bağlantı Yöntemi"
+    
+    echo -e "${CYAN}Hangi yöntemle bağlanmak istersiniz?${NC}"
+    echo "1) SSH Key (Önerilen - Şifresiz, güvenli)"
+    echo "2) Şifre ile (Basit - sshpass gerekli)"
     echo ""
     
-    # SSH key kontrolü
-    if [ ! -f "/root/.ssh/id_rsa" ]; then
-        print_warning "SSH key bulunamadı, oluşturuluyor..."
-        ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q
-        print_success "✓ SSH key oluşturuldu"
-    fi
+    read -p "Seçiminiz (1-2) [2]: " ssh_method
+    ssh_method=${ssh_method:-2}
     
-    # SSH bağlantı testi (key ile)
-    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes $dns_server_user@$dns_server_ip "echo test" &>/dev/null; then
-        print_success "✓ DNS sunucusuna SSH erişimi var (key authentication)"
-    else
-        print_warning "SSH key authentication başarısız!"
-        echo ""
+    local ssh_password=""
+    local ssh_connected=false
+    
+    if [ "$ssh_method" = "1" ]; then
+        # SSH Key yöntemi
+        print_info "SSH Key authentication kullanılıyor..."
         
-        print_header "SSH Key Kurulumu Gerekli"
+        # SSH key var mı?
+        if [ ! -f "/root/.ssh/id_rsa" ]; then
+            print_info "SSH key oluşturuluyor..."
+            ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q
+            print_success "✓ SSH key oluşturuldu"
+        fi
         
-        echo -e "${CYAN}Sorun:${NC}"
-        echo "  DNS sunucusu ($dns_server_ip) SSH key ile erişime izin vermiyor"
-        echo "  veya key henüz kopyalanmamış"
-        echo ""
-        
-        echo -e "${CYAN}Çözüm Seçenekleri:${NC}"
-        echo "1) SSH key'i şimdi kopyala (Önerilen)"
-        echo "2) DNS sunucusunda SSH yapılandırmasını düzelt"
-        echo "3) Manuel DNS challenge kullan (şifre gerektirmez)"
-        echo "4) İptal et"
-        echo ""
-        
-        read -p "Seçiminiz (1-4): " ssh_fix_choice
-        
-        case $ssh_fix_choice in
-            1)
-                print_info "SSH key kopyalanıyor..."
-                echo ""
-                echo -e "${YELLOW}DNS sunucusunun root şifresini girmeniz gerekecek${NC}"
-                echo ""
+        # Key ile bağlantı testi
+        if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes $dns_server_user@$dns_server_ip "echo test" &>/dev/null 2>&1; then
+            print_success "✓ SSH key authentication çalışıyor!"
+            ssh_connected=true
+        else
+            print_warning "SSH key henüz kurulu değil"
+            echo ""
+            print_info "SSH key'i kopyalamak için DNS sunucusu şifresi gerekli"
+            
+            ask_password "DNS sunucusu $dns_server_user şifresi" ssh_password
+            
+            # sshpass kontrolü
+            if ! command -v sshpass &>/dev/null; then
+                print_info "sshpass kuruluyor..."
+                apt update && apt install -y sshpass
+            fi
+            
+            # Key'i kopyala
+            if sshpass -p "$ssh_password" ssh-copy-id -o StrictHostKeyChecking=no $dns_server_user@$dns_server_ip 2>/dev/null; then
+                print_success "✓ SSH key kopyalandı!"
+                ssh_connected=true
+            else
+                print_error "SSH key kopyalama başarısız!"
+                print_info "Şifre yanlış veya PasswordAuthentication kapalı olabilir"
                 
-                # ssh-copy-id çalıştır
-                if ssh-copy-id -o StrictHostKeyChecking=no $dns_server_user@$dns_server_ip; then
-                    print_success "✓ SSH key başarıyla kopyalandı!"
-                    
-                    # Tekrar test et
-                    if ssh -o ConnectTimeout=5 -o BatchMode=yes $dns_server_user@$dns_server_ip "echo test" &>/dev/null; then
-                        print_success "✓ SSH bağlantı testi başarılı!"
-                    else
-                        print_error "Hala bağlanılamıyor!"
-                        print_info "DNS sunucusunda SSH yapılandırmasını kontrol edin"
-                    fi
+                if ask_yes_no "Şifre ile devam etmek ister misiniz?"; then
+                    ssh_method="2"
                 else
-                    print_error "SSH key kopyalama başarısız!"
-                    echo ""
-                    print_info "Olası nedenler:"
-                    echo "  1. Şifre yanlış"
-                    echo "  2. DNS sunucusunda PasswordAuthentication no"
-                    echo "  3. Root login kapalı"
-                    echo "  4. Firewall SSH portunu engelliyor"
-                    echo ""
-                    print_info "Seçenek 2 ile DNS sunucusunu düzeltebilirsiniz"
                     return 1
                 fi
-                ;;
-            2)
-                fix_remote_ssh_config "$dns_server_ip" "$dns_server_user"
-                return $?
-                ;;
-            3)
-                print_info "Manuel DNS challenge kullanın"
-                print_info "Ana Menü > 5) SSL > Challenge: 2) DNS-01 Manuel"
-                return 1
-                ;;
-            *)
-                print_info "İşlem iptal edildi"
-                return 1
-                ;;
-        esac
+            fi
+        fi
     fi
     
-    print_success "✓ DNS sunucusuna SSH erişimi hazır"
+    if [ "$ssh_method" = "2" ]; then
+        # Şifre yöntemi
+        print_info "Şifre authentication kullanılıyor..."
+        
+        # sshpass kontrolü
+        if ! command -v sshpass &>/dev/null; then
+            print_info "sshpass kuruluyor (şifre ile SSH için gerekli)..."
+            apt update && apt install -y sshpass
+            
+            if [ $? -ne 0 ]; then
+                print_error "sshpass kurulumu başarısız!"
+                return 1
+            fi
+        fi
+        
+        # Şifre al (henüz alınmadıysa)
+        if [ -z "$ssh_password" ]; then
+            ask_password "DNS sunucusu $dns_server_user şifresi" ssh_password
+        fi
+        
+        # Şifre ile bağlantı testi
+        print_info "Şifre ile bağlantı testi..."
+        
+        if sshpass -p "$ssh_password" ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no $dns_server_user@$dns_server_ip "echo test" &>/dev/null 2>&1; then
+            print_success "✓ Şifre ile SSH bağlantısı başarılı!"
+            ssh_connected=true
+            
+            # Hook scriptlerde şifre kullanımı için global değişken
+            export DNS_SSH_PASSWORD="$ssh_password"
+            export DNS_SSH_USER="$dns_server_user"
+            export DNS_SSH_HOST="$dns_server_ip"
+        else
+            print_error "Şifre ile SSH bağlantısı başarısız!"
+            echo ""
+            print_info "Olası nedenler:"
+            echo "  1. Şifre yanlış"
+            echo "  2. DNS sunucusunda PasswordAuthentication no"
+            echo "  3. Root login kapalı (PermitRootLogin no)"
+            echo "  4. Firewall SSH portunu (22) engelliyor"
+            echo ""
+            
+            if ask_yes_no "DNS sunucusunda SSH yapılandırmasını düzeltmeyi denemek ister misiniz?"; then
+                fix_remote_ssh_config "$dns_server_ip" "$dns_server_user"
+                return $?
+            else
+                print_info "Manuel DNS challenge kullanın (seçenek 2)"
+                return 1
+            fi
+        fi
+    fi
+    
+    if [ "$ssh_connected" = false ]; then
+        print_error "SSH bağlantısı kurulamadı!"
+        return 1
+    fi
+    
+    print_success "✓ DNS sunucusuna SSH erişimi hazır ($ssh_method yöntemi)"
     
     # Certbot DNS plugin kurulumu
     print_info "Certbot DNS plugin'i kuruluyor..."
     
-    # RFC2136 plugin (BIND9 için)
+    # RFC2136 plugin (BIND9 için - opsiyonel)
     snap install certbot-dns-rfc2136 2>/dev/null || pip3 install certbot-dns-rfc2136 2>/dev/null || true
     
     # Hook script oluştur (TXT kaydı ekleme/silme)
-    create_dns_challenge_hooks "$dns_server_ip" "$dns_server_user"
+    # Şifre veya key kullanımını belirle
+    local use_pass=false
+    local pass_param=""
+    
+    if [ "$ssh_method" = "2" ] && [ -n "$ssh_password" ]; then
+        use_pass=true
+        pass_param="$ssh_password"
+    fi
+    
+    create_dns_challenge_hooks "$dns_server_ip" "$dns_server_user" "$use_pass" "$pass_param"
     
     # Certbot çalıştır (hook scriptler ile)
+    print_info "Certbot çalıştırılıyor (otomatik DNS challenge)..."
+    echo ""
+    
     certbot certonly \
         --manual \
         --preferred-challenges dns \
@@ -8767,56 +8814,140 @@ create_ssl_dns_auto() {
 create_dns_challenge_hooks() {
     local dns_server=$1
     local dns_user=$2
+    local use_password=${3:-false}
+    local password=${4:-""}
+    
+    print_info "DNS challenge hook scriptleri oluşturuluyor..."
+    
+    # SSH komut prefix'i belirle
+    local ssh_cmd=""
+    if [ "$use_password" = true ] && [ -n "$password" ]; then
+        ssh_cmd="sshpass -p '$password' ssh -o StrictHostKeyChecking=no"
+        print_info "✓ Şifre authentication kullanılacak"
+    else
+        ssh_cmd="ssh -o StrictHostKeyChecking=no -o BatchMode=yes"
+        print_info "✓ Key authentication kullanılacak"
+    fi
     
     # Auth hook (TXT kaydı ekle)
-    cat > /usr/local/bin/certbot-dns-add.sh <<'HOOK_ADD'
+    cat > /usr/local/bin/certbot-dns-add.sh <<HOOK_ADD
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydı Ekle
+# Certbot DNS-01 Challenge - TXT Kaydı Ekle (Otomatik)
 
-DNS_SERVER="$1"
-DNS_USER="$2"
-DOMAIN="$CERTBOT_DOMAIN"
-TOKEN="$CERTBOT_VALIDATION"
+DNS_SERVER="$dns_server"
+DNS_USER="$dns_user"
+DOMAIN="\$CERTBOT_DOMAIN"
+TOKEN="\$CERTBOT_VALIDATION"
 
-# _acme-challenge TXT kaydı ekle
-ssh $DNS_USER@$DNS_SERVER "echo '_acme-challenge.$DOMAIN IN TXT \"$TOKEN\"' >> /etc/bind/db.$DOMAIN"
+echo "[INFO] TXT kaydı ekleniyor: _acme-challenge.\$DOMAIN = \$TOKEN"
+
+# Ana domain'i bul (subdomain desteği için)
+MAIN_DOMAIN=\$(echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev)
+ZONE_FILE="/etc/bind/db.\$MAIN_DOMAIN"
+
+# SSH komutu
+SSH_CMD="$ssh_cmd"
+
+# Uzak sunucuda komutları çalıştır
+\$SSH_CMD \$DNS_USER@\$DNS_SERVER bash <<'REMOTE_EOF'
+ZONE_FILE="$zone_file"
+DOMAIN="\$DOMAIN"
+TOKEN="\$TOKEN"
+
+# Zone dosyası var mı?
+if [ ! -f "/etc/bind/db.\$MAIN_DOMAIN" ]; then
+    echo "[HATA] Zone dosyası bulunamadı: /etc/bind/db.\$MAIN_DOMAIN"
+    exit 1
+fi
+
+# Yedek oluştur
+cp /etc/bind/db.\$MAIN_DOMAIN /etc/bind/db.\$MAIN_DOMAIN.backup.\$(date +%Y%m%d_%H%M%S)
+
+# Subdomain desteği
+RECORD_NAME="_acme-challenge"
+if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
+    SUBDOMAIN=\$(echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//")
+    RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
+fi
+
+# Mevcut TXT kaydını sil (varsa)
+sed -i "/\$RECORD_NAME.*IN.*TXT/d" /etc/bind/db.\$MAIN_DOMAIN
 
 # Serial güncelle
-ssh $DNS_USER@$DNS_SERVER "sed -i 's/\([0-9]\{10\}\)/\1/' /etc/bind/db.$DOMAIN"
+CURRENT_SERIAL=\$(grep "Serial" /etc/bind/db.\$MAIN_DOMAIN | grep -oE "[0-9]+" | head -1)
+NEW_SERIAL=\$(date +%Y%m%d01)
+if [ "\$NEW_SERIAL" -le "\$CURRENT_SERIAL" ]; then
+    NEW_SERIAL=\$((CURRENT_SERIAL + 1))
+fi
+sed -i "s/\$CURRENT_SERIAL/\$NEW_SERIAL/" /etc/bind/db.\$MAIN_DOMAIN
+
+# TXT kaydını ekle
+echo "\$RECORD_NAME     IN      TXT     \\"\$TOKEN\\"" >> /etc/bind/db.\$MAIN_DOMAIN
 
 # BIND9'u yeniden yükle
-ssh $DNS_USER@$DNS_SERVER "systemctl reload named"
+systemctl reload named
 
-# DNS'in yayılması için bekle
-sleep 30
+echo "[OK] TXT kaydı eklendi: \$RECORD_NAME"
+REMOTE_EOF
+
+# DNS propagation bekle
+echo "[INFO] DNS propagation bekleniyor (45 saniye)..."
+sleep 45
+
+echo "[OK] DNS challenge hazır"
 HOOK_ADD
     
     # Cleanup hook (TXT kaydını sil)
-    cat > /usr/local/bin/certbot-dns-cleanup.sh <<'HOOK_CLEANUP'
+    cat > /usr/local/bin/certbot-dns-cleanup.sh <<HOOK_CLEANUP
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydını Sil
+# Certbot DNS-01 Challenge - TXT Kaydını Sil (Otomatik)
 
-DNS_SERVER="$1"
-DNS_USER="$2"
-DOMAIN="$CERTBOT_DOMAIN"
+DNS_SERVER="$dns_server"
+DNS_USER="$dns_user"
+DOMAIN="\$CERTBOT_DOMAIN"
 
-# _acme-challenge kaydını sil
-ssh $DNS_USER@$DNS_SERVER "sed -i '/_acme-challenge.$DOMAIN/d' /etc/bind/db.$DOMAIN"
+echo "[INFO] TXT kaydı siliniyor: _acme-challenge.\$DOMAIN"
+
+# SSH komutu
+SSH_CMD="$ssh_cmd"
+
+# Uzak sunucuda TXT kaydını sil
+\$SSH_CMD \$DNS_USER@\$DNS_SERVER bash <<'REMOTE_EOF'
+DOMAIN="\$DOMAIN"
+MAIN_DOMAIN=\$(echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev)
+
+# Subdomain desteği
+RECORD_NAME="_acme-challenge"
+if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
+    SUBDOMAIN=\$(echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//")
+    RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
+fi
+
+# TXT kaydını sil
+sed -i "/\$RECORD_NAME.*IN.*TXT/d" /etc/bind/db.\$MAIN_DOMAIN
+
+# Serial güncelle
+CURRENT_SERIAL=\$(grep "Serial" /etc/bind/db.\$MAIN_DOMAIN | grep -oE "[0-9]+" | head -1)
+NEW_SERIAL=\$((CURRENT_SERIAL + 1))
+sed -i "s/\$CURRENT_SERIAL/\$NEW_SERIAL/" /etc/bind/db.\$MAIN_DOMAIN
 
 # BIND9'u yeniden yükle
-ssh $DNS_USER@$DNS_SERVER "systemctl reload named"
+systemctl reload named
+
+echo "[OK] TXT kaydı silindi"
+REMOTE_EOF
+
+echo "[OK] DNS temizlendi"
 HOOK_CLEANUP
     
     chmod +x /usr/local/bin/certbot-dns-add.sh
     chmod +x /usr/local/bin/certbot-dns-cleanup.sh
     
-    # DNS bilgilerini hook scriptlere geç
-    sed -i "s|DNS_SERVER=\"\$1\"|DNS_SERVER=\"$dns_server\"|" /usr/local/bin/certbot-dns-add.sh
-    sed -i "s|DNS_USER=\"\$2\"|DNS_USER=\"$dns_user\"|" /usr/local/bin/certbot-dns-add.sh
-    sed -i "s|DNS_SERVER=\"\$1\"|DNS_SERVER=\"$dns_server\"|" /usr/local/bin/certbot-dns-cleanup.sh
-    sed -i "s|DNS_USER=\"\$2\"|DNS_USER=\"$dns_user\"|" /usr/local/bin/certbot-dns-cleanup.sh
-    
     print_success "✓ DNS challenge hook'ları oluşturuldu"
+    echo ""
+    echo -e "${CYAN}Hook dosyaları:${NC}"
+    echo "  /usr/local/bin/certbot-dns-add.sh      (TXT ekle)"
+    echo "  /usr/local/bin/certbot-dns-cleanup.sh  (TXT sil)"
 }
 
 install_ssl_to_nginx() {
