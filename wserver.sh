@@ -8079,6 +8079,13 @@ install_phpmyadmin() {
 quick_setup_phpmyadmin() {
     print_info "phpMyAdmin hizli kurulum basliyor..."
     
+    # ONCE: Hatali conf.d dosyalarini temizle
+    if [ -f "/etc/nginx/conf.d/phpmyadmin.conf" ]; then
+        print_warning "Onceki hatali dosya bulundu, temizleniyor..."
+        rm -f /etc/nginx/conf.d/phpmyadmin.conf
+        print_success "Temizlendi: /etc/nginx/conf.d/phpmyadmin.conf"
+    fi
+    
     # phpMyAdmin dizini
     local pma_path="/usr/share/phpmyadmin"
     if [ ! -d "$pma_path" ]; then
@@ -8187,42 +8194,69 @@ setup_phpmyadmin_direct_ip() {
     print_info "Sunucu IP: $server_ip"
     print_info "phpMyAdmin direkt IP erisimi yapilandiriliyor..."
     
+    # ONCE: Hatali dosyalari temizle
+    print_info "Onceki hatali yapilandirmalar kontrol ediliyor..."
+    if [ -f "/etc/nginx/conf.d/phpmyadmin.conf" ]; then
+        print_warning "Hatali dosya bulundu: /etc/nginx/conf.d/phpmyadmin.conf"
+        rm -f /etc/nginx/conf.d/phpmyadmin.conf
+        print_success "Hatali dosya silindi"
+    fi
+    
     # Symbolic link olustur
     ln -sf "$pma_path" /var/www/html/phpmyadmin 2>/dev/null
     
-    # Default nginx config'e ekle veya yeni olustur
+    # Default site'a location olarak ekle
     local default_conf="/etc/nginx/sites-available/default"
-    local pma_conf="/etc/nginx/conf.d/phpmyadmin.conf"
     
-    # Ayri config dosyasi olustur (daha temiz)
-    cat > "$pma_conf" <<EOF
-# phpMyAdmin - Direkt IP Erisimi
-# Erisim: http://$server_ip/phpmyadmin
-
-location /phpmyadmin {
-    alias $pma_path;
-    index index.php index.html;
+    if [ ! -f "$default_conf" ]; then
+        print_error "Default Nginx config bulunamadi: $default_conf"
+        return 1
+    fi
     
-    location ~ \.php\$ {
-        include fastcgi_params;
-        fastcgi_pass unix:$php_socket;
-        fastcgi_param SCRIPT_FILENAME \$request_filename;
-        fastcgi_intercept_errors on;
+    # Yedek al
+    cp "$default_conf" "${default_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Zaten ekli mi kontrol et
+    if grep -q "location /phpmyadmin" "$default_conf"; then
+        print_warning "phpMyAdmin location zaten mevcut: $default_conf"
+    else
+        # Location blogu olustur
+        local location_block="
+    # phpMyAdmin - Direkt IP Erisimi
+    # Erisim: http://$server_ip/phpmyadmin
+    location /phpmyadmin {
+        alias $pma_path;
+        index index.php index.html;
+        
+        location ~ \.php\$ {
+            include fastcgi_params;
+            fastcgi_pass unix:$php_socket;
+            fastcgi_param SCRIPT_FILENAME \$request_filename;
+            fastcgi_intercept_errors on;
+        }
+        
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)\$ {
+            expires max;
+            log_not_found off;
+        }
     }
-    
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)\$ {
-        expires max;
-        log_not_found off;
-    }
-}
-EOF
-    
-    print_success "phpMyAdmin config olusturuldu: $pma_conf"
+"
+        
+        # Son } isaretinden once ekle
+        sed -i "/^}/i\\$location_block" "$default_conf"
+        print_success "phpMyAdmin location eklendi: $default_conf"
+    fi
     
     # Nginx test ve reload
-    if nginx -t 2>/dev/null; then
+    echo ""
+    print_info "Nginx yapilandirmasi test ediliyor..."
+    
+    if nginx -t 2>&1; then
         systemctl reload nginx
         print_success "[OK] Nginx yeniden yuklendi"
+        
+        # Basarili, yedegi sil
+        rm -f "${default_conf}.backup."* 2>/dev/null
         
         echo ""
         echo -e "${GREEN}======================================================${NC}"
@@ -8238,12 +8272,35 @@ EOF
         echo ""
         print_warning "GUVENLIK UYARISI:"
         echo "  * Production ortamda IP kisitlamasi eklemeniz onerilir"
-        echo "  * Dosya: $pma_conf"
+        echo "  * Dosya: $default_conf"
         echo "  * Ornek: allow 192.168.1.0/24; deny all;"
     else
-        print_error "Nginx yapilandirma hatasi!"
-        nginx -t
-        rm -f "$pma_conf"
+        print_error "Nginx yapilandirma hatasi tespit edildi!"
+        print_error "Degisiklikler geri aliniyor..."
+        
+        # Yedekten geri yukle
+        local latest_backup=$(ls -t "${default_conf}.backup."* 2>/dev/null | head -1)
+        if [ -n "$latest_backup" ]; then
+            cp "$latest_backup" "$default_conf"
+            print_success "Onceki yapilandirma geri yuklendi"
+        fi
+        
+        # Hatali conf.d dosyalarini temizle
+        rm -f /etc/nginx/conf.d/phpmyadmin.conf 2>/dev/null
+        
+        # Nginx'i tekrar test et
+        if nginx -t 2>/dev/null; then
+            systemctl reload nginx
+            print_success "Nginx kararlı hale getirildi"
+        fi
+        
+        echo ""
+        print_error "HATA DETAYLARI:"
+        nginx -t 2>&1
+        echo ""
+        print_info "Manuel yapilandirma icin:"
+        echo "  nano $default_conf"
+        
         return 1
     fi
 }
