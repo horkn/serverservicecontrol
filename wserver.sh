@@ -14472,13 +14472,13 @@ optimize_mysql_performance() {
     echo -e "Önerilen InnoDB Buffer: ${recommended_buffer} MB"
     echo ""
     
-    echo -e "${CYAN}Optimizasyon Seçenekleri:${NC}"
-    echo "1) InnoDB Buffer Pool Size Ayarla"
-    echo "2) Max Connections Ayarla"
-    echo "3) Slow Query Log Etkinleştir/Kapat"
-    echo "4) Tüm Tabloları Optimize Et"
-    echo "5) Tüm Tabloları Analyze Et"
-    echo "0) Geri Dön"
+    echo -e "${CYAN}Optimizasyon Secenekleri:${NC}"
+    echo "1. InnoDB Buffer Pool Size Ayarla"
+    echo "2. Max Connections Ayarla"
+    echo "3. Slow Query Log Etkinlestir/Kapat"
+    echo "4. Tum Tablolari Optimize Et"
+    echo "5. Tum Tablolari Analyze Et"
+    echo "0. Geri Don"
     echo ""
     
     read -p "Seçiminiz: " opt_choice
@@ -14516,7 +14516,7 @@ optimize_mysql_performance() {
             fi
             ;;
         4)
-            print_info "Tüm tablolar optimize ediliyor... (Bu işlem uzun sürebilir)"
+            print_info "Tum tablolar optimize ediliyor... Bu islem uzun surebilir"
             mysql_cmd -N -e "SELECT CONCAT('OPTIMIZE TABLE \`', table_schema, '\`.\`', table_name, '\`;') FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null | mysql_cmd 2>/dev/null
             print_success "Tüm tablolar optimize edildi."
             ;;
@@ -14616,9 +14616,9 @@ configure_master_server() {
     # Hangi veritabanları replike edilecek?
     echo ""
     echo "Replikasyon kapsamı:"
-    echo "1) Tüm veritabanları"
-    echo "2) Belirli veritabanları"
-    echo "3) Belirli veritabanları hariç tümü"
+    echo "1. Tum veritabanlari"
+    echo "2. Belirli veritabanlari"
+    echo "3. Belirli veritabanlari haric tumu"
     read -p "Seçim [1]: " db_choice
     db_choice=${db_choice:-1}
     
@@ -14951,19 +14951,19 @@ mysql_replication_menu() {
         fi
         
         echo ""
-        echo -e "${CYAN}Kurulum ve Yapılandırma:${NC}"
-        echo "  1) Master Sunucu Yapılandır"
-        echo "  2) Slave Sunucu Yapılandır"
-        echo "  3) Replication Kullanıcısı Oluştur"
-        echo "  4) Slave'i Master'a Bağla"
+        echo -e "${CYAN}Kurulum ve Yapilandirma:${NC}"
+        echo "  1. Master Sunucu Yapilandir"
+        echo "  2. Slave Sunucu Yapilandir"
+        echo "  3. Replication Kullanicisi Olustur"
+        echo "  4. Slavei Mastera Bagla"
         echo ""
-        echo -e "${CYAN}Yönetim ve İzleme:${NC}"
-        echo "  5) Replication Durumunu Kontrol Et"
-        echo "  6) Replication Yönetimi (Başlat/Durdur/Sıfırla)"
-        echo "  7) Master Status Göster"
-        echo "  8) Slave Status Göster (Detaylı)"
+        echo -e "${CYAN}Yonetim ve Izleme:${NC}"
+        echo "  5. Replication Durumunu Kontrol Et"
+        echo "  6. Replication Yonetimi - Baslat/Durdur/Sifirla"
+        echo "  7. Master Status Goster"
+        echo "  8. Slave Status Goster - Detayli"
         echo ""
-        echo "  0) Geri Dön"
+        echo "  0. Geri Don"
         echo ""
         
         read -p "Seçiminiz [0-8]: " repl_menu_choice
@@ -15805,9 +15805,9 @@ redis_management_menu() {
         
         echo ""
         echo -e "${CYAN}Bilgi ve İzleme:${NC}"
-        echo "  1) Redis Bilgileri (INFO)"
-        echo "  2) Key Yönetimi"
-        echo "  3) Sunucu İstatistikleri"
+        echo "  1. Redis Bilgileri - INFO"
+        echo "  2. Key Yonetimi"
+        echo "  3. Sunucu Istatistikleri"
         echo ""
         echo -e "${CYAN}Sunucu Yapılandırma:${NC}"
         echo "  4) Sunucu Ayarları (Port, Bind, Şifre)"
