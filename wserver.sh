@@ -1249,7 +1249,7 @@ configure_redis_remote_access() {
         echo "protected-mode no" >> "$redis_conf"
     fi
     
-    # 3. Åifre ayarla (ZORUNLU - güvenlik için)
+    # 3. Şifre ayarla (ZORUNLU - güvenlik için)
     local redis_password=""
     ask_password "Redis şifresi belirleyin (boş bırakmayın!)" redis_password
     
@@ -2350,7 +2350,7 @@ setup_ssh_tunnel_cluster() {
     # Laravel sunucusunda mıyız?
     if [ "$WEB_SERVER_IP" != "$current_ip" ]; then
         print_warning "Bu script Laravel sunucusunda ($WEB_SERVER_IP) çalıştırılmalı!"
-        print_info "Åu anki sunucu: $current_ip"
+        print_info "Şu anki sunucu: $current_ip"
         return 1
     fi
     
@@ -2482,7 +2482,7 @@ quick_setup_predefined_cluster() {
     
     echo -e "${CYAN}Sunucular farklı IP'lerde, nasıl haberleşecekler?${NC}"
     echo ""
-    echo "1) ${GREEN}WireGuard VPN${NC} (Önerilen - Hızlı, Güvenli, Åifreli)"
+    echo "1) ${GREEN}WireGuard VPN${NC} (Önerilen - Hızlı, Güvenli, Şifreli)"
     echo "   â””â”€ 10.9.0.x ağı üzerinden mesh network"
     echo ""
     echo "2) ${YELLOW}Private Network/VLAN${NC} (Varsa - En Hızlı)"
@@ -2919,13 +2919,13 @@ ask_password() {
         read -s -p "$1: " password
         echo
         if [ -z "$password" ]; then
-            echo "Åifre boş olamaz. Lütfen tekrar deneyin."
+            echo "Şifre boş olamaz. Lütfen tekrar deneyin."
             continue
         fi
-        read -s -p "Åifreyi tekrar girin: " password_confirm
+        read -s -p "Şifreyi tekrar girin: " password_confirm
         echo
         if [ "$password" != "$password_confirm" ]; then
-            echo "Åifreler eşleşmiyor. Lütfen tekrar deneyin."
+            echo "Şifreler eşleşmiyor. Lütfen tekrar deneyin."
         else
             eval "$2='$password'"
             break
@@ -4422,7 +4422,7 @@ EOF
     
     while [ $attempt -lt $max_attempts ] && [ "$password_set" = false ]; do
         ((attempt++))
-        print_info "Åifre ayarlama denemesi $attempt/$max_attempts..."
+        print_info "Şifre ayarlama denemesi $attempt/$max_attempts..."
         
         # Yöntem 1: sudo mysql ile şifre ayarla (MariaDB 10.4+ için en güvenilir)
         local sql_result=0
@@ -4529,7 +4529,7 @@ EOF
         if mysql -u root -e "SELECT 1;" 2>/dev/null; then
             print_info "Güvenli modda bağlantı başarılı, şifre ayarlanıyor..."
             
-            # Åifreyi ayarla
+            # Şifreyi ayarla
             mysql -u root <<EOF 2>/dev/null
 USE mysql;
 UPDATE user SET authentication_string='', plugin='mysql_native_password' WHERE User='root' AND Host='localhost';
@@ -4554,7 +4554,7 @@ EOF
             systemctl start mariadb
             sleep 5
             
-            # Åifre ile test et
+            # Şifre ile test et
             if mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
                 password_set=true
                 print_success "Root şifresi güvenli mod yöntemi ile ayarlandı"
@@ -4612,7 +4612,7 @@ EOF
             systemctl start mariadb
             sleep 5
             
-            # Åifre ile test et
+            # Şifre ile test et
             if mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
                 password_set=true
                 print_success "Root şifresi direkt user tablosu güncelleme ile ayarlandı"
@@ -4628,8 +4628,8 @@ EOF
         return 1
     fi
     
-    # Åifre ile bağlantıyı test et
-    print_info "Åifre doğrulanıyor..."
+    # Şifre ile bağlantıyı test et
+    print_info "Şifre doğrulanıyor..."
     local verify_count=0
     local verify_success=false
     
@@ -4644,10 +4644,10 @@ EOF
     done
     
     if [ "$verify_success" = false ]; then
-        print_error "Åifre doğrulama başarısız!"
-        print_info "Åifre ayarlandı ancak doğrulama başarısız, tekrar ayarlanıyor..."
+        print_error "Şifre doğrulama başarısız!"
+        print_info "Şifre ayarlandı ancak doğrulama başarısız, tekrar ayarlanıyor..."
         
-        # Åifreyi tekrar ayarla
+        # Şifreyi tekrar ayarla
         if sudo mysql <<EOF 2>/dev/null; then
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
 FLUSH PRIVILEGES;
@@ -4658,11 +4658,11 @@ EOF
                 verify_success=true
                 print_success "MySQL root şifresi doğrulandı (ikinci deneme)"
             else
-                print_error "Åifre doğrulama başarısız!"
+                print_error "Şifre doğrulama başarısız!"
                 return 1
             fi
         else
-            print_error "Åifre tekrar ayarlanamadı!"
+            print_error "Şifre tekrar ayarlanamadı!"
             return 1
         fi
     fi
@@ -4703,7 +4703,7 @@ EOF
     else
         print_warning "MySQL güvenlik yapılandırması başarısız, tekrar deneniyor..."
         
-        # Åifre ile tekrar dene
+        # Şifre ile tekrar dene
         if mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF 2>/dev/null; then
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
@@ -4724,7 +4724,7 @@ EOF
        pgrep -x mysqld > /dev/null 2>&1 || \
        pgrep -x mariadbd > /dev/null 2>&1; then
         print_success "MySQL/MariaDB kurulumu tamamlandı ve çalışıyor"
-        echo -e "${GREEN}MySQL Root Åifresi:${NC} Ayarlanmış ve doğrulandı"
+        echo -e "${GREEN}MySQL Root Şifresi:${NC} Ayarlanmış ve doğrulandı"
         
         if systemctl is-active --quiet mariadb 2>/dev/null; then
             echo -e "${GREEN}Servis Durumu:${NC} $(systemctl is-active mariadb)"
@@ -5107,7 +5107,7 @@ EOF
     echo ""
     print_info "Modül linkleri yeniden oluşturuluyor (çift linkleri önlemek için)..."
     
-    # Åimdi linkleri temizle ve YENİDEN oluştur
+    # Şimdi linkleri temizle ve YENİDEN oluştur
     for conf_dir in "/etc/php/$php_version/cli/conf.d" "/etc/php/$php_version/fpm/conf.d"; do
         if [ -d "$conf_dir" ]; then
             print_info "  â†’ $conf_dir"
@@ -5364,7 +5364,7 @@ quick_fix_php_extensions() {
     
     echo ""
     
-    # Åimdi mevcut durumu göster
+    # Şimdi mevcut durumu göster
     print_info "Mevcut PHP eklentileri kontrol ediliyor..."
     echo "Kurulu eklentiler:"
     $php_binary -m 2>/dev/null | grep -v "^\[" | head -20
@@ -5559,7 +5559,7 @@ quick_fix_php_extensions() {
             print_success "âœ“ Composer çalışıyor: $(composer --version 2>/dev/null | head -1)"
             echo ""
             print_info "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
-            print_info "  ğŸ‰ HER ÅEY HAZIR!"
+            print_info "  ğŸ‰ HER ŞEY HAZIR!"
             print_info "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
             echo ""
             print_info "Laravel projenizde çalıştırabilirsiniz:"
@@ -6970,7 +6970,7 @@ EOF
     print_success "OpenVPN-Admin kurulumu tamamlandı!"
     echo -e "${GREEN}Erişim:${NC} http://$admin_domain"
     echo -e "${GREEN}Varsayılan Kullanıcı:${NC} admin"
-    echo -e "${GREEN}Varsayılan Åifre:${NC} admin"
+    echo -e "${GREEN}Varsayılan Şifre:${NC} admin"
     echo -e "${YELLOW}UYARI:${NC} İlk girişte şifreyi değiştirin!"
 }
 
@@ -8570,13 +8570,13 @@ create_ssl() {
     print_warning "  ÖNEMLİ: SSL SUNUCU KONUMU"
     print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
     echo ""
-    echo -e "${YELLOW}SSL sertifikası NGINX'İN ÇALIÅTIĞI SUNUCUDA oluşturulmalıdır!${NC}"
+    echo -e "${YELLOW}SSL sertifikası NGINX'İN ÇALIŞTIĞI SUNUCUDA oluşturulmalıdır!${NC}"
     echo ""
     echo -e "${CYAN}Örnek Multi-Server Yapı:${NC}"
     echo "  A Server (DNS):     BIND9 çalışıyor"
-    echo "  B Server (Laravel): Nginx + PHP çalışıyor â† SSL BURDA OLUÅTURULMALI!"
+    echo "  B Server (Laravel): Nginx + PHP çalışıyor â† SSL BURDA OLUŞTURULMALI!"
     echo ""
-    echo -e "${YELLOW}Åu anda bu script hangi sunucuda çalışıyor?${NC}"
+    echo -e "${YELLOW}Şu anda bu script hangi sunucuda çalışıyor?${NC}"
     local current_ip=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
     echo "  Bu sunucu IP: ${GREEN}$current_ip${NC}"
     echo ""
@@ -8616,7 +8616,7 @@ create_ssl() {
     ask_input "SSL oluşturulacak domain/subdomain adını girin" domain
     
     # Türkçe karakter kontrolü ve Punycode dönüşümü
-    if echo "$domain" | grep -q '[şğüöçıİÅĞÜÖÇ]'; then
+    if echo "$domain" | grep -q '[şğüöçıİŞĞÜÖÇ]'; then
         print_warning "Domain adında Türkçe karakter tespit edildi!"
         echo "  Orijinal: $domain"
         
@@ -8688,7 +8688,7 @@ create_ssl() {
             echo "  4. Let's Encrypt TXT kaydını doğrular"
             echo "  5. SSL sertifikası BU SUNUCUDA Nginx'e kurulur"
             echo ""
-            echo -e "${YELLOW}HTTP-01 challenge bu yapıda ÇALIÅMAZ!${NC}"
+            echo -e "${YELLOW}HTTP-01 challenge bu yapıda ÇALIŞMAZ!${NC}"
             echo "DNS-01 challenge kullanmalısınız"
             echo ""
             
@@ -8947,7 +8947,7 @@ create_ssl_dns_auto() {
     
     echo -e "${CYAN}Web sunucusuna nasıl bağlanmak istersiniz?${NC}"
     echo "1) SSH Key (Önerilen)"
-    echo "2) Åifre ile (sshpass)"
+    echo "2) Şifre ile (sshpass)"
     echo ""
     
     read -p "Seçiminiz (1-2) [1]: " ssh_method
@@ -8987,9 +8987,9 @@ create_ssl_dns_auto() {
                 print_success "âœ“ SSH key Web sunucusuna kopyalandı!"
             else
                 print_error "SSH key kopyalama başarısız!"
-                print_info "Åifre yanlış veya PasswordAuthentication kapalı olabilir"
+                print_info "Şifre yanlış veya PasswordAuthentication kapalı olabilir"
                 
-                if ask_yes_no "Åifre ile devam etmek ister misiniz?"; then
+                if ask_yes_no "Şifre ile devam etmek ister misiniz?"; then
                     ssh_method="2"
                 else
                     return 1
@@ -8999,8 +8999,8 @@ create_ssl_dns_auto() {
     fi
     
     if [ "$ssh_method" = "2" ]; then
-        # Åifre yöntemi
-        print_info "Åifre authentication kullanılıyor..."
+        # Şifre yöntemi
+        print_info "Şifre authentication kullanılıyor..."
         
         # sshpass kontrolü
         if ! command -v sshpass &>/dev/null; then
@@ -9013,13 +9013,13 @@ create_ssl_dns_auto() {
             fi
         fi
         
-        # Åifre al (henüz alınmadıysa)
+        # Şifre al (henüz alınmadıysa)
         if [ -z "$ssh_password" ]; then
             ask_password "Web sunucusu $web_server_user şifresi" ssh_password
         fi
         
-        # Åifre ile bağlantı testi (Web sunucusuna)
-        print_info "Åifre ile bağlantı testi..."
+        # Şifre ile bağlantı testi (Web sunucusuna)
+        print_info "Şifre ile bağlantı testi..."
         echo "  Hedef: $web_server_user@$web_server_ip"
         echo ""
         
@@ -9028,20 +9028,20 @@ create_ssl_dns_auto() {
         local ssh_result=$?
         
         if [ $ssh_result -eq 0 ]; then
-            print_success "âœ“ Åifre ile SSH bağlantısı başarılı (Web sunucusuna)!"
+            print_success "âœ“ Şifre ile SSH bağlantısı başarılı (Web sunucusuna)!"
             
             # Sertifika kurulumu için bilgileri sakla
             export WEB_SSH_PASSWORD="$ssh_password"
             export WEB_SSH_USER="$web_server_user"
             export WEB_SSH_HOST="$web_server_ip"
         else
-            print_error "Åifre ile SSH bağlantısı başarısız!"
+            print_error "Şifre ile SSH bağlantısı başarısız!"
             echo ""
             echo -e "${RED}DETAYLI HATA:${NC}"
             echo "$ssh_error" | grep -i "permission\|denied\|auth\|failed\|refused" | head -10
             echo ""
             print_info "Olası nedenler:"
-            echo "  1. Åifre yanlış"
+            echo "  1. Şifre yanlış"
             echo "  2. Kullanıcı yanlış (B sunucusunda 'cat /etc/passwd | grep $web_server_user')"
             echo "  3. PasswordAuthentication no (/etc/ssh/sshd_config)"
             echo "  4. Kullanıcı SSH erişimi yok (AllowUsers/DenyUsers)"
@@ -9123,24 +9123,24 @@ create_dns_challenge_hooks() {
     echo "  DNS Server: $dns_server"
     echo "  Web Server: $web_server_ip (zone dosyası için)"
     
-    # Åifre yöntemi için güvenli geçiş (dosya kullan)
+    # Şifre yöntemi için güvenli geçiş (dosya kullan)
     local password_file="/tmp/.dns_ssh_pass"
     
     if [ "$use_password" = true ] && [ -n "$password" ]; then
-        # Åifreyi güvenli dosyaya yaz
+        # Şifreyi güvenli dosyaya yaz
         echo "$password" > "$password_file"
         chmod 600 "$password_file"
-        print_info "âœ“ Åifre authentication kullanılacak"
+        print_info "âœ“ Şifre authentication kullanılacak"
     else
         print_info "âœ“ Key authentication kullanılacak"
     fi
     
     # Auth hook (TXT kaydı ekle)
     if [ "$use_password" = true ]; then
-        # Åifre ile version
+        # Şifre ile version
         cat > /usr/local/bin/certbot-dns-add.sh <<HOOK_ADD
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydı Ekle (Åifre ile)
+# Certbot DNS-01 Challenge - TXT Kaydı Ekle (Şifre ile)
 
 DNS_SERVER="$dns_server"
 DNS_USER="$dns_user"
@@ -9412,10 +9412,10 @@ HOOK_ADD
     
     # Cleanup hook (TXT kaydını sil)
     if [ "$use_password" = true ]; then
-        # Åifre ile version
+        # Şifre ile version
         cat > /usr/local/bin/certbot-dns-cleanup.sh <<HOOK_CLEANUP
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydını Sil (Åifre ile)
+# Certbot DNS-01 Challenge - TXT Kaydını Sil (Şifre ile)
 
 DNS_SERVER="$dns_server"
 DNS_USER="$dns_user"
@@ -9516,12 +9516,12 @@ HOOK_CLEANUP
     chmod +x /usr/local/bin/certbot-dns-add.sh
     chmod +x /usr/local/bin/certbot-dns-cleanup.sh
     
-    # Åifre dosyası için cleanup da ekle
+    # Şifre dosyası için cleanup da ekle
     if [ "$use_password" = true ]; then
         # Cleanup hook sonuna şifre dosyası silme ekle
         cat >> /usr/local/bin/certbot-dns-cleanup.sh <<'CLEANUP_PASS'
 
-# Åifre dosyasını temizle
+# Şifre dosyasını temizle
 rm -f "$PASSWORD_FILE" 2>/dev/null
 CLEANUP_PASS
     fi
@@ -9534,7 +9534,7 @@ CLEANUP_PASS
     
     if [ "$use_password" = true ]; then
         echo ""
-        echo -e "${CYAN}Åifre dosyası:${NC} $password_file (geçici)"
+        echo -e "${CYAN}Şifre dosyası:${NC} $password_file (geçici)"
         echo -e "${YELLOW}Not: SSL işlemi bitince otomatik silinir${NC}"
     fi
 }
@@ -9564,17 +9564,17 @@ install_ssl_to_remote_nginx() {
     local scp_cmd="scp -o StrictHostKeyChecking=no"
     
     if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
-        # Åifre dosyası kullan (özel karakter güvenli)
+        # Şifre dosyası kullan (özel karakter güvenli)
         local pass_file="/tmp/.web_ssh_pass_$$"
         
-        # Åifreyi güvenli şekilde dosyaya yaz (özel karakterleri koru)
+        # Şifreyi güvenli şekilde dosyaya yaz (özel karakterleri koru)
         printf '%s\n' "$remote_pass" > "$pass_file"
         chmod 600 "$pass_file"
         
         ssh_cmd="sshpass -f $pass_file ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no"
         scp_cmd="sshpass -f $pass_file scp -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no"
         
-        print_info "âœ“ Åifre geçici dosyaya yazıldı (özel karakter korumalı)"
+        print_info "âœ“ Şifre geçici dosyaya yazıldı (özel karakter korumalı)"
         echo "  Dosya: $pass_file (chmod 600)"
     fi
     
@@ -9585,13 +9585,13 @@ install_ssl_to_remote_nginx() {
     echo "A sunucusundan B'ye SSH testi:"
     echo ""
     if [ "$ssh_method" = "2" ]; then
-        echo "# Åifre dosyası ile (özel karakter güvenli):"
-        echo "  echo 'ÅİFRENİZ' > /tmp/test_pass"
+        echo "# Şifre dosyası ile (özel karakter güvenli):"
+        echo "  echo 'ŞİFRENİZ' > /tmp/test_pass"
         echo "  chmod 600 /tmp/test_pass"
         echo "  sshpass -f /tmp/test_pass ssh root@$remote_ip 'echo TEST'"
         echo ""
         echo "# Direkt şifre ile (basit şifreler için):"
-        echo "  sshpass -p 'ÅİFRENİZ' ssh root@$remote_ip 'echo TEST'"
+        echo "  sshpass -p 'ŞİFRENİZ' ssh root@$remote_ip 'echo TEST'"
     else
         echo "  ssh $remote_user@$remote_ip 'echo TEST'"
     fi
@@ -9726,7 +9726,7 @@ install_ssl_to_remote_nginx() {
         $scp_cmd -r /etc/letsencrypt/live/$domain/* $remote_user@$remote_ip:/tmp/ssl-$domain/
         
         if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
-            # Åifre ile sudo
+            # Şifre ile sudo
             $ssh_cmd $remote_user@$remote_ip "
                 echo '$remote_pass' | sudo -S cp -r /tmp/ssl-$domain/* /etc/letsencrypt/live/$domain/
                 echo '$remote_pass' | sudo -S chmod 644 /etc/letsencrypt/live/$domain/*
@@ -9774,7 +9774,7 @@ install_ssl_to_remote_nginx() {
     else
         # Root değil - 2 seçenek
         if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
-            # Åifre ile sudo -S (HER sudo için şifre geç)
+            # Şifre ile sudo -S (HER sudo için şifre geç)
             print_info "sudo -S ile yetki alınıyor (şifre ile)..."
             
             $ssh_cmd $remote_user@$remote_ip "
@@ -9820,7 +9820,7 @@ install_ssl_to_remote_nginx() {
     
     local result=$?
     
-    # Åifre dosyasını temizle
+    # Şifre dosyasını temizle
     if [ "$ssh_method" = "2" ] && [ -f "$pass_file" ]; then
         rm -f "$pass_file" 2>/dev/null
         print_info "âœ“ Geçici şifre dosyası temizlendi"
@@ -9968,7 +9968,7 @@ cp $SSHD_CONFIG ${SSHD_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)
 # PasswordAuthentication etkinleştir
 if grep -q "^PasswordAuthentication no" $SSHD_CONFIG; then
     sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' $SSHD_CONFIG
-    echo "[DEĞIÅTI] PasswordAuthentication yes"
+    echo "[DEĞIŞTI] PasswordAuthentication yes"
 elif ! grep -q "^PasswordAuthentication" $SSHD_CONFIG; then
     echo "PasswordAuthentication yes" >> $SSHD_CONFIG
     echo "[EKLENDİ] PasswordAuthentication yes"
@@ -9983,14 +9983,14 @@ if ! grep -q "^PubkeyAuthentication yes" $SSHD_CONFIG; then
     else
         echo "PubkeyAuthentication yes" >> $SSHD_CONFIG
     fi
-    echo "[DEĞIÅTI] PubkeyAuthentication yes"
+    echo "[DEĞIŞTI] PubkeyAuthentication yes"
 fi
 
 # PermitRootLogin etkinleştir (root için)
 if [ "$USER" = "root" ]; then
     if grep -q "^PermitRootLogin no" $SSHD_CONFIG || grep -q "^PermitRootLogin prohibit-password" $SSHD_CONFIG; then
         sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' $SSHD_CONFIG
-        echo "[DEĞIÅTI] PermitRootLogin yes"
+        echo "[DEĞIŞTI] PermitRootLogin yes"
     elif ! grep -q "^PermitRootLogin" $SSHD_CONFIG; then
         echo "PermitRootLogin yes" >> $SSHD_CONFIG
         echo "[EKLENDİ] PermitRootLogin yes"
@@ -10013,7 +10013,7 @@ REMOTE_COMMANDS
         
         sleep 2
         
-        # Åimdi key kopyala (şifre authentication artık aktif)
+        # Şimdi key kopyala (şifre authentication artık aktif)
         if [ ! -f "/root/.ssh/id_rsa" ]; then
             ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q
         fi
@@ -10039,7 +10039,7 @@ REMOTE_COMMANDS
         fi
     else
         print_error "Uzak sunucuda işlem başarısız!"
-        print_info "Åifre yanlış olabilir veya SSH erişimi yok"
+        print_info "Şifre yanlış olabilir veya SSH erişimi yok"
     fi
 }
 
@@ -10203,7 +10203,7 @@ test_ssh_connection() {
     echo -e "${CYAN}Test 1: SSH Key Authentication${NC}"
     if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes $remote_user@$remote_ip "echo test" &>/dev/null 2>&1; then
         print_success "âœ“ SSH Key authentication çalışıyor!"
-        echo "  Durum: Åifresiz giriş aktif"
+        echo "  Durum: Şifresiz giriş aktif"
     else
         print_warning "âœ— SSH Key authentication çalışmıyor"
         echo "  Durum: Key kurulumu gerekli"
@@ -10225,11 +10225,11 @@ test_ssh_connection() {
     
     if sshpass -p "$test_password" ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no $remote_user@$remote_ip "echo test" &>/dev/null 2>&1; then
         print_success "âœ“ SSH Password authentication çalışıyor!"
-        echo "  Durum: Åifre doğru, bağlantı başarılı"
+        echo "  Durum: Şifre doğru, bağlantı başarılı"
         echo ""
         
         # Key kopyalama öner
-        if ask_yes_no "SSH key'i şimdi kopyalamak ister misiniz? (Åifresiz giriş için)"; then
+        if ask_yes_no "SSH key'i şimdi kopyalamak ister misiniz? (Şifresiz giriş için)"; then
             if [ ! -f "/root/.ssh/id_rsa" ]; then
                 ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q
             fi
@@ -10240,7 +10240,7 @@ test_ssh_connection() {
         fi
     else
         print_error "âœ— SSH Password authentication çalışmıyor!"
-        echo "  Durum: Åifre yanlış veya password authentication kapalı"
+        echo "  Durum: Şifre yanlış veya password authentication kapalı"
         echo ""
         
         print_warning "Uzak sunucuda SSH yapılandırması düzeltilmeli!"
@@ -10427,7 +10427,7 @@ install_gitlab() {
         return 1
     fi
     
-    # KURULUM BAÅLANGICI
+    # KURULUM BAŞLANGICI
     print_header "GitLab Kurulumu Başlatılıyor..."
     
     # Sistem güncellemeleri
@@ -10563,18 +10563,18 @@ EOF
     echo -e "${YELLOW}ÖNEMLİ:${NC}"
     echo "GitLab ilk kurulumda otomatik bir root şifresi oluşturur."
     
-    # Åifre dosyasını kontrol et
+    # Şifre dosyasını kontrol et
     local password_file="/etc/gitlab/initial_root_password"
     if [ -f "$password_file" ]; then
         echo ""
         echo -e "${CYAN}İlk giriş bilgileri:${NC}"
         echo -e "${CYAN}Kullanıcı adı:${NC} root"
-        echo -e "${CYAN}Åifre:${NC} $(grep 'Password:' $password_file | cut -d' ' -f2)"
+        echo -e "${CYAN}Şifre:${NC} $(grep 'Password:' $password_file | cut -d' ' -f2)"
         echo ""
         echo -e "${YELLOW}UYARI:${NC} Bu şifre dosyası 24 saat sonra otomatik olarak silinir!"
-        echo "Åifreyi güvenli bir yere kaydedin ve ilk girişte değiştirin."
+        echo "Şifreyi güvenli bir yere kaydedin ve ilk girişte değiştirin."
     else
-        echo "Åifre dosyası henüz oluşturulmadı. Birkaç dakika bekleyip tekrar kontrol edin:"
+        echo "Şifre dosyası henüz oluşturulmadı. Birkaç dakika bekleyip tekrar kontrol edin:"
         echo -e "${CYAN}sudo cat /etc/gitlab/initial_root_password${NC}"
     fi
     echo ""
@@ -11142,7 +11142,7 @@ install_individual_service() {
                 mysql_running=true
                 print_info "MySQL/MariaDB servisi çalışıyor"
                 
-                # Åifre ile bağlantı testi
+                # Şifre ile bağlantı testi
                 if [ -n "$MYSQL_ROOT_PASSWORD" ]; then
                     if ! mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
                         mysql_error=true
@@ -11150,7 +11150,7 @@ install_individual_service() {
                         print_info "Hata: Access denied veya servis hatası tespit edildi"
                     fi
                 else
-                    # Åifresiz bağlantı testi
+                    # Şifresiz bağlantı testi
                     if ! mysql -u root -e "SELECT 1;" 2>/dev/null && ! sudo mysql -u root -e "SELECT 1;" 2>/dev/null; then
                         mysql_error=true
                         print_error "MySQL bağlantı hatası tespit edildi!"
@@ -11170,7 +11170,7 @@ install_individual_service() {
                 echo ""
                 echo "Seçenekler:"
                 echo "1) Mevcut kurulumu kaldırıp yeniden kur (Önerilen)"
-                echo "2) Åifreyi manuel olarak ayarla ve tekrar dene"
+                echo "2) Şifreyi manuel olarak ayarla ve tekrar dene"
                 echo "3) İptal et"
                 echo ""
                 read -p "Seçiminiz (1-3) [1]: " fix_choice
@@ -11196,14 +11196,14 @@ install_individual_service() {
                             ((retry_count++))
                         done
                         
-                        # Åifre ayarlamayı dene (birden fazla yöntem)
+                        # Şifre ayarlamayı dene (birden fazla yöntem)
                         local manual_password_set=false
                         local max_attempts=3
                         local attempt=0
                         
                         while [ $attempt -lt $max_attempts ] && [ "$manual_password_set" = false ]; do
                             ((attempt++))
-                            print_info "Åifre ayarlama denemesi $attempt/$max_attempts..."
+                            print_info "Şifre ayarlama denemesi $attempt/$max_attempts..."
                             
                             # Yöntem 1: sudo mysql (MariaDB 10.4+ için en güvenilir)
                             if sudo mysql <<EOF 2>/dev/null; then
@@ -11213,7 +11213,7 @@ ALTER USER 'root'@'::1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
 FLUSH PRIVILEGES;
 EOF
                                 manual_password_set=true
-                                print_success "Åifre sudo mysql ile ayarlandı"
+                                print_success "Şifre sudo mysql ile ayarlandı"
                                 break
                             # Yöntem 2: Normal mysql (eğer şifresiz erişim varsa)
                             elif mysql -u root <<EOF 2>/dev/null; then
@@ -11222,12 +11222,12 @@ ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
 FLUSH PRIVILEGES;
 EOF
                                 manual_password_set=true
-                                print_success "Åifre normal mysql ile ayarlandı"
+                                print_success "Şifre normal mysql ile ayarlandı"
                                 break
                             # Yöntem 3: mysqladmin
                             elif mysqladmin -u root password "$MYSQL_ROOT_PASSWORD" 2>/dev/null; then
                                 manual_password_set=true
-                                print_success "Åifre mysqladmin ile ayarlandı"
+                                print_success "Şifre mysqladmin ile ayarlandı"
                                 break
                             else
                                 sleep 2
@@ -11235,7 +11235,7 @@ EOF
                         done
                         
                         if [ "$manual_password_set" = true ]; then
-                            # Åifre ile bağlantı testi
+                            # Şifre ile bağlantı testi
                             sleep 2
                             local verify_count=0
                             local verify_success=false
@@ -11251,7 +11251,7 @@ EOF
                             done
                             
                             if [ "$verify_success" = false ]; then
-                                print_warning "Åifre ayarlandı ancak bağlantı testi başarısız"
+                                print_warning "Şifre ayarlandı ancak bağlantı testi başarısız"
                                 print_info "Manuel test için: mysql -u root -p"
                             fi
                         else
@@ -13447,18 +13447,18 @@ request_mysql_credentials() {
     
     # Önce şifresiz root erişimi dene
     if mysql -e "SELECT 1;" &>/dev/null 2>&1; then
-        print_success "âœ“ Åifresiz root erişimi başarılı."
+        print_success "âœ“ Şifresiz root erişimi başarılı."
         MYSQL_AUTH_REQUIRED=false
         MYSQL_USER="root"
         MYSQL_PASS=""
         return 0
     fi
     
-    # Åifresiz olmuyorsa kimlik bilgilerini iste
+    # Şifresiz olmuyorsa kimlik bilgilerini iste
     read -p "Kullanıcı adı [root]: " MYSQL_USER
     MYSQL_USER=${MYSQL_USER:-root}
     
-    read -sp "Åifre: " MYSQL_PASS
+    read -sp "Şifre: " MYSQL_PASS
     echo ""
     
     # Kimlik bilgilerini test et
@@ -13475,7 +13475,7 @@ request_mysql_credentials() {
             return 1
         fi
     else
-        # Åifresiz deneme
+        # Şifresiz deneme
         if mysql -u"$MYSQL_USER" -e "SELECT 1;" &>/dev/null 2>&1; then
             print_success "âœ“ Bağlantı başarılı: ${MYSQL_USER}"
             MYSQL_AUTH_REQUIRED=true
@@ -13681,7 +13681,7 @@ list_mysql_users() {
     echo -e "${CYAN}Mevcut Kullanıcılar:${NC}"
     echo ""
     
-    mysql_cmd -e "SELECT User as 'Kullanıcı', Host as 'Host', plugin as 'Auth Plugin', password_expired as 'Åifre Süresi Dolmuş' FROM mysql.user WHERE User != '' ORDER BY User, Host;" 2>/dev/null
+    mysql_cmd -e "SELECT User as 'Kullanıcı', Host as 'Host', plugin as 'Auth Plugin', password_expired as 'Şifre Süresi Dolmuş' FROM mysql.user WHERE User != '' ORDER BY User, Host;" 2>/dev/null
     
     echo ""
     
@@ -13745,11 +13745,11 @@ create_database_user() {
         return 1
     fi
     
-    read -sp "Åifre: " password
+    read -sp "Şifre: " password
     echo ""
     
     if [ -z "$password" ]; then
-        print_error "Åifre boş olamaz!"
+        print_error "Şifre boş olamaz!"
         return 1
     fi
     
@@ -13876,7 +13876,7 @@ delete_mysql_user() {
 
 # Kullanıcı şifresini değiştir
 change_mysql_password() {
-    print_header "Kullanıcı Åifresi Değiştir"
+    print_header "Kullanıcı Şifresi Değiştir"
     
     if ! check_mysql_connection; then
         return 1
@@ -13895,25 +13895,25 @@ change_mysql_password() {
     echo ""
     
     if [ -z "$new_password" ]; then
-        print_error "Åifre boş olamaz!"
+        print_error "Şifre boş olamaz!"
         return 1
     fi
     
-    read -sp "Åifre tekrar: " new_password_confirm
+    read -sp "Şifre tekrar: " new_password_confirm
     echo ""
     
     if [ "$new_password" != "$new_password_confirm" ]; then
-        print_error "Åifreler eşleşmiyor!"
+        print_error "Şifreler eşleşmiyor!"
         return 1
     fi
     
-    print_info "Åifre değiştiriliyor..."
+    print_info "Şifre değiştiriliyor..."
     
     if mysql_cmd -e "ALTER USER '${username}'@'${user_host}' IDENTIFIED BY '${new_password}';" 2>/dev/null; then
         mysql_cmd -e "FLUSH PRIVILEGES;" 2>/dev/null
-        print_success "âœ“ Åifre başarıyla değiştirildi: ${username}@${user_host}"
+        print_success "âœ“ Şifre başarıyla değiştirildi: ${username}@${user_host}"
     else
-        print_error "Åifre değiştirilirken hata oluştu!"
+        print_error "Şifre değiştirilirken hata oluştu!"
         return 1
     fi
 }
@@ -14066,7 +14066,7 @@ configure_mysql_remote_access() {
     if [ "$remote_choice" != "0" ]; then
         echo ""
         print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
-        if ask_yes_no "Åimdi yeniden başlatmak ister misiniz?"; then
+        if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
             systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
             print_success "MySQL yeniden başlatıldı."
         fi
@@ -14105,7 +14105,7 @@ configure_mysql_port() {
     
     echo ""
     print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
-    if ask_yes_no "Åimdi yeniden başlatmak ister misiniz?"; then
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
         systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
         print_success "MySQL yeniden başlatıldı."
         
@@ -14359,7 +14359,7 @@ configure_mysql_charset() {
     print_success "Karakter seti ayarlandı: ${charset} / ${collation}"
     print_warning "MySQL'i yeniden başlatmanız gerekir."
     
-    if ask_yes_no "Åimdi yeniden başlatmak ister misiniz?"; then
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
         systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
         print_success "MySQL yeniden başlatıldı."
     fi
@@ -14493,7 +14493,7 @@ optimize_mysql_performance() {
             echo "innodb_buffer_pool_size = ${buffer_size}M" >> /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null
             
             print_warning "Değişikliğin etkili olması için MySQL'i yeniden başlatmanız gerekir."
-            if ask_yes_no "Åimdi yeniden başlatmak ister misiniz?"; then
+            if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
                 systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
                 print_success "MySQL yeniden başlatıldı."
             fi
@@ -14669,7 +14669,7 @@ configure_master_server() {
     
     echo ""
     print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
-    if ask_yes_no "Åimdi yeniden başlatmak ister misiniz?"; then
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
         systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
         sleep 2
         print_success "MySQL yeniden başlatıldı."
@@ -14692,11 +14692,11 @@ create_replication_user() {
     read -p "Kullanıcı adı [replication]: " repl_user
     repl_user=${repl_user:-replication}
     
-    read -sp "Åifre: " repl_pass
+    read -sp "Şifre: " repl_pass
     echo ""
     
     if [ -z "$repl_pass" ]; then
-        print_error "Åifre boş olamaz!"
+        print_error "Şifre boş olamaz!"
         return 1
     fi
     
@@ -14712,7 +14712,7 @@ create_replication_user() {
         print_success "âœ“ Replication kullanıcısı oluşturuldu!"
         echo -e "${GREEN}Kullanıcı:${NC} ${repl_user}"
         echo -e "${GREEN}Host:${NC} ${repl_host}"
-        echo -e "${YELLOW}Åifre:${NC} ${repl_pass}"
+        echo -e "${YELLOW}Şifre:${NC} ${repl_pass}"
         echo ""
         echo -e "${CYAN}Bu bilgileri Slave sunucuda kullanacaksınız!${NC}"
     else
@@ -14765,14 +14765,14 @@ configure_slave_server() {
     
     echo ""
     print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
-    if ask_yes_no "Åimdi yeniden başlatmak ister misiniz?"; then
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
         systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
         sleep 2
         print_success "MySQL yeniden başlatıldı."
     fi
     
     echo ""
-    if ask_yes_no "Åimdi Master sunucuya bağlanmak ister misiniz?"; then
+    if ask_yes_no "Şimdi Master sunucuya bağlanmak ister misiniz?"; then
         setup_slave_connection
     fi
 }
@@ -14804,7 +14804,7 @@ setup_slave_connection() {
     echo ""
     
     if [ -z "$repl_pass" ]; then
-        print_error "Åifre boş olamaz!"
+        print_error "Şifre boş olamaz!"
         return 1
     fi
     
@@ -15041,7 +15041,7 @@ mysql_management_menu() {
         echo "  4) Kullanıcı Listesi"
         echo "  5) Yeni Kullanıcı Oluştur"
         echo "  6) Kullanıcı Sil"
-        echo "  7) Kullanıcı Åifresi Değiştir"
+        echo "  7) Kullanıcı Şifresi Değiştir"
         echo "  8) Kullanıcı Yetkilerini Göster"
         echo ""
         echo -e "${CYAN}Sunucu Yapılandırma:${NC}"
@@ -15058,7 +15058,7 @@ mysql_management_menu() {
         echo ""
         echo -e "${CYAN}Oturum Yönetimi:${NC}"
         echo " 15) Kimlik Bilgilerini Değiştir"
-        echo " 16) Oturumu Kapat (Åifreyi Temizle)"
+        echo " 16) Oturumu Kapat (Şifreyi Temizle)"
         echo ""
         echo "  0) Ana Menüye Dön"
         echo ""
@@ -15122,7 +15122,7 @@ mysql_management_menu() {
                 MYSQL_USER=""
                 MYSQL_PASS=""
                 MYSQL_AUTH_REQUIRED=false
-                print_success "Oturum kapatıldı. Åifre bellekten temizlendi."
+                print_success "Oturum kapatıldı. Şifre bellekten temizlendi."
                 sleep 2
                 continue
                 ;;
@@ -15178,24 +15178,24 @@ request_redis_credentials() {
     
     # Önce şifresiz dene
     if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" PING 2>/dev/null | grep -q "PONG"; then
-        print_success "âœ“ Åifresiz bağlantı başarılı."
+        print_success "âœ“ Şifresiz bağlantı başarılı."
         REDIS_AUTH_REQUIRED=false
         REDIS_PASS=""
         return 0
     fi
     
-    # Åifre iste
-    read -sp "Redis Åifresi (boş bırakabilirsiniz): " REDIS_PASS
+    # Şifre iste
+    read -sp "Redis Şifresi (boş bırakabilirsiniz): " REDIS_PASS
     echo ""
     
-    # Åifre ile test et
+    # Şifre ile test et
     if [ -n "$REDIS_PASS" ]; then
         if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" PING 2>/dev/null | grep -q "PONG"; then
             print_success "âœ“ Bağlantı başarılı: ${REDIS_HOST}:${REDIS_PORT}"
             REDIS_AUTH_REQUIRED=true
             return 0
         else
-            print_error "Bağlantı başarısız! Åifre veya bağlantı bilgileri hatalı."
+            print_error "Bağlantı başarısız! Şifre veya bağlantı bilgileri hatalı."
             REDIS_HOST="127.0.0.1"
             REDIS_PORT="6379"
             REDIS_PASS=""
@@ -15203,7 +15203,7 @@ request_redis_credentials() {
             return 1
         fi
     else
-        print_error "Bağlantı başarısız! Åifre gerekiyor."
+        print_error "Bağlantı başarısız! Şifre gerekiyor."
         return 1
     fi
 }
@@ -15468,13 +15468,13 @@ configure_redis_server() {
     echo "Config Dosyası: ${config_file}"
     echo "Bind Address: ${bind_addr:-127.0.0.1}"
     echo "Port: ${port:-6379}"
-    echo "Åifre: $([ -n "$requirepass" ] && echo "Ayarlı" || echo "Yok")"
+    echo "Şifre: $([ -n "$requirepass" ] && echo "Ayarlı" || echo "Yok")"
     echo ""
     
     echo -e "${CYAN}Yapılandırma Seçenekleri:${NC}"
     echo "  1) Remote Erişim Ayarları (Bind Address)"
     echo "  2) Port Ayarları"
-    echo "  3) Åifre Ayarla/Kaldır (requirepass)"
+    echo "  3) Şifre Ayarla/Kaldır (requirepass)"
     echo "  4) Max Memory Ayarla"
     echo "  5) Max Memory Policy Ayarla"
     echo "  6) Max Clients Ayarla"
@@ -15529,8 +15529,8 @@ configure_redis_server() {
             print_success "Port ayarlandı: ${new_port}"
             ;;
         3)
-            echo "1) Åifre ayarla"
-            echo "2) Åifreyi kaldır"
+            echo "1) Şifre ayarla"
+            echo "2) Şifreyi kaldır"
             read -p "Seçim: " pass_choice
             
             if [ "$pass_choice" = "1" ]; then
@@ -15539,14 +15539,14 @@ configure_redis_server() {
                 if [ -n "$new_pass" ]; then
                     set_redis_config_value "requirepass" "$new_pass"
                     redis_cmd CONFIG SET requirepass "$new_pass"
-                    print_success "Åifre ayarlandı."
+                    print_success "Şifre ayarlandı."
                     REDIS_PASS="$new_pass"
                     REDIS_AUTH_REQUIRED=true
                 fi
             else
                 set_redis_config_value "requirepass" '""'
                 redis_cmd CONFIG SET requirepass ""
-                print_success "Åifre kaldırıldı."
+                print_success "Şifre kaldırıldı."
                 REDIS_PASS=""
                 REDIS_AUTH_REQUIRED=false
             fi
@@ -15749,7 +15749,7 @@ configure_redis_replication() {
             read -p "Master Port [6379]: " master_port
             master_port=${master_port:-6379}
             
-            read -sp "Master Åifresi (varsa): " master_pass
+            read -sp "Master Şifresi (varsa): " master_pass
             echo ""
             
             if [ -n "$master_pass" ]; then
@@ -15810,7 +15810,7 @@ redis_management_menu() {
         echo "  3) Sunucu İstatistikleri"
         echo ""
         echo -e "${CYAN}Sunucu Yapılandırma:${NC}"
-        echo "  4) Sunucu Ayarları (Port, Bind, Åifre)"
+        echo "  4) Sunucu Ayarları (Port, Bind, Şifre)"
         echo "  5) Persistence Ayarları (RDB, AOF)"
         echo "  6) Replication Ayarları (Master-Slave)"
         echo ""
@@ -16850,7 +16850,7 @@ run_new_installation() {
         return 1
     fi
     
-    # KURULUM BAÅLANGICI
+    # KURULUM BAŞLANGICI
     print_header "Kurulum Başlatılıyor..."
     
     # Sistem güncellemeleri
