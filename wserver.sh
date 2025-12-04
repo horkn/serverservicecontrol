@@ -14646,9 +14646,9 @@ configure_master_server() {
     # Hangi veritabanları replike edilecek?
     echo ""
     echo "Replikasyon kapsamı:"
-    echo "1) Tüm veritabanları"
-    echo "2) Belirli veritabanları"
-    echo "3) Belirli veritabanları hariç tümü"
+    echo "1 - Tüm veritabanları"
+    echo "2 - Belirli veritabanları"
+    echo "3 - Belirli veritabanları hariç tümü"
     read -p "Seçim [1]: " db_choice
     db_choice=${db_choice:-1}
     
