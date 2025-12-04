@@ -236,7 +236,7 @@ configure_multi_server() {
     DATABASE_SERVER_IP=${db_ip:-$current_public_ip}
     
     if ask_yes_no "MySQL Master'ın local network IP'si var mı?"; then
-        read -p "MySQL Master Local IP (örn: 10.x.x.x veya 192.168.x.x): " db_local
+        read -p "MySQL Master Local IP - örn 10.x.x.x veya 192.168.x.x: " db_local
         DATABASE_LOCAL_IP="$db_local"
     fi
     
@@ -253,7 +253,7 @@ configure_multi_server() {
     REDIS_SERVER_IP=${redis_ip:-$current_public_ip}
     
     if ask_yes_no "Redis Master'ın local network IP'si var mı?"; then
-        read -p "Redis Master Local IP (örn: 10.x.x.x veya 192.168.x.x): " redis_local
+        read -p "Redis Master Local IP - örn 10.x.x.x veya 192.168.x.x: " redis_local
         REDIS_LOCAL_IP="$redis_local"
     fi
     
@@ -2993,7 +2993,7 @@ select_framework() {
                 return 0
                 ;;
             6) 
-                read -p "Özel web root dizinini girin (örn: public, web, app/public): " custom_root
+                read -p "Özel web root dizinini girin - örn public, web, app/public: " custom_root
                 FRAMEWORK="custom"
                 WEB_ROOT="$custom_root"
                 return 0
@@ -3164,7 +3164,7 @@ install_php() {
         apt-cache search php | grep "fpm" | grep -E "php[0-9]" | head -5
         
         if ask_yes_no "PHP $version bulunamadı. Mevcut bir versiyonla devam etmek ister misiniz?"; then
-            read -p "Kullanılacak PHP versiyonunu girin (örn: 8.3, 8.4): " version
+            read -p "Kullanılacak PHP versiyonunu girin - örn 8.3, 8.4: " version
         else
             print_error "PHP kurulumu iptal edildi"
             return 1
@@ -3861,7 +3861,7 @@ update_nginx_configs_for_php() {
         print_error "Kurulu PHP versiyonu bulunamadı!"
         print_info "PHP kurulu görünüyor ama versiyon tespit edilemedi."
         print_info "Lütfen manuel olarak PHP versiyonunu girin:"
-        read -p "PHP versiyonu (örn: 8.3, 8.4): " manual_version
+        read -p "PHP versiyonu - örn 8.3, 8.4: " manual_version
         if [ -n "$manual_version" ]; then
             php_versions="$manual_version"
         else
@@ -5322,7 +5322,7 @@ quick_fix_php_extensions() {
         else
             # PHP kurulu ama versiyonu tespit edilemiyor
             print_warning "PHP kurulu ancak versiyon tespit edilemedi"
-            read -p "PHP versiyonunu manuel olarak girin (örn: 8.3, 8.4): " manual_version
+            read -p "PHP versiyonunu manuel olarak girin - örn 8.3, 8.4: " manual_version
             if [ -n "$manual_version" ]; then
                 php_version="$manual_version"
                 php_binary="php$manual_version"
@@ -10734,7 +10734,7 @@ install_firewall() {
     
     if systemctl is-active --quiet mariadb; then
         if ask_yes_no "MySQL (3306) portunu açmak istiyor musunuz? (Sadece güvenli ağlardan)"; then
-            read -p "MySQL için IP adresi veya subnet (örn: 192.168.1.0/24) [Tümü]: " mysql_network
+            read -p "MySQL için IP adresi veya subnet - örn 192.168.1.0/24 [Tümü]: " mysql_network
             mysql_network=${mysql_network:-"0.0.0.0/0"}
             ufw allow from $mysql_network to any port 3306 comment 'MySQL'
         fi
@@ -13779,7 +13779,7 @@ create_database_user() {
     case $host_choice in
         2) user_host="%";;
         3) 
-            read -p "IP veya subnet (örn: 192.168.1.% veya 10.0.0.5): " user_host
+            read -p "IP veya subnet - örn 192.168.1.% veya 10.0.0.5: " user_host
             if [ -z "$user_host" ]; then
                 user_host="localhost"
             fi
@@ -13814,7 +13814,7 @@ create_database_user() {
                 1) privileges="ALL PRIVILEGES";;
                 2) privileges="SELECT";;
                 4) 
-                    read -p "Yetkileri virgülle ayırarak girin (örn: SELECT,INSERT,UPDATE): " privileges
+                    read -p "Yetkileri virgülle ayırarak girin - örn SELECT,INSERT,UPDATE: " privileges
                     ;;
                 *) privileges="SELECT, INSERT, UPDATE, DELETE";;
             esac
@@ -14632,7 +14632,7 @@ configure_master_server() {
     echo ""
     
     # Server ID belirle
-    read -p "Server ID (benzersiz olmalı) [1]: " server_id
+    read -p "Server ID - benzersiz olmali [1]: " server_id
     server_id=${server_id:-1}
     
     # Binary log dosya adı
@@ -14640,7 +14640,7 @@ configure_master_server() {
     log_bin_name=${log_bin_name:-mysql-bin}
     
     # Binary log saklanma süresi
-    read -p "Binary log saklanma süresi (gün) [7]: " expire_days
+    read -p "Binary log saklanma süresi - gün [7]: " expire_days
     expire_days=${expire_days:-7}
     
     # Hangi veritabanları replike edilecek?
@@ -14655,11 +14655,11 @@ configure_master_server() {
     local binlog_filter=""
     case $db_choice in
         2)
-            read -p "Replike edilecek veritabanları (virgülle ayırın): " include_dbs
+            read -p "Replike edilecek veritabanları - virgülle ayırın: " include_dbs
             binlog_filter="binlog-do-db"
             ;;
         3)
-            read -p "Replike edilMEyecek veritabanları (virgülle ayırın): " exclude_dbs
+            read -p "Replike edilMEyecek veritabanları - virgülle ayırın: " exclude_dbs
             binlog_filter="binlog-ignore-db"
             ;;
     esac
@@ -14730,7 +14730,7 @@ create_replication_user() {
         return 1
     fi
     
-    read -p "Erişim kaynağı (IP veya %) [%]: " repl_host
+    read -p "Erişim kaynağı - IP veya % [%]: " repl_host
     repl_host=${repl_host:-"%"}
     
     print_info "Replication kullanıcısı oluşturuluyor..."
@@ -14765,7 +14765,7 @@ configure_slave_server() {
     echo ""
     
     # Server ID belirle
-    read -p "Server ID (Master'dan farklı olmalı) [2]: " server_id
+    read -p "Server ID - Master'dan farklı olmali [2]: " server_id
     server_id=${server_id:-2}
     
     # Relay log
@@ -14840,9 +14840,9 @@ setup_slave_connection() {
     
     echo ""
     echo "Master binary log bilgileri:"
-    echo "(Master sunucuda 'SHOW MASTER STATUS' çıktısından alın)"
-    read -p "Binary log dosyası (örn: mysql-bin.000001): " master_log_file
-    read -p "Position (örn: 154): " master_log_pos
+    echo "Master sunucuda 'SHOW MASTER STATUS' çıktısından alın"
+    read -p "Binary log dosyası - örn mysql-bin.000001: " master_log_file
+    read -p "Position - örn 154: " master_log_pos
     
     if [ -z "$master_log_file" ] || [ -z "$master_log_pos" ]; then
         print_error "Binary log dosyası ve position gerekli!"
@@ -15394,7 +15394,7 @@ manage_redis_keys() {
     
     case $key_choice in
         1)
-            read -p "Pattern (* = tümü) [*]: " pattern
+            read -p "Pattern - * tümü [*]: " pattern
             pattern=${pattern:-*}
             
             echo -e "\n${CYAN}Eşleşen Key'ler:${NC}"
@@ -15426,7 +15426,7 @@ manage_redis_keys() {
             fi
             ;;
         4)
-            read -p "Key adı (virgülle ayırarak birden fazla): " keys_to_delete
+            read -p "Key adı - virgülle ayırarak birden fazla: " keys_to_delete
             if [ -n "$keys_to_delete" ]; then
                 redis_cmd DEL $keys_to_delete
                 print_success "Key(ler) silindi."
@@ -15452,7 +15452,7 @@ manage_redis_keys() {
             ;;
         6)
             read -p "Key adı: " key_name
-            read -p "Süre (saniye): " expire_time
+            read -p "Süre - saniye: " expire_time
             
             if [ -n "$key_name" ] && [ -n "$expire_time" ]; then
                 redis_cmd EXPIRE "$key_name" "$expire_time"
@@ -15460,7 +15460,7 @@ manage_redis_keys() {
             fi
             ;;
         7)
-            read -p "Veritabanı numarası (0-15) [0]: " db_num
+            read -p "Veritabanı numarası 0-15 [0]: " db_num
             db_num=${db_num:-0}
             
             redis_cmd SELECT "$db_num"
@@ -15591,7 +15591,7 @@ configure_redis_server() {
             local current_maxmem=$(redis_cmd CONFIG GET maxmemory | tail -1)
             echo "Mevcut max memory: ${current_maxmem} bytes"
             
-            read -p "Yeni max memory (örn: 256mb, 1gb): " new_maxmem
+            read -p "Yeni max memory - örn 256mb veya 1gb: " new_maxmem
             if [ -n "$new_maxmem" ]; then
                 redis_cmd CONFIG SET maxmemory "$new_maxmem"
                 set_redis_config_value "maxmemory" "$new_maxmem"
@@ -15628,7 +15628,7 @@ configure_redis_server() {
             print_success "Max clients ayarlandı: ${max_clients}"
             ;;
         7)
-            read -p "Timeout (saniye, 0=süresiz) [0]: " timeout
+            read -p "Timeout saniye - 0 süresiz [0]: " timeout
             timeout=${timeout:-0}
             
             redis_cmd CONFIG SET timeout "$timeout"
@@ -15703,7 +15703,7 @@ configure_redis_persistence() {
             echo "Mevcut: $(get_redis_config_value 'save')"
             echo ""
             echo "Örnek: save 900 1 (900 saniyede en az 1 değişiklik)"
-            read -p "RDB save kuralı ekle (örn: 900 1): " save_rule
+            read -p "RDB save kuralı ekle - örn 900 1: " save_rule
             
             if [ -n "$save_rule" ]; then
                 redis_cmd CONFIG SET save "$save_rule"
