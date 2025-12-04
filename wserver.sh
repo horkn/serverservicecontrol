@@ -14992,7 +14992,7 @@ mysql_replication_menu() {
                 mysql_cmd -e "SHOW MASTER STATUS\G" 2>/dev/null
                 ;;
             8)
-                print_header "Slave Status (Detaylı)"
+                print_header "Slave Status - Detayli"
                 mysql_cmd -e "SHOW SLAVE STATUS\G" 2>/dev/null
                 ;;
             0)
@@ -15033,14 +15033,14 @@ mysql_management_menu() {
         
         echo ""
         echo -e "${CYAN}Veritabanı Yönetimi:${NC}"
-        echo "  1) Veritabanı Listesi"
-        echo "  2) Yeni Veritabanı Oluştur"
-        echo "  3) Veritabanı Sil"
+        echo "  1. Veritabani Listesi"
+        echo "  2. Yeni Veritabani Olustur"
+        echo "  3. Veritabani Sil"
         echo ""
         echo -e "${CYAN}Kullanıcı Yönetimi:${NC}"
-        echo "  4) Kullanıcı Listesi"
-        echo "  5) Yeni Kullanıcı Oluştur"
-        echo "  6) Kullanıcı Sil"
+        echo "  4. Kullanici Listesi"
+        echo "  5. Yeni Kullanici Olustur"
+        echo "  6. Kullanici Sil"
         echo "  7) Kullanıcı Şifresi Değiştir"
         echo "  8) Kullanıcı Yetkilerini Göster"
         echo ""
