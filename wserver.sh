@@ -15186,7 +15186,7 @@ request_redis_credentials() {
     
     # Şifre iste
     read -sp "Redis Sifresi - bos birakabilirsiniz: " REDIS_PASS
- Şecho ""
+    echo ""
     
     # Şifre ile test et
     if [ -n "$REDIS_PASS" ]; then
