@@ -13419,6 +13419,77 @@ EOF
 # MYSQL/MARIADB YÖNETİM FONKSİYONLARI
 # ==========================================
 
+# MySQL kimlik bilgileri (oturum bazlı)
+MYSQL_USER=""
+MYSQL_PASS=""
+MYSQL_AUTH_REQUIRED=false
+
+# MySQL komut oluşturucu (kimlik bilgileriyle)
+mysql_cmd() {
+    if [ "$MYSQL_AUTH_REQUIRED" = true ] && [ -n "$MYSQL_USER" ]; then
+        if [ -n "$MYSQL_PASS" ]; then
+            mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" "$@"
+        else
+            mysql -u"$MYSQL_USER" "$@"
+        fi
+    else
+        mysql "$@"
+    fi
+}
+
+# MySQL kimlik bilgilerini iste
+request_mysql_credentials() {
+    print_header "MySQL/MariaDB Kimlik Bilgileri"
+    
+    echo -e "${YELLOW}MySQL/MariaDB erişimi için kimlik bilgilerinizi girin.${NC}"
+    echo -e "${CYAN}Not: Root kullanıcısı veya yeterli yetkiye sahip kullanıcı gereklidir.${NC}"
+    echo ""
+    
+    # Önce şifresiz root erişimi dene
+    if mysql -e "SELECT 1;" &>/dev/null 2>&1; then
+        print_success "✓ Şifresiz root erişimi başarılı."
+        MYSQL_AUTH_REQUIRED=false
+        MYSQL_USER="root"
+        MYSQL_PASS=""
+        return 0
+    fi
+    
+    # Şifresiz olmuyorsa kimlik bilgilerini iste
+    read -p "Kullanıcı adı [root]: " MYSQL_USER
+    MYSQL_USER=${MYSQL_USER:-root}
+    
+    read -sp "Şifre: " MYSQL_PASS
+    echo ""
+    
+    # Kimlik bilgilerini test et
+    if [ -n "$MYSQL_PASS" ]; then
+        if mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -e "SELECT 1;" &>/dev/null 2>&1; then
+            print_success "✓ Bağlantı başarılı: ${MYSQL_USER}"
+            MYSQL_AUTH_REQUIRED=true
+            return 0
+        else
+            print_error "Bağlantı başarısız! Kullanıcı adı veya şifre hatalı."
+            MYSQL_USER=""
+            MYSQL_PASS=""
+            MYSQL_AUTH_REQUIRED=false
+            return 1
+        fi
+    else
+        # Şifresiz deneme
+        if mysql -u"$MYSQL_USER" -e "SELECT 1;" &>/dev/null 2>&1; then
+            print_success "✓ Bağlantı başarılı: ${MYSQL_USER}"
+            MYSQL_AUTH_REQUIRED=true
+            return 0
+        else
+            print_error "Bağlantı başarısız!"
+            MYSQL_USER=""
+            MYSQL_PASS=""
+            MYSQL_AUTH_REQUIRED=false
+            return 1
+        fi
+    fi
+}
+
 # MySQL bağlantı kontrolü
 check_mysql_connection() {
     if ! command -v mysql &>/dev/null; then
@@ -13428,7 +13499,7 @@ check_mysql_connection() {
     
     if ! systemctl is-active --quiet mariadb 2>/dev/null && ! systemctl is-active --quiet mysql 2>/dev/null; then
         print_error "MySQL/MariaDB servisi çalışmıyor!"
-        echo -e "${YELLOW}Servisi başlatmak ister misiniz? (e/h):${NC} "
+        echo -ne "${YELLOW}Servisi başlatmak ister misiniz? (e/h):${NC} "
         read -r start_mysql
         if [[ $start_mysql =~ ^[Ee]$ ]]; then
             systemctl start mariadb 2>/dev/null || systemctl start mysql 2>/dev/null
@@ -13438,9 +13509,21 @@ check_mysql_connection() {
         fi
     fi
     
-    if ! mysql -e "SELECT 1;" &>/dev/null; then
-        print_warning "Root şifresi gerekli. Şifresiz bağlantı deneyin veya şifre girin."
-        return 2
+    # Kimlik bilgileri yoksa veya geçersizse iste
+    if [ -z "$MYSQL_USER" ]; then
+        if ! request_mysql_credentials; then
+            return 1
+        fi
+    else
+        # Mevcut kimlik bilgilerini test et
+        if ! mysql_cmd -e "SELECT 1;" &>/dev/null 2>&1; then
+            print_warning "Mevcut kimlik bilgileri geçersiz. Tekrar giriş yapın."
+            MYSQL_USER=""
+            MYSQL_PASS=""
+            if ! request_mysql_credentials; then
+                return 1
+            fi
+        fi
     fi
     
     return 0
@@ -13457,7 +13540,7 @@ list_databases() {
     echo -e "${CYAN}Mevcut Veritabanları:${NC}"
     echo ""
     
-    mysql -e "SELECT 
+    mysql_cmd -e "SELECT 
         SCHEMA_NAME as 'Veritabanı',
         DEFAULT_CHARACTER_SET_NAME as 'Karakter Seti',
         DEFAULT_COLLATION_NAME as 'Collation',
@@ -13466,13 +13549,13 @@ list_databases() {
     LEFT JOIN information_schema.TABLES ON SCHEMATA.SCHEMA_NAME = TABLES.TABLE_SCHEMA
     WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
     GROUP BY SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME
-    ORDER BY SCHEMA_NAME;" 2>/dev/null || mysql -e "SHOW DATABASES;"
+    ORDER BY SCHEMA_NAME;" 2>/dev/null || mysql_cmd -e "SHOW DATABASES;"
     
     echo ""
     
     # Toplam istatistikler
-    local db_count=$(mysql -N -e "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null)
-    local total_size=$(mysql -N -e "SELECT ROUND(SUM(DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null)
+    local db_count=$(mysql_cmd -N -e "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null)
+    local total_size=$(mysql_cmd -N -e "SELECT ROUND(SUM(DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null)
     
     echo -e "${GREEN}Toplam Veritabanı:${NC} ${db_count}"
     echo -e "${GREEN}Toplam Boyut:${NC} ${total_size} MB"
@@ -13498,7 +13581,7 @@ create_database() {
     fi
     
     # Veritabanı zaten var mı kontrol et
-    if mysql -e "USE $db_name;" 2>/dev/null; then
+    if mysql_cmd -e "USE $db_name;" 2>/dev/null; then
         print_error "Bu veritabanı zaten mevcut!"
         return 1
     fi
@@ -13518,7 +13601,7 @@ create_database() {
     
     print_info "Veritabanı oluşturuluyor: $db_name"
     
-    if mysql -e "CREATE DATABASE \`$db_name\` CHARACTER SET $charset COLLATE $collation;" 2>/dev/null; then
+    if mysql_cmd -e "CREATE DATABASE \`$db_name\` CHARACTER SET $charset COLLATE $collation;" 2>/dev/null; then
         print_success "✓ Veritabanı başarıyla oluşturuldu!"
         echo -e "${GREEN}Adı:${NC} $db_name"
         echo -e "${GREEN}Karakter Seti:${NC} $charset"
@@ -13545,7 +13628,7 @@ delete_database() {
     
     # Veritabanı listesini göster
     echo -e "${CYAN}Mevcut Veritabanları:${NC}"
-    mysql -N -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys') ORDER BY SCHEMA_NAME;" 2>/dev/null | nl
+    mysql_cmd -N -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys') ORDER BY SCHEMA_NAME;" 2>/dev/null | nl
     
     echo ""
     read -p "Silinecek veritabanı adı: " db_name
@@ -13556,7 +13639,7 @@ delete_database() {
     fi
     
     # Veritabanı var mı kontrol et
-    if ! mysql -e "USE $db_name;" 2>/dev/null; then
+    if ! mysql_cmd -e "USE $db_name;" 2>/dev/null; then
         print_error "Bu veritabanı mevcut değil!"
         return 1
     fi
@@ -13588,7 +13671,7 @@ delete_database() {
     
     print_info "Veritabanı siliniyor..."
     
-    if mysql -e "DROP DATABASE \`$db_name\`;" 2>/dev/null; then
+    if mysql_cmd -e "DROP DATABASE \`$db_name\`;" 2>/dev/null; then
         print_success "✓ Veritabanı başarıyla silindi: $db_name"
     else
         print_error "Veritabanı silinirken hata oluştu!"
@@ -13607,7 +13690,7 @@ list_mysql_users() {
     echo -e "${CYAN}Mevcut Kullanıcılar:${NC}"
     echo ""
     
-    mysql -e "SELECT 
+    mysql_cmd -e "SELECT 
         User as 'Kullanıcı',
         Host as 'Host',
         plugin as 'Auth Plugin',
@@ -13619,7 +13702,7 @@ list_mysql_users() {
     echo ""
     
     # Toplam kullanıcı sayısı
-    local user_count=$(mysql -N -e "SELECT COUNT(*) FROM mysql.user WHERE User != '';" 2>/dev/null)
+    local user_count=$(mysql_cmd -N -e "SELECT COUNT(*) FROM mysql.user WHERE User != '';" 2>/dev/null)
     echo -e "${GREEN}Toplam Kullanıcı:${NC} ${user_count}"
 }
 
@@ -13639,7 +13722,7 @@ show_user_grants() {
     echo -e "${CYAN}Kullanıcı: ${username}@${user_host}${NC}"
     echo ""
     
-    if mysql -e "SHOW GRANTS FOR '${username}'@'${user_host}';" 2>/dev/null; then
+    if mysql_cmd -e "SHOW GRANTS FOR '${username}'@'${user_host}';" 2>/dev/null; then
         echo ""
         print_success "Yetkiler başarıyla gösterildi."
     else
@@ -13661,7 +13744,7 @@ create_database_user() {
         
         # Veritabanı seçimi
         echo -e "${CYAN}Mevcut Veritabanları:${NC}"
-        mysql -N -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys') ORDER BY SCHEMA_NAME;" 2>/dev/null | nl
+        mysql_cmd -N -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys') ORDER BY SCHEMA_NAME;" 2>/dev/null | nl
         
         echo ""
         read -p "Veritabanı adı (boş bırakırsanız tüm veritabanlarına erişim): " target_db
@@ -13707,13 +13790,13 @@ create_database_user() {
     print_info "Kullanıcı oluşturuluyor: ${username}@${user_host}"
     
     # Kullanıcı oluştur
-    if mysql -e "CREATE USER '${username}'@'${user_host}' IDENTIFIED BY '${password}';" 2>/dev/null; then
+    if mysql_cmd -e "CREATE USER '${username}'@'${user_host}' IDENTIFIED BY '${password}';" 2>/dev/null; then
         print_success "✓ Kullanıcı başarıyla oluşturuldu!"
         
         # Yetkilendirme
         if [ -n "$target_db" ]; then
             # Belirli veritabanına yetki ver
-            if mysql -e "GRANT ALL PRIVILEGES ON \`${target_db}\`.* TO '${username}'@'${user_host}';" 2>/dev/null; then
+            if mysql_cmd -e "GRANT ALL PRIVILEGES ON \`${target_db}\`.* TO '${username}'@'${user_host}';" 2>/dev/null; then
                 print_success "✓ Veritabanı yetkisi verildi: $target_db"
             fi
         else
@@ -13739,13 +13822,13 @@ create_database_user() {
             read -p "Veritabanı (* = tümü) [*]: " grant_db
             grant_db=${grant_db:-*}
             
-            if mysql -e "GRANT ${privileges} ON \`${grant_db}\`.* TO '${username}'@'${user_host}';" 2>/dev/null; then
+            if mysql_cmd -e "GRANT ${privileges} ON \`${grant_db}\`.* TO '${username}'@'${user_host}';" 2>/dev/null; then
                 print_success "✓ Yetkiler başarıyla verildi!"
             fi
         fi
         
         # Yetkileri uygula
-        mysql -e "FLUSH PRIVILEGES;" 2>/dev/null
+        mysql_cmd -e "FLUSH PRIVILEGES;" 2>/dev/null
         
         echo ""
         echo -e "${GREEN}Kullanıcı Bilgileri:${NC}"
@@ -13770,7 +13853,7 @@ delete_mysql_user() {
     
     # Kullanıcı listesini göster
     echo -e "${CYAN}Mevcut Kullanıcılar:${NC}"
-    mysql -e "SELECT User, Host FROM mysql.user WHERE User != '' ORDER BY User;" 2>/dev/null
+    mysql_cmd -e "SELECT User, Host FROM mysql.user WHERE User != '' ORDER BY User;" 2>/dev/null
     
     echo ""
     read -p "Silinecek kullanıcı adı: " username
@@ -13798,8 +13881,8 @@ delete_mysql_user() {
     
     print_info "Kullanıcı siliniyor..."
     
-    if mysql -e "DROP USER '${username}'@'${user_host}';" 2>/dev/null; then
-        mysql -e "FLUSH PRIVILEGES;" 2>/dev/null
+    if mysql_cmd -e "DROP USER '${username}'@'${user_host}';" 2>/dev/null; then
+        mysql_cmd -e "FLUSH PRIVILEGES;" 2>/dev/null
         print_success "✓ Kullanıcı başarıyla silindi: ${username}@${user_host}"
     else
         print_error "Kullanıcı silinirken hata oluştu!"
@@ -13842,8 +13925,8 @@ change_mysql_password() {
     
     print_info "Şifre değiştiriliyor..."
     
-    if mysql -e "ALTER USER '${username}'@'${user_host}' IDENTIFIED BY '${new_password}';" 2>/dev/null; then
-        mysql -e "FLUSH PRIVILEGES;" 2>/dev/null
+    if mysql_cmd -e "ALTER USER '${username}'@'${user_host}' IDENTIFIED BY '${new_password}';" 2>/dev/null; then
+        mysql_cmd -e "FLUSH PRIVILEGES;" 2>/dev/null
         print_success "✓ Şifre başarıyla değiştirildi: ${username}@${user_host}"
     else
         print_error "Şifre değiştirilirken hata oluştu!"
@@ -13860,7 +13943,7 @@ show_mysql_settings() {
     fi
     
     echo -e "${CYAN}Sistem Bilgileri:${NC}"
-    mysql -e "SELECT 
+    mysql_cmd -e "SELECT 
         @@version as 'Versiyon',
         @@version_comment as 'Dağıtım',
         @@datadir as 'Veri Dizini',
@@ -13869,7 +13952,7 @@ show_mysql_settings() {
     
     echo ""
     echo -e "${CYAN}Bellek ve Performans:${NC}"
-    mysql -e "SELECT 
+    mysql_cmd -e "SELECT 
         @@max_connections as 'Max Bağlantı',
         @@innodb_buffer_pool_size / 1024 / 1024 / 1024 as 'InnoDB Buffer (GB)',
         @@query_cache_size / 1024 / 1024 as 'Query Cache (MB)',
@@ -13878,11 +13961,11 @@ show_mysql_settings() {
     
     echo ""
     echo -e "${CYAN}Aktif Bağlantılar:${NC}"
-    mysql -e "SHOW PROCESSLIST;" 2>/dev/null | head -20
+    mysql_cmd -e "SHOW PROCESSLIST;" 2>/dev/null | head -20
     
     echo ""
     echo -e "${CYAN}Durum İstatistikleri:${NC}"
-    mysql -e "SHOW STATUS LIKE 'Threads%'; SHOW STATUS LIKE 'Questions'; SHOW STATUS LIKE 'Uptime';" 2>/dev/null
+    mysql_cmd -e "SHOW STATUS LIKE 'Threads%'; SHOW STATUS LIKE 'Questions'; SHOW STATUS LIKE 'Uptime';" 2>/dev/null
 }
 
 # MySQL/MariaDB performans optimizasyonu
@@ -13932,31 +14015,31 @@ optimize_mysql_performance() {
             read -p "Max Connections [151]: " max_conn
             max_conn=${max_conn:-151}
             
-            mysql -e "SET GLOBAL max_connections = $max_conn;" 2>/dev/null
+            mysql_cmd -e "SET GLOBAL max_connections = $max_conn;" 2>/dev/null
             print_success "Max connections değiştirildi: $max_conn"
             ;;
         3)
-            local slow_log=$(mysql -N -e "SELECT @@slow_query_log;" 2>/dev/null)
+            local slow_log=$(mysql_cmd -N -e "SELECT @@slow_query_log;" 2>/dev/null)
             if [ "$slow_log" = "1" ]; then
-                mysql -e "SET GLOBAL slow_query_log = 0;" 2>/dev/null
+                mysql_cmd -e "SET GLOBAL slow_query_log = 0;" 2>/dev/null
                 print_success "Slow query log devre dışı bırakıldı."
             else
-                mysql -e "SET GLOBAL slow_query_log = 1; SET GLOBAL long_query_time = 2;" 2>/dev/null
+                mysql_cmd -e "SET GLOBAL slow_query_log = 1; SET GLOBAL long_query_time = 2;" 2>/dev/null
                 print_success "Slow query log etkinleştirildi (2 saniyeden uzun sorgular)."
             fi
             ;;
         4)
             print_info "Tüm tablolar optimize ediliyor... (Bu işlem uzun sürebilir)"
-            mysql -N -e "SELECT CONCAT('OPTIMIZE TABLE \`', table_schema, '\`.\`', table_name, '\`;') 
+            mysql_cmd -N -e "SELECT CONCAT('OPTIMIZE TABLE \`', table_schema, '\`.\`', table_name, '\`;') 
             FROM information_schema.tables 
-            WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null | mysql 2>/dev/null
+            WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null | mysql_cmd 2>/dev/null
             print_success "Tüm tablolar optimize edildi."
             ;;
         5)
             print_info "Tüm tablolar analyze ediliyor..."
-            mysql -N -e "SELECT CONCAT('ANALYZE TABLE \`', table_schema, '\`.\`', table_name, '\`;') 
+            mysql_cmd -N -e "SELECT CONCAT('ANALYZE TABLE \`', table_schema, '\`.\`', table_name, '\`;') 
             FROM information_schema.tables 
-            WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null | mysql 2>/dev/null
+            WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null | mysql_cmd 2>/dev/null
             print_success "Tüm tablolar analyze edildi."
             ;;
     esac
@@ -13973,6 +14056,13 @@ mysql_management_menu() {
             echo -e "${GREEN}✓ MySQL/MariaDB Durumu: Çalışıyor${NC}"
         else
             echo -e "${RED}✗ MySQL/MariaDB Durumu: Durmuş${NC}"
+        fi
+        
+        # Bağlı kullanıcı göster
+        if [ -n "$MYSQL_USER" ]; then
+            echo -e "${CYAN}Bağlı Kullanıcı: ${MYSQL_USER}${NC}"
+        else
+            echo -e "${YELLOW}Kimlik bilgisi girilmemiş (ilk işlemde istenecek)${NC}"
         fi
         
         echo ""
@@ -13994,10 +14084,14 @@ mysql_management_menu() {
         echo " 11) Yedekleme (Backup) - Tüm Veritabanları"
         echo " 12) Geri Yükleme (Restore)"
         echo ""
+        echo -e "${CYAN}Oturum Yönetimi:${NC}"
+        echo " 13) Kimlik Bilgilerini Değiştir"
+        echo " 14) Oturumu Kapat (Şifreyi Temizle)"
+        echo ""
         echo "  0) Ana Menüye Dön"
         echo ""
         
-        read -p "Seçiminiz [0-12]: " mysql_choice
+        read -p "Seçiminiz [0-14]: " mysql_choice
         
         case $mysql_choice in
             1)
@@ -14036,7 +14130,27 @@ mysql_management_menu() {
             12)
                 restore_database
                 ;;
+            13)
+                # Kimlik bilgilerini sıfırla ve tekrar iste
+                MYSQL_USER=""
+                MYSQL_PASS=""
+                MYSQL_AUTH_REQUIRED=false
+                print_info "Kimlik bilgileri temizlendi. Yeni bilgiler istenecek..."
+                sleep 2
+                continue
+                ;;
+            14)
+                # Oturumu kapat
+                MYSQL_USER=""
+                MYSQL_PASS=""
+                MYSQL_AUTH_REQUIRED=false
+                print_success "Oturum kapatıldı. Şifre bellekten temizlendi."
+                sleep 2
+                continue
+                ;;
             0)
+                # Çıkarken şifreyi temizle
+                MYSQL_PASS=""
                 return
                 ;;
             *)
