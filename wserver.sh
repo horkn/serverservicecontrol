@@ -8325,11 +8325,42 @@ PMACONF
         # Test erisimi
         echo ""
         print_info "Erisim testi yapiliyor..."
-        if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1/phpmyadmin/" | grep -q "200\|301\|302"; then
-            print_success "[OK] phpMyAdmin erisime acik"
-        else
-            print_warning "Yerel test basarisiz - tarayicidan deneyin"
-        fi
+        local http_code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1/phpmyadmin/" 2>/dev/null)
+        
+        case $http_code in
+            200|301|302)
+                print_success "[OK] phpMyAdmin erisime acik (HTTP $http_code)"
+                ;;
+            500)
+                print_error "[X] HTTP 500 hatasi tespit edildi!"
+                echo ""
+                if ask_yes_no "Otomatik sorun tespiti ve duzeltme yapilsin mi?"; then
+                    diagnose_phpmyadmin_500_error
+                fi
+                ;;
+            403)
+                print_error "[X] HTTP 403 - Izin sorunu!"
+                print_info "DUZELTME: Izinler ayarlaniyor..."
+                chmod -R 755 "$pma_path"
+                chown -R www-data:www-data "$pma_path"
+                systemctl reload nginx
+                print_success "Izinler duzeltildi - tarayicidan tekrar deneyin"
+                ;;
+            502)
+                print_error "[X] HTTP 502 - PHP-FPM baglanti sorunu!"
+                print_info "DUZELTME: PHP-FPM yeniden baslatiliyor..."
+                for version in 8.3 8.2 8.1; do
+                    systemctl restart php${version}-fpm 2>/dev/null && break
+                done
+                sleep 2
+                systemctl reload nginx
+                print_success "Duzeltildi - tarayicidan tekrar deneyin"
+                ;;
+            *)
+                print_warning "Yerel test beklenmeyen sonuc (HTTP $http_code)"
+                print_info "Tarayicidan deneyin: http://${server_ip}/phpmyadmin"
+                ;;
+        esac
     else
         print_error "Nginx yapilandirma hatasi tespit edildi!"
         echo ""
@@ -8367,6 +8398,190 @@ PMACONF
         
         return $?
     fi
+}
+
+# phpMyAdmin - 500 Hata Tespiti ve Duzeltme
+diagnose_phpmyadmin_500_error() {
+    print_header "phpMyAdmin 500 Hatasi Tespiti"
+    
+    local server_ip=$(hostname -I | awk '{print $1}')
+    
+    echo -e "${RED}500 Internal Server Error - Olasi Sebepler:${NC}"
+    echo "1. PHP-FPM calısmiyor"
+    echo "2. PHP hatalari"
+    echo "3. Izin sorunlari"
+    echo "4. FastCGI yapilandirma hatasi"
+    echo ""
+    
+    print_info "Otomatik tanimlama basliyor..."
+    echo ""
+    
+    # 1. PHP-FPM Kontrolu
+    echo -e "${CYAN}[1/5] PHP-FPM Durumu kontrol ediliyor...${NC}"
+    local php_running=false
+    for version in 8.4 8.3 8.2 8.1 8.0 7.4; do
+        if systemctl is-active --quiet php${version}-fpm 2>/dev/null; then
+            print_success "  [OK] PHP $version-FPM calisiyor"
+            php_running=true
+            
+            # Socket kontrol
+            if [ -S "/var/run/php/php${version}-fpm.sock" ]; then
+                print_success "  [OK] Socket var: /var/run/php/php${version}-fpm.sock"
+            else
+                print_error "  [X] Socket yok! PHP-FPM yeniden baslatiliyor..."
+                systemctl restart php${version}-fpm
+                sleep 2
+            fi
+            break
+        fi
+    done
+    
+    if [ "$php_running" = false ]; then
+        print_error "  [X] PHP-FPM calısmiyor!"
+        echo ""
+        print_info "DUZELTME: PHP-FPM baslatiliyor..."
+        for version in 8.3 8.2 8.1; do
+            if systemctl start php${version}-fpm 2>/dev/null; then
+                print_success "  [OK] PHP $version-FPM baslatildi"
+                php_running=true
+                break
+            fi
+        done
+    fi
+    echo ""
+    
+    # 2. Nginx Error Log Kontrolu
+    echo -e "${CYAN}[2/5] Nginx Error Log kontrol ediliyor...${NC}"
+    if [ -f "/var/log/nginx/error.log" ]; then
+        local recent_errors=$(tail -20 /var/log/nginx/error.log | grep -i "phpmyadmin\|FastCGI\|upstream" | tail -5)
+        if [ -n "$recent_errors" ]; then
+            print_warning "  Son hatalar:"
+            echo "$recent_errors" | while read line; do
+                echo -e "    ${RED}$line${NC}"
+            done
+            
+            # FastCGI hatasi varsa
+            if echo "$recent_errors" | grep -qi "connection refused\|no such file"; then
+                print_error "  [X] PHP-FPM baglanti hatasi tespit edildi!"
+                echo ""
+                print_info "DUZELTME: PHP-FPM yeniden baslatiliyor..."
+                for version in 8.3 8.2 8.1; do
+                    systemctl restart php${version}-fpm 2>/dev/null
+                done
+                sleep 2
+                print_success "  [OK] PHP-FPM yeniden baslatildi"
+            fi
+        else
+            print_success "  [OK] Onemli hata log'u bulunamadi"
+        fi
+    fi
+    echo ""
+    
+    # 3. Dosya Izinleri Kontrolu
+    echo -e "${CYAN}[3/5] Dosya izinleri kontrol ediliyor...${NC}"
+    local pma_path="/usr/share/phpmyadmin"
+    [ ! -d "$pma_path" ] && pma_path="/var/lib/phpmyadmin"
+    
+    if [ -d "$pma_path" ]; then
+        local pma_owner=$(stat -c '%U' "$pma_path" 2>/dev/null)
+        local pma_perms=$(stat -c '%a' "$pma_path" 2>/dev/null)
+        
+        echo -e "  Dizin: $pma_path"
+        echo -e "  Sahip: $pma_owner (olmali: www-data)"
+        echo -e "  Izinler: $pma_perms (olmali: 755)"
+        
+        if [ "$pma_owner" != "www-data" ] || [ "$pma_perms" != "755" ]; then
+            print_warning "  [!] Izin sorunu tespit edildi!"
+            echo ""
+            print_info "DUZELTME: Izinler ayarlaniyor..."
+            chown -R www-data:www-data "$pma_path"
+            chmod -R 755 "$pma_path"
+            mkdir -p "$pma_path/tmp"
+            chmod -R 770 "$pma_path/tmp"
+            chown -R www-data:www-data "$pma_path/tmp"
+            print_success "  [OK] Izinler duzeltildi"
+        else
+            print_success "  [OK] Izinler dogru"
+        fi
+    fi
+    echo ""
+    
+    # 4. PHP Hatalari Kontrolu
+    echo -e "${CYAN}[4/5] PHP hatalari kontrol ediliyor...${NC}"
+    if [ -f "/var/log/php*-fpm.log" ]; then
+        local php_errors=$(tail -10 /var/log/php*-fpm.log 2>/dev/null | grep -i "error\|fatal\|warning" | tail -3)
+        if [ -n "$php_errors" ]; then
+            print_warning "  Son PHP hatalari:"
+            echo "$php_errors"
+        else
+            print_success "  [OK] Onemli PHP hatasi yok"
+        fi
+    fi
+    echo ""
+    
+    # 5. Yapilandirma Testi
+    echo -e "${CYAN}[5/5] Yapilandirma test ediliyor...${NC}"
+    if nginx -t 2>&1 | grep -q "syntax is ok"; then
+        print_success "  [OK] Nginx config dogru"
+        systemctl reload nginx 2>/dev/null
+    else
+        print_error "  [X] Nginx config hatali!"
+        nginx -t
+    fi
+    echo ""
+    
+    # Curl ile test
+    print_info "HTTP testi yapiliyor..."
+    local http_code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1/phpmyadmin/" 2>/dev/null)
+    
+    case $http_code in
+        200|301|302)
+            print_success "[OK] HTTP $http_code - phpMyAdmin erisime acik!"
+            ;;
+        403)
+            print_error "[X] HTTP 403 - Izin sorunu!"
+            print_info "DUZELTME: Izinler tekrar ayarlaniyor..."
+            chmod -R 755 "$pma_path"
+            chown -R www-data:www-data "$pma_path"
+            ;;
+        404)
+            print_error "[X] HTTP 404 - Location bulunamadi!"
+            print_info "Nginx config'i kontrol edin"
+            ;;
+        500)
+            print_error "[X] HTTP 500 - Sunucu hatasi!"
+            echo ""
+            print_info "ONERILEN DUZELTMELER:"
+            echo "  1. PHP-FPM'i yeniden baslatın:"
+            echo "     systemctl restart php*-fpm"
+            echo ""
+            echo "  2. Nginx error log'una bakin:"
+            echo "     tail -50 /var/log/nginx/error.log"
+            echo ""
+            echo "  3. PHP error log'una bakin:"
+            echo "     tail -50 /var/log/php*-fpm.log"
+            echo ""
+            echo "  4. phpMyAdmin config'i kontrol edin:"
+            echo "     ls -la $pma_path/config.inc.php"
+            ;;
+        502)
+            print_error "[X] HTTP 502 - PHP-FPM baglanti yok!"
+            print_info "DUZELTME: PHP-FPM baslatiliyor..."
+            for version in 8.3 8.2 8.1; do
+                systemctl restart php${version}-fpm 2>/dev/null
+            done
+            sleep 2
+            print_success "PHP-FPM yeniden baslatildi - tekrar deneyin"
+            ;;
+        *)
+            print_warning "[?] HTTP $http_code - Beklenmeyen durum"
+            ;;
+    esac
+    
+    echo ""
+    print_info "Detayli log icin:"
+    echo "  tail -f /var/log/nginx/error.log"
+    echo "  tail -f /var/log/php*-fpm.log"
 }
 
 # phpMyAdmin - Basit Location Ekleme (Alternatif Yontem)
@@ -8780,14 +8995,17 @@ phpmyadmin_management_menu() {
         echo "  2) Nginx Yapilandirmasi"
         echo "  3) Durum ve Erisim Bilgileri"
         echo ""
+        echo -e "${CYAN}Sorun Giderme:${NC}"
+        echo "  4) 500 Hata Tespiti ve Duzeltme (OTOMATIK)"
+        echo ""
         echo -e "${CYAN}Guvenlik:${NC}"
-        echo "  4) Erisim URL'sini Degistir"
-        echo "  5) IP Kisitlamasi Ekle/Kaldir"
+        echo "  5) Erisim URL'sini Degistir"
+        echo "  6) IP Kisitlamasi Ekle/Kaldir"
         echo ""
         echo "  0) Geri Don"
         echo ""
         
-        read -p "Seciminiz [0-5]: " pma_choice
+        read -p "Seciminiz [0-6]: " pma_choice
         
         case $pma_choice in
             1)
@@ -8800,9 +9018,12 @@ phpmyadmin_management_menu() {
                 check_phpmyadmin_status
                 ;;
             4)
-                configure_phpmyadmin_nginx
+                diagnose_phpmyadmin_500_error
                 ;;
             5)
+                configure_phpmyadmin_nginx
+                ;;
+            6)
                 print_info "IP kisitlamasi icin Nginx yapilandirma dosyasini duzenleyin"
                 print_info "Dosya: /etc/nginx/sites-available/phpmyadmin*"
                 echo ""
