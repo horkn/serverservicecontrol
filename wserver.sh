@@ -8216,23 +8216,51 @@ setup_phpmyadmin_direct_ip() {
     # Yedek al
     cp "$default_conf" "${default_conf}.backup.$(date +%Y%m%d_%H%M%S)"
     
-    # Zaten ekli mi kontrol et
+    # Izinleri duzenle - 403 hatasini onlemek icin (ONCE BU YAPILMALI)
+    print_info "Dosya izinleri ayarlaniyor..."
+    chown -R www-data:www-data "$pma_path" 2>/dev/null
+    chmod -R 755 "$pma_path" 2>/dev/null
+    
+    # phpMyAdmin temp dizinleri icin
+    mkdir -p "$pma_path/tmp" 2>/dev/null
+    chown -R www-data:www-data "$pma_path/tmp" 2>/dev/null
+    chmod -R 770 "$pma_path/tmp" 2>/dev/null
+    
+    # Symbolic link
+    ln -sf "$pma_path" /var/www/html/phpmyadmin 2>/dev/null
+    chown -h www-data:www-data /var/www/html/phpmyadmin 2>/dev/null
+    
+    # Location blogu ekle
+    print_info "phpMyAdmin location ekleniyor..."
+    
+    # Zaten varsa cikar
     if grep -q "location /phpmyadmin" "$default_conf"; then
-        print_warning "phpMyAdmin location zaten mevcut: $default_conf"
-    else
-        # Location blogu olustur
-        local location_block="
+        print_warning "Onceki yapilandirma bulundu, temizleniyor..."
+        # Mevcut phpmyadmin bloklarini sil
+        sed -i '/# phpMyAdmin/,/^[[:space:]]*}[[:space:]]*$/d' "$default_conf" 2>/dev/null
+    fi
+    
+    # Yeni location blogu ekle - echo ile satir satir
+    # Dosyanin sonundaki } isaretinden once
+    local temp_file="${default_conf}.phpmyadmin_temp"
+    
+    # Dosyayi oku, son } haric
+    head -n -1 "$default_conf" > "$temp_file"
+    
+    # phpMyAdmin location ekle
+    cat >> "$temp_file" <<PMABLOCK
+
     # phpMyAdmin - Direkt IP Erisimi
     # Erisim: http://$server_ip/phpmyadmin
     location /phpmyadmin {
-        alias $pma_path;
+        root /var/www/html;
         index index.php index.html;
+        try_files \$uri \$uri/ =404;
         
         location ~ \.php\$ {
-            include fastcgi_params;
+            include snippets/fastcgi-php.conf;
             fastcgi_pass unix:$php_socket;
             fastcgi_param SCRIPT_FILENAME \$request_filename;
-            fastcgi_intercept_errors on;
         }
         
         location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)\$ {
@@ -8240,12 +8268,15 @@ setup_phpmyadmin_direct_ip() {
             log_not_found off;
         }
     }
-"
-        
-        # Son } isaretinden once ekle
-        sed -i "/^}/i\\$location_block" "$default_conf"
-        print_success "phpMyAdmin location eklendi: $default_conf"
-    fi
+PMABLOCK
+    
+    # Son } ekle
+    echo "}" >> "$temp_file"
+    
+    # Degistir
+    mv "$temp_file" "$default_conf"
+    
+    print_success "phpMyAdmin location eklendi: $default_conf"
     
     # Nginx test ve reload
     echo ""
@@ -8557,15 +8588,31 @@ check_phpmyadmin_status() {
     
     local found=false
     for conf in /etc/nginx/sites-enabled/*; do
-        if [ -f "$conf" ] && grep -q "phpmyadmin\|phpMyAdmin" "$conf"; then
+        if [ -f "$conf" ] && grep -qi "location.*phpmyadmin" "$conf"; then
             local server_name=$(grep -m1 "server_name" "$conf" | awk '{print $2}' | tr -d ';')
             local listen_port=$(grep -m1 "listen" "$conf" | awk '{print $2}' | tr -d ';')
             echo -e "  [OK] Yapilandirma: ${GREEN}$(basename $conf)${NC}"
             echo -e "      Server: $server_name"
             echo -e "      Port: $listen_port"
             found=true
+            
+            # Satirlari goster
+            echo ""
+            echo -e "  ${CYAN}Location bilgileri:${NC}"
+            grep -A 2 "location.*phpmyadmin" "$conf" | head -5
         fi
     done
+    
+    # Hatali conf.d dosyalarini kontrol et
+    if [ -f "/etc/nginx/conf.d/phpmyadmin.conf" ]; then
+        print_error "[X] Hatali dosya bulundu: /etc/nginx/conf.d/phpmyadmin.conf"
+        echo -e "    ${YELLOW}Bu dosya silinmeli!${NC}"
+        if ask_yes_no "Simdi silmek ister misiniz?"; then
+            rm -f /etc/nginx/conf.d/phpmyadmin.conf
+            systemctl reload nginx 2>/dev/null
+            print_success "Hatali dosya silindi ve Nginx reload edildi"
+        fi
+    fi
     
     if [ "$found" = false ]; then
         print_warning "[!] Nginx yapilandirmasi bulunamadi"
