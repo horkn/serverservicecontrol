@@ -8226,63 +8226,79 @@ setup_phpmyadmin_direct_ip() {
     chown -R www-data:www-data "$pma_path/tmp" 2>/dev/null
     chmod -R 770 "$pma_path/tmp" 2>/dev/null
     
-    # Symbolic link
-    ln -sf "$pma_path" /var/www/html/phpmyadmin 2>/dev/null
-    chown -h www-data:www-data /var/www/html/phpmyadmin 2>/dev/null
+    # YONTEM DEGİSTİRİLDİ: Default'a eklemek yerine ayri site olustur
+    print_info "phpMyAdmin icin ayri Nginx config olusturuluyor..."
     
-    # Location blogu ekle
-    print_info "phpMyAdmin location ekleniyor..."
+    local pma_conf="/etc/nginx/sites-available/phpmyadmin-ip"
     
-    # Zaten varsa cikar
-    if grep -q "location /phpmyadmin" "$default_conf"; then
-        print_warning "Onceki yapilandirma bulundu, temizleniyor..."
-        # Mevcut phpmyadmin bloklarini sil
-        sed -i '/# phpMyAdmin/,/^[[:space:]]*}[[:space:]]*$/d' "$default_conf" 2>/dev/null
-    fi
-    
-    # Yeni location blogu ekle - echo ile satir satir
-    # Dosyanin sonundaki } isaretinden once
-    local temp_file="${default_conf}.phpmyadmin_temp"
-    
-    # Dosyayi oku, son } haric
-    head -n -1 "$default_conf" > "$temp_file"
-    
-    # phpMyAdmin location ekle
-    cat >> "$temp_file" <<PMABLOCK
+    # Yeni config dosyasi olustur
+    cat > "$pma_conf" <<PMACONF
+# phpMyAdmin - Direkt IP Erisimi
+# Erisim: http://$server_ip/phpmyadmin
 
-    # phpMyAdmin - Direkt IP Erisimi
-    # Erisim: http://$server_ip/phpmyadmin
-    location /phpmyadmin {
-        root /var/www/html;
-        index index.php index.html;
+server {
+    listen 80;
+    server_name $server_ip _;
+    
+    root /var/www/html;
+    index index.html index.php;
+    
+    # Ana site icin
+    location / {
         try_files \$uri \$uri/ =404;
+    }
+    
+    # phpMyAdmin
+    location /phpmyadmin {
+        alias $pma_path;
+        index index.php index.html;
         
+        # PHP dosyalari
         location ~ \.php\$ {
-            include snippets/fastcgi-php.conf;
+            fastcgi_split_path_info ^(.+\.php)(/.+)\$;
             fastcgi_pass unix:$php_socket;
+            fastcgi_index index.php;
+            include fastcgi_params;
             fastcgi_param SCRIPT_FILENAME \$request_filename;
         }
         
+        # Statik dosyalar
         location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)\$ {
             expires max;
             log_not_found off;
+            access_log off;
+        }
+        
+        # Guvenlik
+        location ~ /\. {
+            deny all;
         }
     }
-PMABLOCK
     
-    # Son } ekle
-    echo "}" >> "$temp_file"
+    # Guvenlik headerlari
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+}
+PMACONF
     
-    # Degistir
-    mv "$temp_file" "$default_conf"
+    # Sembolik link olustur
+    ln -sf "$pma_conf" /etc/nginx/sites-enabled/phpmyadmin-ip
     
-    print_success "phpMyAdmin location eklendi: $default_conf"
+    # Eski default'taki phpmyadmin yapilandirmasini temizle (varsa)
+    if grep -q "location /phpmyadmin" "$default_conf" 2>/dev/null; then
+        print_warning "Default config'te eski yapilandirma bulundu, temizleniyor..."
+        sed -i '/# phpMyAdmin/,/^[[:space:]]*}[[:space:]]*$/d' "$default_conf" 2>/dev/null
+    fi
+    
+    print_success "phpMyAdmin config olusturuldu: $pma_conf"
     
     # Nginx test ve reload
     echo ""
     print_info "Nginx yapilandirmasi test ediliyor..."
     
-    if nginx -t 2>&1; then
+    local test_output=$(nginx -t 2>&1)
+    
+    if echo "$test_output" | grep -q "syntax is ok"; then
         systemctl reload nginx
         print_success "[OK] Nginx yeniden yuklendi"
         
@@ -8296,24 +8312,41 @@ PMABLOCK
         echo ""
         echo -e "  Erisim URL: ${CYAN}http://${server_ip}/phpmyadmin${NC}"
         echo ""
-        echo -e "  Kullanici: ${YELLOW}MySQL kullanici adiniz${NC}"
+        echo -e "  Kullanici: ${YELLOW}root (veya MySQL kullanici adiniz)${NC}"
         echo -e "  Sifre:     ${YELLOW}MySQL sifreniz${NC}"
         echo ""
         echo -e "${GREEN}======================================================${NC}"
         echo ""
         print_warning "GUVENLIK UYARISI:"
-        echo "  * Production ortamda IP kisitlamasi eklemeniz onerilir"
-        echo "  * Dosya: $default_conf"
-        echo "  * Ornek: allow 192.168.1.0/24; deny all;"
+        echo "  * Production ortamda IP kisitlamasi ekleyin"
+        echo "  * Config: /etc/nginx/sites-available/phpmyadmin-ip"
+        echo "  * Ornek: server blogu icine -> allow 192.168.1.0/24; deny all;"
+        
+        # Test erisimi
+        echo ""
+        print_info "Erisim testi yapiliyor..."
+        if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1/phpmyadmin/" | grep -q "200\|301\|302"; then
+            print_success "[OK] phpMyAdmin erisime acik"
+        else
+            print_warning "Yerel test basarisiz - tarayicidan deneyin"
+        fi
     else
         print_error "Nginx yapilandirma hatasi tespit edildi!"
-        print_error "Degisiklikler geri aliniyor..."
+        echo ""
+        echo "$test_output"
+        echo ""
         
-        # Yedekten geri yukle
+        print_error "OTOMATIK DUZELTME BASLATILIYOR..."
+        
+        # Yeni olusturdugumuz dosyayi sil
+        rm -f /etc/nginx/sites-enabled/phpmyadmin-ip
+        rm -f /etc/nginx/sites-available/phpmyadmin-ip
+        
+        # Yedekten geri yukle (default icin)
         local latest_backup=$(ls -t "${default_conf}.backup."* 2>/dev/null | head -1)
         if [ -n "$latest_backup" ]; then
             cp "$latest_backup" "$default_conf"
-            print_success "Onceki yapilandirma geri yuklendi"
+            print_success "Default config geri yuklendi"
         fi
         
         # Hatali conf.d dosyalarini temizle
@@ -8326,12 +8359,93 @@ PMABLOCK
         fi
         
         echo ""
-        print_error "HATA DETAYLARI:"
-        nginx -t 2>&1
+        print_error "ALTERNATIF YONTEM DENENIYOR..."
+        print_info "Default site'a basit location ekleniyor..."
+        
+        # EN BASIT YONTEM: Default'un sonuna ekle
+        setup_phpmyadmin_simple_location "$pma_path" "$php_socket" "$server_ip"
+        
+        return $?
+    fi
+}
+
+# phpMyAdmin - Basit Location Ekleme (Alternatif Yontem)
+setup_phpmyadmin_simple_location() {
+    local pma_path="$1"
+    local php_socket="$2"
+    local server_ip="$3"
+    
+    local default_conf="/etc/nginx/sites-available/default"
+    
+    print_info "Basit yontem ile location ekleniyor..."
+    
+    # Default dosyasini oku ve server blogunun icine ekle
+    # Dosyadaki ilk server { } blogunun icine ekleyecegiz
+    
+    cat > /tmp/add_phpmyadmin.sh <<'ADDSCRIPT'
+#!/bin/bash
+DEFAULT_FILE="$1"
+PMA_PATH="$2"
+PHP_SOCKET="$3"
+
+# Yedek al
+cp "$DEFAULT_FILE" "${DEFAULT_FILE}.pre_phpmyadmin"
+
+# server { icindeki son location'dan sonra ekle
+awk -v pma_path="$PMA_PATH" -v php_socket="$PHP_SOCKET" '
+BEGIN { added=0; in_server=0; brace_count=0 }
+/^[[:space:]]*server[[:space:]]*{/ { in_server=1; brace_count=1; print; next }
+in_server==1 {
+    if (/{/) brace_count++
+    if (/}/) {
+        brace_count--
+        if (brace_count==1 && added==0) {
+            # Server blogunun kapanmasindan hemen once ekle
+            print ""
+            print "    # phpMyAdmin"
+            print "    location /phpmyadmin {"
+            print "        alias " pma_path ";"
+            print "        index index.php;"
+            print ""
+            print "        location ~ \\.php$ {"
+            print "            include fastcgi_params;"
+            print "            fastcgi_pass unix:" php_socket ";"
+            print "            fastcgi_param SCRIPT_FILENAME $request_filename;"
+            print "        }"
+            print "    }"
+            added=1
+        }
+        if (brace_count==0) in_server=0
+    }
+}
+{ print }
+' "$DEFAULT_FILE" > "${DEFAULT_FILE}.new"
+
+mv "${DEFAULT_FILE}.new" "$DEFAULT_FILE"
+ADDSCRIPT
+    
+    chmod +x /tmp/add_phpmyadmin.sh
+    /tmp/add_phpmyadmin.sh "$default_conf" "$pma_path" "$php_socket"
+    rm -f /tmp/add_phpmyadmin.sh
+    
+    print_success "Location eklendi"
+    
+    # Test
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        print_success "[OK] Basit yontem basarili!"
         echo ""
-        print_info "Manuel yapilandirma icin:"
+        echo -e "  Erisim: ${CYAN}http://${server_ip}/phpmyadmin${NC}"
+        return 0
+    else
+        print_error "Yine hata! Default dosyasini manuel kontrol edin:"
         echo "  nano $default_conf"
         
+        # Geri al
+        if [ -f "${default_conf}.pre_phpmyadmin" ]; then
+            cp "${default_conf}.pre_phpmyadmin" "$default_conf"
+            print_info "Geri alindi"
+        fi
         return 1
     fi
 }
