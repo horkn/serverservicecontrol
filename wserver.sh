@@ -13968,6 +13968,519 @@ show_mysql_settings() {
     mysql_cmd -e "SHOW STATUS LIKE 'Threads%'; SHOW STATUS LIKE 'Questions'; SHOW STATUS LIKE 'Uptime';" 2>/dev/null
 }
 
+# MySQL konfigürasyon dosyasını bul
+get_mysql_config_file() {
+    if [ -f "/etc/mysql/mariadb.conf.d/50-server.cnf" ]; then
+        echo "/etc/mysql/mariadb.conf.d/50-server.cnf"
+    elif [ -f "/etc/mysql/mysql.conf.d/mysqld.cnf" ]; then
+        echo "/etc/mysql/mysql.conf.d/mysqld.cnf"
+    elif [ -f "/etc/my.cnf" ]; then
+        echo "/etc/my.cnf"
+    elif [ -f "/etc/mysql/my.cnf" ]; then
+        echo "/etc/mysql/my.cnf"
+    else
+        echo "/etc/mysql/mysql.conf.d/mysqld.cnf"
+    fi
+}
+
+# Konfigürasyon değeri oku
+get_mysql_config_value() {
+    local param=$1
+    local config_file=$(get_mysql_config_file)
+    
+    # Önce çalışan sunucudan al
+    local value=$(mysql_cmd -N -e "SELECT @@${param};" 2>/dev/null)
+    if [ -n "$value" ]; then
+        echo "$value"
+        return 0
+    fi
+    
+    # Yoksa config dosyasından oku
+    if [ -f "$config_file" ]; then
+        grep "^${param}" "$config_file" | cut -d'=' -f2 | tr -d ' ' | head -1
+    fi
+}
+
+# Konfigürasyon değeri ayarla
+set_mysql_config_value() {
+    local param=$1
+    local value=$2
+    local config_file=$(get_mysql_config_file)
+    
+    # Config dosyasını yedekle
+    cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Parametreyi güncellemek veya eklemek
+    if grep -q "^${param}" "$config_file" 2>/dev/null; then
+        # Mevcut parametreyi güncelle
+        sed -i "s|^${param}.*|${param} = ${value}|" "$config_file"
+    elif grep -q "^#${param}" "$config_file" 2>/dev/null; then
+        # Yorum satırını aktif et ve güncelle
+        sed -i "s|^#${param}.*|${param} = ${value}|" "$config_file"
+    else
+        # [mysqld] bölümüne ekle
+        if grep -q "^\[mysqld\]" "$config_file"; then
+            sed -i "/^\[mysqld\]/a ${param} = ${value}" "$config_file"
+        else
+            echo "" >> "$config_file"
+            echo "[mysqld]" >> "$config_file"
+            echo "${param} = ${value}" >> "$config_file"
+        fi
+    fi
+}
+
+# Remote erişim ayarları
+configure_mysql_remote_access() {
+    print_header "MySQL Remote Erişim Ayarları"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    local config_file=$(get_mysql_config_file)
+    local current_bind=$(get_mysql_config_value "bind-address")
+    
+    echo -e "${CYAN}Mevcut Durum:${NC}"
+    echo -e "Config Dosyası: ${config_file}"
+    echo -e "Bind Address: ${current_bind:-0.0.0.0 (tüm IP'ler)}"
+    echo ""
+    
+    echo -e "${YELLOW}Remote erişim ayarları:${NC}"
+    echo "1) Sadece localhost (127.0.0.1) - Güvenli"
+    echo "2) Tüm IP'lere aç (0.0.0.0) - Dikkatli kullanın!"
+    echo "3) Belirli IP'ye aç"
+    echo "4) Remote erişimi kapat"
+    echo "0) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz: " remote_choice
+    
+    case $remote_choice in
+        1)
+            set_mysql_config_value "bind-address" "127.0.0.1"
+            print_success "MySQL sadece localhost'tan erişilebilir yapıldı."
+            ;;
+        2)
+            print_warning "⚠️  DİKKAT: Tüm IP'lere açmak güvenlik riski oluşturur!"
+            if ask_yes_no "Devam etmek istediğinizden emin misiniz?"; then
+                set_mysql_config_value "bind-address" "0.0.0.0"
+                print_success "MySQL tüm IP'lerden erişilebilir yapıldı."
+                
+                # Firewall uyarısı
+                echo ""
+                print_warning "Firewall (UFW) ayarlarını kontrol edin:"
+                echo "  sudo ufw allow 3306/tcp"
+            fi
+            ;;
+        3)
+            read -p "IP adresi: " custom_ip
+            if [ -n "$custom_ip" ]; then
+                set_mysql_config_value "bind-address" "$custom_ip"
+                print_success "MySQL ${custom_ip} adresinden erişilebilir yapıldı."
+            fi
+            ;;
+        4)
+            set_mysql_config_value "bind-address" "127.0.0.1"
+            set_mysql_config_value "skip-networking" "1"
+            print_success "Remote erişim tamamen kapatıldı."
+            ;;
+        0)
+            return
+            ;;
+    esac
+    
+    if [ "$remote_choice" != "0" ]; then
+        echo ""
+        print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
+        if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+            systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
+            print_success "MySQL yeniden başlatıldı."
+        fi
+    fi
+}
+
+# Port değiştirme
+configure_mysql_port() {
+    print_header "MySQL Port Ayarları"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    local current_port=$(get_mysql_config_value "port")
+    current_port=${current_port:-3306}
+    
+    echo -e "${CYAN}Mevcut Port:${NC} ${current_port}"
+    echo ""
+    
+    read -p "Yeni port numarası [${current_port}]: " new_port
+    new_port=${new_port:-$current_port}
+    
+    if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1024 ] || [ "$new_port" -gt 65535 ]; then
+        print_error "Geçersiz port numarası! (1024-65535 arası olmalı)"
+        return 1
+    fi
+    
+    if [ "$new_port" = "$current_port" ]; then
+        print_info "Port zaten ${current_port} olarak ayarlanmış."
+        return 0
+    fi
+    
+    set_mysql_config_value "port" "$new_port"
+    print_success "Port ${new_port} olarak ayarlandı."
+    
+    echo ""
+    print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+        systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
+        print_success "MySQL yeniden başlatıldı."
+        
+        if [ "$new_port" != "3306" ]; then
+            print_info "Yeni porta bağlanmak için: mysql -P ${new_port}"
+        fi
+    fi
+}
+
+# Güvenlik ayarları
+configure_mysql_security() {
+    print_header "MySQL Güvenlik Ayarları"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    echo -e "${CYAN}Güvenlik Ayarları:${NC}"
+    echo ""
+    echo "1) Local-infile Kapatma (LOCAL veri yükleme engelleme)"
+    echo "2) Strict Mode Etkinleştir/Kapat"
+    echo "3) Symbolic Links Kapatma"
+    echo "4) Anonim Kullanıcıları Sil"
+    echo "5) Test Veritabanını Sil"
+    echo "6) Root Remote Erişimini Kapat"
+    echo "7) Tümünü Uygula (Önerilen)"
+    echo "0) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz: " sec_choice
+    
+    case $sec_choice in
+        1)
+            set_mysql_config_value "local-infile" "0"
+            mysql_cmd -e "SET GLOBAL local_infile = 0;" 2>/dev/null
+            print_success "Local-infile devre dışı bırakıldı."
+            ;;
+        2)
+            local strict_mode=$(mysql_cmd -N -e "SELECT @@sql_mode LIKE '%STRICT%';" 2>/dev/null)
+            if [ "$strict_mode" = "1" ]; then
+                mysql_cmd -e "SET GLOBAL sql_mode = 'NO_ENGINE_SUBSTITUTION';" 2>/dev/null
+                print_success "Strict mode devre dışı bırakıldı."
+            else
+                mysql_cmd -e "SET GLOBAL sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';" 2>/dev/null
+                print_success "Strict mode etkinleştirildi."
+            fi
+            ;;
+        3)
+            set_mysql_config_value "symbolic-links" "0"
+            print_success "Symbolic links devre dışı bırakıldı."
+            ;;
+        4)
+            mysql_cmd -e "DELETE FROM mysql.user WHERE User='';" 2>/dev/null
+            mysql_cmd -e "FLUSH PRIVILEGES;" 2>/dev/null
+            print_success "Anonim kullanıcılar silindi."
+            ;;
+        5)
+            mysql_cmd -e "DROP DATABASE IF EXISTS test;" 2>/dev/null
+            mysql_cmd -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';" 2>/dev/null
+            mysql_cmd -e "FLUSH PRIVILEGES;" 2>/dev/null
+            print_success "Test veritabanı silindi."
+            ;;
+        6)
+            mysql_cmd -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');" 2>/dev/null
+            mysql_cmd -e "FLUSH PRIVILEGES;" 2>/dev/null
+            print_success "Root remote erişimi kapatıldı."
+            ;;
+        7)
+            print_info "Tüm güvenlik ayarları uygulanıyor..."
+            
+            # Local-infile kapat
+            set_mysql_config_value "local-infile" "0"
+            mysql_cmd -e "SET GLOBAL local_infile = 0;" 2>/dev/null
+            
+            # Symbolic links kapat
+            set_mysql_config_value "symbolic-links" "0"
+            
+            # Strict mode aç
+            mysql_cmd -e "SET GLOBAL sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';" 2>/dev/null
+            
+            # Anonim kullanıcılar sil
+            mysql_cmd -e "DELETE FROM mysql.user WHERE User='';" 2>/dev/null
+            
+            # Test DB sil
+            mysql_cmd -e "DROP DATABASE IF EXISTS test;" 2>/dev/null
+            mysql_cmd -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';" 2>/dev/null
+            
+            # Root remote kapat
+            mysql_cmd -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');" 2>/dev/null
+            
+            mysql_cmd -e "FLUSH PRIVILEGES;" 2>/dev/null
+            
+            print_success "✓ Tüm güvenlik ayarları uygulandı!"
+            ;;
+    esac
+    
+    if [ "$sec_choice" != "0" ] && [ "$sec_choice" != "2" ]; then
+        echo ""
+        print_warning "Bazı değişiklikler için MySQL'i yeniden başlatmanız gerekebilir."
+    fi
+}
+
+# Log ayarları
+configure_mysql_logs() {
+    print_header "MySQL Log Ayarları"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    local config_file=$(get_mysql_config_file)
+    
+    echo -e "${CYAN}Mevcut Log Durumu:${NC}"
+    echo ""
+    
+    local error_log=$(get_mysql_config_value "log_error")
+    local slow_log=$(mysql_cmd -N -e "SELECT @@slow_query_log;" 2>/dev/null)
+    local slow_log_file=$(mysql_cmd -N -e "SELECT @@slow_query_log_file;" 2>/dev/null)
+    local general_log=$(mysql_cmd -N -e "SELECT @@general_log;" 2>/dev/null)
+    local bin_log=$(mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null)
+    
+    echo "Error Log: ${error_log:-/var/log/mysql/error.log}"
+    echo "Slow Query Log: $([ "$slow_log" = "1" ] && echo "Aktif" || echo "Devre Dışı") - ${slow_log_file}"
+    echo "General Log: $([ "$general_log" = "1" ] && echo "Aktif" || echo "Devre Dışı")"
+    echo "Binary Log: $([ "$bin_log" = "1" ] && echo "Aktif" || echo "Devre Dışı")"
+    echo ""
+    
+    echo -e "${CYAN}Log Ayarları:${NC}"
+    echo "1) Slow Query Log Aç/Kapat"
+    echo "2) Slow Query Time Ayarla"
+    echo "3) General Log Aç/Kapat (Performans etkileyebilir!)"
+    echo "4) Binary Log Aç/Kapat"
+    echo "5) Error Log Görüntüle (Son 50 satır)"
+    echo "6) Slow Query Log Görüntüle"
+    echo "0) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz: " log_choice
+    
+    case $log_choice in
+        1)
+            if [ "$slow_log" = "1" ]; then
+                mysql_cmd -e "SET GLOBAL slow_query_log = 0;" 2>/dev/null
+                print_success "Slow query log kapatıldı."
+            else
+                mysql_cmd -e "SET GLOBAL slow_query_log = 1;" 2>/dev/null
+                set_mysql_config_value "slow_query_log" "1"
+                print_success "Slow query log açıldı."
+            fi
+            ;;
+        2)
+            local current_time=$(mysql_cmd -N -e "SELECT @@long_query_time;" 2>/dev/null)
+            echo "Mevcut slow query time: ${current_time} saniye"
+            read -p "Yeni değer (saniye) [2]: " new_time
+            new_time=${new_time:-2}
+            
+            mysql_cmd -e "SET GLOBAL long_query_time = ${new_time};" 2>/dev/null
+            set_mysql_config_value "long_query_time" "${new_time}"
+            print_success "Slow query time ${new_time} saniye olarak ayarlandı."
+            ;;
+        3)
+            if [ "$general_log" = "1" ]; then
+                mysql_cmd -e "SET GLOBAL general_log = 0;" 2>/dev/null
+                print_success "General log kapatıldı."
+            else
+                print_warning "⚠️  General log performansı etkileyebilir!"
+                if ask_yes_no "Devam etmek istiyor musunuz?"; then
+                    mysql_cmd -e "SET GLOBAL general_log = 1;" 2>/dev/null
+                    print_success "General log açıldı."
+                fi
+            fi
+            ;;
+        4)
+            if [ "$bin_log" = "1" ]; then
+                print_warning "Binary log'u kapatmak için config dosyasından kaldırmanız gerekir."
+                echo "Dosya: ${config_file}"
+                echo "Satır: log_bin veya log-bin"
+            else
+                set_mysql_config_value "log_bin" "/var/log/mysql/mysql-bin.log"
+                set_mysql_config_value "expire_logs_days" "10"
+                print_success "Binary log etkinleştirildi."
+                print_warning "MySQL'i yeniden başlatmanız gerekir."
+            fi
+            ;;
+        5)
+            echo -e "\n${CYAN}Son 50 error log satırı:${NC}\n"
+            tail -50 "${error_log:-/var/log/mysql/error.log}" 2>/dev/null || print_error "Log dosyası bulunamadı!"
+            ;;
+        6)
+            if [ "$slow_log" = "1" ]; then
+                echo -e "\n${CYAN}Son 50 slow query log satırı:${NC}\n"
+                tail -50 "${slow_log_file}" 2>/dev/null || print_error "Log dosyası bulunamadı!"
+            else
+                print_warning "Slow query log kapalı!"
+            fi
+            ;;
+    esac
+}
+
+# Karakter seti ve collation ayarları
+configure_mysql_charset() {
+    print_header "MySQL Karakter Seti Ayarları"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    echo -e "${CYAN}Mevcut Ayarlar:${NC}"
+    mysql_cmd -e "SHOW VARIABLES LIKE 'character_set%'; SHOW VARIABLES LIKE 'collation%';" 2>/dev/null
+    
+    echo ""
+    echo -e "${CYAN}Varsayılan Karakter Seti Ayarla:${NC}"
+    echo "1) utf8mb4 (Önerilen - Emoji desteği)"
+    echo "2) utf8"
+    echo "3) latin1"
+    echo "0) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz: " charset_choice
+    
+    local charset=""
+    local collation=""
+    
+    case $charset_choice in
+        1)
+            charset="utf8mb4"
+            collation="utf8mb4_unicode_ci"
+            ;;
+        2)
+            charset="utf8"
+            collation="utf8_unicode_ci"
+            ;;
+        3)
+            charset="latin1"
+            collation="latin1_swedish_ci"
+            ;;
+        0)
+            return
+            ;;
+        *)
+            print_error "Geçersiz seçim!"
+            return 1
+            ;;
+    esac
+    
+    print_info "Karakter seti ayarlanıyor: ${charset}"
+    
+    set_mysql_config_value "character-set-server" "${charset}"
+    set_mysql_config_value "collation-server" "${collation}"
+    
+    print_success "Karakter seti ayarlandı: ${charset} / ${collation}"
+    print_warning "MySQL'i yeniden başlatmanız gerekir."
+    
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+        systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
+        print_success "MySQL yeniden başlatıldı."
+    fi
+}
+
+# Sunucu yapılandırma menüsü
+mysql_server_configuration_menu() {
+    while true; do
+        clear
+        print_header "MYSQL SUNUCU YAPILANDIRMA"
+        
+        local config_file=$(get_mysql_config_file)
+        local bind_addr=$(get_mysql_config_value "bind-address")
+        local port=$(get_mysql_config_value "port")
+        
+        echo -e "${CYAN}Mevcut Ayarlar:${NC}"
+        echo "Config Dosyası: ${config_file}"
+        echo "Bind Address: ${bind_addr:-0.0.0.0}"
+        echo "Port: ${port:-3306}"
+        echo ""
+        
+        echo -e "${CYAN}Yapılandırma Seçenekleri:${NC}"
+        echo "  1) Remote Erişim Ayarları (Bind Address)"
+        echo "  2) Port Ayarları"
+        echo "  3) Güvenlik Ayarları"
+        echo "  4) Log Ayarları"
+        echo "  5) Karakter Seti ve Collation"
+        echo "  6) Config Dosyasını Görüntüle"
+        echo "  7) Config Dosyasını Düzenle (nano)"
+        echo "  8) Config Dosyasını Yedekle"
+        echo "  9) MySQL'i Yeniden Başlat"
+        echo ""
+        echo "  0) Geri Dön"
+        echo ""
+        
+        read -p "Seçiminiz [0-9]: " config_choice
+        
+        case $config_choice in
+            1)
+                configure_mysql_remote_access
+                ;;
+            2)
+                configure_mysql_port
+                ;;
+            3)
+                configure_mysql_security
+                ;;
+            4)
+                configure_mysql_logs
+                ;;
+            5)
+                configure_mysql_charset
+                ;;
+            6)
+                clear
+                print_header "MySQL Konfigürasyon Dosyası"
+                echo "Dosya: ${config_file}"
+                echo ""
+                cat "$config_file" 2>/dev/null || print_error "Dosya okunamadı!"
+                ;;
+            7)
+                nano "$config_file"
+                ;;
+            8)
+                local backup_file="${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+                cp "$config_file" "$backup_file"
+                print_success "Yedek oluşturuldu: ${backup_file}"
+                ;;
+            9)
+                print_warning "MySQL yeniden başlatılıyor..."
+                if systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null; then
+                    print_success "MySQL başarıyla yeniden başlatıldı."
+                else
+                    print_error "MySQL yeniden başlatılamadı! Logları kontrol edin."
+                fi
+                sleep 2
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "Geçersiz seçim!"
+                sleep 2
+                continue
+                ;;
+        esac
+        
+        if [ "$config_choice" != "0" ] && [ "$config_choice" != "6" ] && [ "$config_choice" != "9" ]; then
+            echo ""
+            echo -ne "${CYAN}Devam etmek için Enter'a basın...${NC}"
+            read -r
+        fi
+    done
+}
+
 # MySQL/MariaDB performans optimizasyonu
 optimize_mysql_performance() {
     print_header "MySQL/MariaDB Performans Optimizasyonu"
@@ -14045,6 +14558,495 @@ optimize_mysql_performance() {
     esac
 }
 
+# ==========================================
+# MYSQL REPLICATION (MASTER-SLAVE) YÖNETİMİ
+# ==========================================
+
+# Replication durumunu kontrol et
+check_replication_status() {
+    print_header "MySQL Replication Durumu"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    echo -e "${CYAN}Master Durumu:${NC}"
+    mysql_cmd -e "SHOW MASTER STATUS\G" 2>/dev/null
+    
+    echo ""
+    echo -e "${CYAN}Slave Durumu:${NC}"
+    mysql_cmd -e "SHOW SLAVE STATUS\G" 2>/dev/null
+    
+    # Basitleştirilmiş durum
+    echo ""
+    echo -e "${CYAN}Özet Bilgi:${NC}"
+    
+    # Master kontrolü
+    local is_master=$(mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null)
+    if [ "$is_master" = "1" ]; then
+        print_success "Bu sunucu MASTER olarak yapılandırılmış (Binary log aktif)"
+        local master_file=$(mysql_cmd -N -e "SHOW MASTER STATUS" 2>/dev/null | awk '{print $1}')
+        local master_pos=$(mysql_cmd -N -e "SHOW MASTER STATUS" 2>/dev/null | awk '{print $2}')
+        echo -e "  Binary Log File: ${master_file}"
+        echo -e "  Position: ${master_pos}"
+    else
+        print_warning "Bu sunucu MASTER olarak yapılandırılmamış"
+    fi
+    
+    echo ""
+    
+    # Slave kontrolü
+    local slave_io=$(mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}')
+    local slave_sql=$(mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | awk '{print $2}')
+    
+    if [ -n "$slave_io" ]; then
+        if [ "$slave_io" = "Yes" ] && [ "$slave_sql" = "Yes" ]; then
+            print_success "Bu sunucu SLAVE olarak çalışıyor (Replication aktif)"
+        else
+            print_error "Bu sunucu SLAVE olarak yapılandırılmış ama çalışmıyor!"
+            echo -e "  Slave_IO_Running: ${slave_io}"
+            echo -e "  Slave_SQL_Running: ${slave_sql}"
+            
+            # Hata mesajı varsa göster
+            local error=$(mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Last_Error:" | cut -d':' -f2-)
+            if [ -n "$error" ]; then
+                echo -e "${RED}  Son Hata: ${error}${NC}"
+            fi
+        fi
+    else
+        print_info "Bu sunucu SLAVE olarak yapılandırılmamış"
+    fi
+}
+
+# Master sunucu yapılandırması
+configure_master_server() {
+    print_header "Master Sunucu Yapılandırması"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    local config_file=$(get_mysql_config_file)
+    
+    echo -e "${CYAN}Master sunucu yapılandırılıyor...${NC}"
+    echo ""
+    
+    # Server ID belirle
+    read -p "Server ID (benzersiz olmalı) [1]: " server_id
+    server_id=${server_id:-1}
+    
+    # Binary log dosya adı
+    read -p "Binary log dosya adı [mysql-bin]: " log_bin_name
+    log_bin_name=${log_bin_name:-mysql-bin}
+    
+    # Binary log saklanma süresi
+    read -p "Binary log saklanma süresi (gün) [7]: " expire_days
+    expire_days=${expire_days:-7}
+    
+    # Hangi veritabanları replike edilecek?
+    echo ""
+    echo "Replikasyon kapsamı:"
+    echo "1) Tüm veritabanları"
+    echo "2) Belirli veritabanları"
+    echo "3) Belirli veritabanları hariç tümü"
+    read -p "Seçim [1]: " db_choice
+    db_choice=${db_choice:-1}
+    
+    local binlog_filter=""
+    case $db_choice in
+        2)
+            read -p "Replike edilecek veritabanları (virgülle ayırın): " include_dbs
+            binlog_filter="binlog-do-db"
+            ;;
+        3)
+            read -p "Replike edilMEyecek veritabanları (virgülle ayırın): " exclude_dbs
+            binlog_filter="binlog-ignore-db"
+            ;;
+    esac
+    
+    print_info "Master yapılandırması uygulanıyor..."
+    
+    # Config dosyasını yedekle
+    cp "$config_file" "${config_file}.backup.master.$(date +%Y%m%d_%H%M%S)"
+    
+    # Gerekli parametreleri ayarla
+    set_mysql_config_value "server-id" "$server_id"
+    set_mysql_config_value "log_bin" "/var/log/mysql/${log_bin_name}"
+    set_mysql_config_value "expire_logs_days" "$expire_days"
+    set_mysql_config_value "max_binlog_size" "100M"
+    set_mysql_config_value "binlog_format" "ROW"
+    
+    # Veritabanı filtresi
+    if [ "$db_choice" = "2" ] && [ -n "$include_dbs" ]; then
+        IFS=',' read -ra DBS <<< "$include_dbs"
+        for db in "${DBS[@]}"; do
+            echo "binlog-do-db = $(echo $db | xargs)" >> "$config_file"
+        done
+    elif [ "$db_choice" = "3" ] && [ -n "$exclude_dbs" ]; then
+        IFS=',' read -ra DBS <<< "$exclude_dbs"
+        for db in "${DBS[@]}"; do
+            echo "binlog-ignore-db = $(echo $db | xargs)" >> "$config_file"
+        done
+    fi
+    
+    print_success "✓ Master yapılandırması tamamlandı!"
+    
+    # Replication kullanıcısı oluştur
+    echo ""
+    if ask_yes_no "Replication kullanıcısı oluşturmak ister misiniz?"; then
+        create_replication_user
+    fi
+    
+    echo ""
+    print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+        systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
+        sleep 2
+        print_success "MySQL yeniden başlatıldı."
+        
+        # Master durumunu göster
+        echo ""
+        echo -e "${CYAN}Master Status:${NC}"
+        mysql_cmd -e "SHOW MASTER STATUS\G" 2>/dev/null
+    fi
+}
+
+# Replication kullanıcısı oluştur
+create_replication_user() {
+    print_header "Replication Kullanıcısı Oluştur"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    read -p "Kullanıcı adı [replication]: " repl_user
+    repl_user=${repl_user:-replication}
+    
+    read -sp "Şifre: " repl_pass
+    echo ""
+    
+    if [ -z "$repl_pass" ]; then
+        print_error "Şifre boş olamaz!"
+        return 1
+    fi
+    
+    read -p "Erişim kaynağı (IP veya %) [%]: " repl_host
+    repl_host=${repl_host:-"%"}
+    
+    print_info "Replication kullanıcısı oluşturuluyor..."
+    
+    if mysql_cmd -e "CREATE USER '${repl_user}'@'${repl_host}' IDENTIFIED BY '${repl_pass}';" 2>/dev/null; then
+        mysql_cmd -e "GRANT REPLICATION SLAVE ON *.* TO '${repl_user}'@'${repl_host}';" 2>/dev/null
+        mysql_cmd -e "FLUSH PRIVILEGES;" 2>/dev/null
+        
+        print_success "✓ Replication kullanıcısı oluşturuldu!"
+        echo -e "${GREEN}Kullanıcı:${NC} ${repl_user}"
+        echo -e "${GREEN}Host:${NC} ${repl_host}"
+        echo -e "${YELLOW}Şifre:${NC} ${repl_pass}"
+        echo ""
+        echo -e "${CYAN}Bu bilgileri Slave sunucuda kullanacaksınız!${NC}"
+    else
+        print_error "Kullanıcı oluşturulurken hata oluştu!"
+        return 1
+    fi
+}
+
+# Slave sunucu yapılandırması
+configure_slave_server() {
+    print_header "Slave Sunucu Yapılandırması"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    local config_file=$(get_mysql_config_file)
+    
+    echo -e "${CYAN}Slave sunucu yapılandırılıyor...${NC}"
+    echo ""
+    
+    # Server ID belirle
+    read -p "Server ID (Master'dan farklı olmalı) [2]: " server_id
+    server_id=${server_id:-2}
+    
+    # Relay log
+    read -p "Relay log dosya adı [mysql-relay-bin]: " relay_log_name
+    relay_log_name=${relay_log_name:-mysql-relay-bin}
+    
+    # Read-only mode
+    echo ""
+    if ask_yes_no "Slave'i read-only (salt okunur) yapmak ister misiniz? (Önerilen)"; then
+        read_only=1
+    else
+        read_only=0
+    fi
+    
+    print_info "Slave yapılandırması uygulanıyor..."
+    
+    # Config dosyasını yedekle
+    cp "$config_file" "${config_file}.backup.slave.$(date +%Y%m%d_%H%M%S)"
+    
+    # Gerekli parametreleri ayarla
+    set_mysql_config_value "server-id" "$server_id"
+    set_mysql_config_value "relay-log" "/var/log/mysql/${relay_log_name}"
+    set_mysql_config_value "log_bin" "/var/log/mysql/mysql-bin"
+    set_mysql_config_value "read_only" "$read_only"
+    
+    print_success "✓ Slave yapılandırması tamamlandı!"
+    
+    echo ""
+    print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+        systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
+        sleep 2
+        print_success "MySQL yeniden başlatıldı."
+    fi
+    
+    echo ""
+    if ask_yes_no "Şimdi Master sunucuya bağlanmak ister misiniz?"; then
+        setup_slave_connection
+    fi
+}
+
+# Slave'i Master'a bağla
+setup_slave_connection() {
+    print_header "Slave - Master Bağlantısı"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    echo -e "${CYAN}Master sunucu bilgilerini girin:${NC}"
+    echo ""
+    
+    read -p "Master IP/Hostname: " master_host
+    if [ -z "$master_host" ]; then
+        print_error "Master host boş olamaz!"
+        return 1
+    fi
+    
+    read -p "Master Port [3306]: " master_port
+    master_port=${master_port:-3306}
+    
+    read -p "Replication kullanıcı adı [replication]: " repl_user
+    repl_user=${repl_user:-replication}
+    
+    read -sp "Replication şifresi: " repl_pass
+    echo ""
+    
+    if [ -z "$repl_pass" ]; then
+        print_error "Şifre boş olamaz!"
+        return 1
+    fi
+    
+    echo ""
+    echo "Master binary log bilgileri:"
+    echo "(Master sunucuda 'SHOW MASTER STATUS' çıktısından alın)"
+    read -p "Binary log dosyası (örn: mysql-bin.000001): " master_log_file
+    read -p "Position (örn: 154): " master_log_pos
+    
+    if [ -z "$master_log_file" ] || [ -z "$master_log_pos" ]; then
+        print_error "Binary log dosyası ve position gerekli!"
+        return 1
+    fi
+    
+    print_info "Slave bağlantısı kuruluyor..."
+    
+    # Önce mevcut slave'i durdur
+    mysql_cmd -e "STOP SLAVE;" 2>/dev/null
+    
+    # Master bilgilerini ayarla
+    mysql_cmd -e "CHANGE MASTER TO 
+        MASTER_HOST='${master_host}',
+        MASTER_PORT=${master_port},
+        MASTER_USER='${repl_user}',
+        MASTER_PASSWORD='${repl_pass}',
+        MASTER_LOG_FILE='${master_log_file}',
+        MASTER_LOG_POS=${master_log_pos};" 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        # Slave'i başlat
+        mysql_cmd -e "START SLAVE;" 2>/dev/null
+        sleep 2
+        
+        print_success "✓ Slave bağlantısı kuruldu ve başlatıldı!"
+        
+        echo ""
+        echo -e "${CYAN}Slave Durumu:${NC}"
+        mysql_cmd -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep -E "Slave_IO_Running|Slave_SQL_Running|Master_Host|Master_Log_File|Read_Master_Log_Pos|Seconds_Behind_Master|Last_Error"
+        
+        # Durum kontrolü
+        local io_running=$(mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}')
+        local sql_running=$(mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | awk '{print $2}')
+        
+        echo ""
+        if [ "$io_running" = "Yes" ] && [ "$sql_running" = "Yes" ]; then
+            print_success "✓ Replication başarıyla çalışıyor!"
+        else
+            print_error "Replication başlatılamadı! Hataları kontrol edin:"
+            mysql_cmd -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Last.*Error"
+        fi
+    else
+        print_error "Slave bağlantısı kurulamadı!"
+        return 1
+    fi
+}
+
+# Replication'ı yönet (başlat/durdur)
+manage_replication() {
+    print_header "Replication Yönetimi"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    # Mevcut durum
+    local io_running=$(mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}')
+    local sql_running=$(mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | awk '{print $2}')
+    
+    if [ -z "$io_running" ]; then
+        print_warning "Bu sunucu Slave olarak yapılandırılmamış!"
+        return 1
+    fi
+    
+    echo -e "${CYAN}Mevcut Durum:${NC}"
+    echo "Slave_IO_Running: ${io_running}"
+    echo "Slave_SQL_Running: ${sql_running}"
+    echo ""
+    
+    echo "1) Replication'ı Başlat (START SLAVE)"
+    echo "2) Replication'ı Durdur (STOP SLAVE)"
+    echo "3) Replication'ı Sıfırla (RESET SLAVE)"
+    echo "4) Slave konumunu atla (Hata varsa)"
+    echo "5) Detaylı durum göster"
+    echo "0) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz: " repl_choice
+    
+    case $repl_choice in
+        1)
+            mysql_cmd -e "START SLAVE;" 2>/dev/null
+            print_success "Replication başlatıldı."
+            sleep 1
+            mysql_cmd -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep -E "Slave_IO_Running|Slave_SQL_Running"
+            ;;
+        2)
+            mysql_cmd -e "STOP SLAVE;" 2>/dev/null
+            print_success "Replication durduruldu."
+            ;;
+        3)
+            print_warning "⚠️  Bu işlem tüm replication ayarlarını sıfırlar!"
+            if ask_yes_no "Devam etmek istiyor musunuz?"; then
+                mysql_cmd -e "STOP SLAVE;" 2>/dev/null
+                mysql_cmd -e "RESET SLAVE ALL;" 2>/dev/null
+                print_success "Replication sıfırlandı."
+            fi
+            ;;
+        4)
+            print_info "Bir SQL hatası varsa ve atlamak istiyorsanız:"
+            read -p "Kaç hata atlanacak? [1]: " skip_count
+            skip_count=${skip_count:-1}
+            
+            mysql_cmd -e "STOP SLAVE;" 2>/dev/null
+            mysql_cmd -e "SET GLOBAL SQL_SLAVE_SKIP_COUNTER = ${skip_count};" 2>/dev/null
+            mysql_cmd -e "START SLAVE;" 2>/dev/null
+            
+            print_success "${skip_count} hata atlandı ve replication yeniden başlatıldı."
+            ;;
+        5)
+            mysql_cmd -e "SHOW SLAVE STATUS\G" 2>/dev/null
+            ;;
+    esac
+}
+
+# Replication yönetim menüsü
+mysql_replication_menu() {
+    while true; do
+        clear
+        print_header "MYSQL REPLICATION (MASTER-SLAVE) YÖNETİMİ"
+        
+        # Hızlı durum özeti
+        local is_master=$(mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null)
+        local slave_status=$(mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}')
+        
+        echo -e "${CYAN}Mevcut Durum:${NC}"
+        if [ "$is_master" = "1" ]; then
+            echo -e "${GREEN}✓ Master: Aktif (Binary log açık)${NC}"
+        else
+            echo -e "${YELLOW}○ Master: Pasif${NC}"
+        fi
+        
+        if [ -n "$slave_status" ]; then
+            if [ "$slave_status" = "Yes" ]; then
+                echo -e "${GREEN}✓ Slave: Aktif ve çalışıyor${NC}"
+            else
+                echo -e "${RED}✗ Slave: Yapılandırılmış ama çalışmıyor${NC}"
+            fi
+        else
+            echo -e "${YELLOW}○ Slave: Yapılandırılmamış${NC}"
+        fi
+        
+        echo ""
+        echo -e "${CYAN}Kurulum ve Yapılandırma:${NC}"
+        echo "  1) Master Sunucu Yapılandır"
+        echo "  2) Slave Sunucu Yapılandır"
+        echo "  3) Replication Kullanıcısı Oluştur"
+        echo "  4) Slave'i Master'a Bağla"
+        echo ""
+        echo -e "${CYAN}Yönetim ve İzleme:${NC}"
+        echo "  5) Replication Durumunu Kontrol Et"
+        echo "  6) Replication Yönetimi (Başlat/Durdur/Sıfırla)"
+        echo "  7) Master Status Göster"
+        echo "  8) Slave Status Göster (Detaylı)"
+        echo ""
+        echo "  0) Geri Dön"
+        echo ""
+        
+        read -p "Seçiminiz [0-8]: " repl_menu_choice
+        
+        case $repl_menu_choice in
+            1)
+                configure_master_server
+                ;;
+            2)
+                configure_slave_server
+                ;;
+            3)
+                create_replication_user
+                ;;
+            4)
+                setup_slave_connection
+                ;;
+            5)
+                check_replication_status
+                ;;
+            6)
+                manage_replication
+                ;;
+            7)
+                print_header "Master Status"
+                mysql_cmd -e "SHOW MASTER STATUS\G" 2>/dev/null
+                ;;
+            8)
+                print_header "Slave Status (Detaylı)"
+                mysql_cmd -e "SHOW SLAVE STATUS\G" 2>/dev/null
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "Geçersiz seçim!"
+                sleep 2
+                continue
+                ;;
+        esac
+        
+        echo ""
+        echo -ne "${CYAN}Devam etmek için Enter'a basın...${NC}"
+        read -r
+    done
+}
+
 # MySQL/MariaDB yönetim menüsü
 mysql_management_menu() {
     while true; do
@@ -14078,20 +15080,26 @@ mysql_management_menu() {
         echo "  7) Kullanıcı Şifresi Değiştir"
         echo "  8) Kullanıcı Yetkilerini Göster"
         echo ""
-        echo -e "${CYAN}Sistem ve Performans:${NC}"
-        echo "  9) MySQL Ayarlarını Göster"
-        echo " 10) Performans Optimizasyonu"
-        echo " 11) Yedekleme (Backup) - Tüm Veritabanları"
-        echo " 12) Geri Yükleme (Restore)"
+        echo -e "${CYAN}Sunucu Yapılandırma:${NC}"
+        echo "  9) Sunucu Ayarları (Port, Remote Erişim, Güvenlik)"
+        echo " 10) MySQL Ayarlarını Göster"
+        echo " 11) Performans Optimizasyonu"
+        echo ""
+        echo -e "${CYAN}Replication (Master-Slave):${NC}"
+        echo " 12) Replication Yönetimi"
+        echo ""
+        echo -e "${CYAN}Yedekleme:${NC}"
+        echo " 13) Yedekleme (Backup) - Tüm Veritabanları"
+        echo " 14) Geri Yükleme (Restore)"
         echo ""
         echo -e "${CYAN}Oturum Yönetimi:${NC}"
-        echo " 13) Kimlik Bilgilerini Değiştir"
-        echo " 14) Oturumu Kapat (Şifreyi Temizle)"
+        echo " 15) Kimlik Bilgilerini Değiştir"
+        echo " 16) Oturumu Kapat (Şifreyi Temizle)"
         echo ""
         echo "  0) Ana Menüye Dön"
         echo ""
         
-        read -p "Seçiminiz [0-14]: " mysql_choice
+        read -p "Seçiminiz [0-16]: " mysql_choice
         
         case $mysql_choice in
             1)
@@ -14119,18 +15127,24 @@ mysql_management_menu() {
                 show_user_grants
                 ;;
             9)
-                show_mysql_settings
+                mysql_server_configuration_menu
                 ;;
             10)
-                optimize_mysql_performance
+                show_mysql_settings
                 ;;
             11)
-                backup_database
+                optimize_mysql_performance
                 ;;
             12)
-                restore_database
+                mysql_replication_menu
                 ;;
             13)
+                backup_database
+                ;;
+            14)
+                restore_database
+                ;;
+            15)
                 # Kimlik bilgilerini sıfırla ve tekrar iste
                 MYSQL_USER=""
                 MYSQL_PASS=""
@@ -14139,7 +15153,7 @@ mysql_management_menu() {
                 sleep 2
                 continue
                 ;;
-            14)
+            16)
                 # Oturumu kapat
                 MYSQL_USER=""
                 MYSQL_PASS=""
@@ -14151,6 +15165,747 @@ mysql_management_menu() {
             0)
                 # Çıkarken şifreyi temizle
                 MYSQL_PASS=""
+                return
+                ;;
+            *)
+                print_error "Geçersiz seçim!"
+                sleep 2
+                continue
+                ;;
+        esac
+        
+        echo ""
+        echo -ne "${CYAN}Devam etmek için Enter'a basın...${NC}"
+        read -r
+    done
+}
+
+# ==========================================
+# REDİS YÖNETİM FONKSİYONLARI
+# ==========================================
+
+# Redis kimlik bilgileri (oturum bazlı)
+REDIS_HOST="127.0.0.1"
+REDIS_PORT="6379"
+REDIS_PASS=""
+REDIS_AUTH_REQUIRED=false
+
+# Redis komut oluşturucu (kimlik bilgileriyle)
+redis_cmd() {
+    if [ "$REDIS_AUTH_REQUIRED" = true ] && [ -n "$REDIS_PASS" ]; then
+        redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" "$@" 2>/dev/null
+    else
+        redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" "$@" 2>/dev/null
+    fi
+}
+
+# Redis kimlik bilgilerini iste
+request_redis_credentials() {
+    print_header "Redis Kimlik Bilgileri"
+    
+    echo -e "${YELLOW}Redis sunucusuna bağlanmak için bilgileri girin.${NC}"
+    echo ""
+    
+    read -p "Redis Host [127.0.0.1]: " REDIS_HOST
+    REDIS_HOST=${REDIS_HOST:-127.0.0.1}
+    
+    read -p "Redis Port [6379]: " REDIS_PORT
+    REDIS_PORT=${REDIS_PORT:-6379}
+    
+    # Önce şifresiz dene
+    if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" PING 2>/dev/null | grep -q "PONG"; then
+        print_success "✓ Şifresiz bağlantı başarılı."
+        REDIS_AUTH_REQUIRED=false
+        REDIS_PASS=""
+        return 0
+    fi
+    
+    # Şifre iste
+    read -sp "Redis Şifresi (boş bırakabilirsiniz): " REDIS_PASS
+    echo ""
+    
+    # Şifre ile test et
+    if [ -n "$REDIS_PASS" ]; then
+        if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" PING 2>/dev/null | grep -q "PONG"; then
+            print_success "✓ Bağlantı başarılı: ${REDIS_HOST}:${REDIS_PORT}"
+            REDIS_AUTH_REQUIRED=true
+            return 0
+        else
+            print_error "Bağlantı başarısız! Şifre veya bağlantı bilgileri hatalı."
+            REDIS_HOST="127.0.0.1"
+            REDIS_PORT="6379"
+            REDIS_PASS=""
+            REDIS_AUTH_REQUIRED=false
+            return 1
+        fi
+    else
+        print_error "Bağlantı başarısız! Şifre gerekiyor."
+        return 1
+    fi
+}
+
+# Redis bağlantı kontrolü
+check_redis_connection() {
+    if ! command -v redis-cli &>/dev/null; then
+        print_error "redis-cli bulunamadı!"
+        return 1
+    fi
+    
+    if ! systemctl is-active --quiet redis-server 2>/dev/null && ! systemctl is-active --quiet redis 2>/dev/null; then
+        print_error "Redis servisi çalışmıyor!"
+        echo -ne "${YELLOW}Servisi başlatmak ister misiniz? (e/h):${NC} "
+        read -r start_redis
+        if [[ $start_redis =~ ^[Ee]$ ]]; then
+            systemctl start redis-server 2>/dev/null || systemctl start redis 2>/dev/null
+            sleep 2
+        else
+            return 1
+        fi
+    fi
+    
+    # Kimlik bilgileri yoksa veya geçersizse iste
+    if [ -z "$REDIS_HOST" ] || [ "$REDIS_HOST" = "127.0.0.1" -a -z "$REDIS_PASS" ]; then
+        if ! redis_cmd PING 2>/dev/null | grep -q "PONG"; then
+            if ! request_redis_credentials; then
+                return 1
+            fi
+        fi
+    else
+        # Mevcut kimlik bilgilerini test et
+        if ! redis_cmd PING 2>/dev/null | grep -q "PONG"; then
+            print_warning "Mevcut bağlantı geçersiz. Tekrar giriş yapın."
+            REDIS_HOST="127.0.0.1"
+            REDIS_PORT="6379"
+            REDIS_PASS=""
+            if ! request_redis_credentials; then
+                return 1
+            fi
+        fi
+    fi
+    
+    return 0
+}
+
+# Redis konfigürasyon dosyasını bul
+get_redis_config_file() {
+    if [ -f "/etc/redis/redis.conf" ]; then
+        echo "/etc/redis/redis.conf"
+    elif [ -f "/etc/redis.conf" ]; then
+        echo "/etc/redis.conf"
+    elif [ -f "/usr/local/etc/redis.conf" ]; then
+        echo "/usr/local/etc/redis.conf"
+    else
+        echo "/etc/redis/redis.conf"
+    fi
+}
+
+# Redis config değeri oku
+get_redis_config_value() {
+    local param=$1
+    local config_file=$(get_redis_config_file)
+    
+    # Config dosyasından oku
+    if [ -f "$config_file" ]; then
+        grep "^${param} " "$config_file" | head -1 | awk '{print $2}'
+    fi
+}
+
+# Redis config değeri ayarla
+set_redis_config_value() {
+    local param=$1
+    local value=$2
+    local config_file=$(get_redis_config_file)
+    
+    # Config dosyasını yedekle
+    cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Parametreyi güncellemek veya eklemek
+    if grep -q "^${param} " "$config_file" 2>/dev/null; then
+        # Mevcut parametreyi güncelle
+        sed -i "s|^${param} .*|${param} ${value}|" "$config_file"
+    elif grep -q "^# ${param} " "$config_file" 2>/dev/null; then
+        # Yorum satırını aktif et ve güncelle
+        sed -i "s|^# ${param} .*|${param} ${value}|" "$config_file"
+    else
+        # Dosyaya ekle
+        echo "${param} ${value}" >> "$config_file"
+    fi
+}
+
+# Redis bilgilerini göster
+show_redis_info() {
+    print_header "Redis Bilgileri"
+    
+    if ! check_redis_connection; then
+        return 1
+    fi
+    
+    echo -e "${CYAN}Sunucu Bilgileri:${NC}"
+    redis_cmd INFO server | grep -E "redis_version|redis_mode|os|uptime_in_seconds|uptime_in_days"
+    
+    echo ""
+    echo -e "${CYAN}İstemci Bağlantıları:${NC}"
+    redis_cmd INFO clients | grep -E "connected_clients|blocked_clients"
+    
+    echo ""
+    echo -e "${CYAN}Bellek Kullanımı:${NC}"
+    redis_cmd INFO memory | grep -E "used_memory_human|used_memory_peak_human|maxmemory_human|mem_fragmentation_ratio"
+    
+    echo ""
+    echo -e "${CYAN}İstatistikler:${NC}"
+    redis_cmd INFO stats | grep -E "total_connections_received|total_commands_processed|instantaneous_ops_per_sec|keyspace_hits|keyspace_misses"
+    
+    echo ""
+    echo -e "${CYAN}Replication:${NC}"
+    redis_cmd INFO replication | grep -E "role|connected_slaves|master_host|master_port|master_link_status"
+    
+    echo ""
+    echo -e "${CYAN}Persistence:${NC}"
+    redis_cmd INFO persistence | grep -E "rdb_last_save_time|rdb_changes_since_last_save|aof_enabled|aof_last_rewrite_time_sec"
+    
+    echo ""
+    echo -e "${CYAN}Veritabanı Bilgileri:${NC}"
+    redis_cmd INFO keyspace
+}
+
+# Redis key yönetimi
+manage_redis_keys() {
+    print_header "Redis Key Yönetimi"
+    
+    if ! check_redis_connection; then
+        return 1
+    fi
+    
+    echo -e "${CYAN}Key İşlemleri:${NC}"
+    echo "1) Tüm Key'leri Listele (pattern ile)"
+    echo "2) Key Değerini Göster (GET)"
+    echo "3) Key Oluştur/Güncelle (SET)"
+    echo "4) Key Sil (DEL)"
+    echo "5) Key Bilgisi (TYPE, TTL)"
+    echo "6) Key Expire Ayarla"
+    echo "7) Veritabanı Seç"
+    echo "8) Tüm Key'leri Say"
+    echo "9) Tüm Veritabanını Temizle (FLUSHDB)"
+    echo "10) Tüm Veritabanlarını Temizle (FLUSHALL)"
+    echo "0) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz: " key_choice
+    
+    case $key_choice in
+        1)
+            read -p "Pattern (* = tümü) [*]: " pattern
+            pattern=${pattern:-*}
+            
+            echo -e "\n${CYAN}Eşleşen Key'ler:${NC}"
+            redis_cmd KEYS "$pattern" | head -100
+            
+            local count=$(redis_cmd KEYS "$pattern" | wc -l)
+            echo ""
+            print_info "Toplam ${count} key bulundu (ilk 100 gösteriliyor)"
+            ;;
+        2)
+            read -p "Key adı: " key_name
+            if [ -n "$key_name" ]; then
+                local value=$(redis_cmd GET "$key_name")
+                if [ -n "$value" ]; then
+                    echo -e "\n${CYAN}Key:${NC} ${key_name}"
+                    echo -e "${CYAN}Değer:${NC} ${value}"
+                else
+                    print_warning "Key bulunamadı veya string değil."
+                fi
+            fi
+            ;;
+        3)
+            read -p "Key adı: " key_name
+            read -p "Değer: " key_value
+            
+            if [ -n "$key_name" ] && [ -n "$key_value" ]; then
+                redis_cmd SET "$key_name" "$key_value"
+                print_success "Key oluşturuldu/güncellendi: ${key_name}"
+            fi
+            ;;
+        4)
+            read -p "Key adı (virgülle ayırarak birden fazla): " keys_to_delete
+            if [ -n "$keys_to_delete" ]; then
+                redis_cmd DEL $keys_to_delete
+                print_success "Key(ler) silindi."
+            fi
+            ;;
+        5)
+            read -p "Key adı: " key_name
+            if [ -n "$key_name" ]; then
+                local key_type=$(redis_cmd TYPE "$key_name")
+                local key_ttl=$(redis_cmd TTL "$key_name")
+                
+                echo -e "\n${CYAN}Key:${NC} ${key_name}"
+                echo -e "${CYAN}Type:${NC} ${key_type}"
+                
+                if [ "$key_ttl" = "-1" ]; then
+                    echo -e "${CYAN}TTL:${NC} Süresiz (no expiration)"
+                elif [ "$key_ttl" = "-2" ]; then
+                    echo -e "${CYAN}TTL:${NC} Key mevcut değil"
+                else
+                    echo -e "${CYAN}TTL:${NC} ${key_ttl} saniye"
+                fi
+            fi
+            ;;
+        6)
+            read -p "Key adı: " key_name
+            read -p "Süre (saniye): " expire_time
+            
+            if [ -n "$key_name" ] && [ -n "$expire_time" ]; then
+                redis_cmd EXPIRE "$key_name" "$expire_time"
+                print_success "Expire ayarlandı: ${expire_time} saniye"
+            fi
+            ;;
+        7)
+            read -p "Veritabanı numarası (0-15) [0]: " db_num
+            db_num=${db_num:-0}
+            
+            redis_cmd SELECT "$db_num"
+            print_success "Veritabanı ${db_num} seçildi."
+            ;;
+        8)
+            local total_keys=$(redis_cmd DBSIZE)
+            print_info "Toplam key sayısı: ${total_keys}"
+            ;;
+        9)
+            print_warning "⚠️  Mevcut veritabanındaki TÜM key'ler silinecek!"
+            if ask_yes_no "Devam etmek istiyor musunuz?"; then
+                redis_cmd FLUSHDB
+                print_success "Veritabanı temizlendi."
+            fi
+            ;;
+        10)
+            print_warning "⚠️  TÜM veritabanlarındaki TÜM key'ler silinecek!"
+            if ask_yes_no "Devam etmek istiyor musunuz?"; then
+                redis_cmd FLUSHALL
+                print_success "Tüm veritabanları temizlendi."
+            fi
+            ;;
+    esac
+}
+
+# Redis sunucu yapılandırması
+configure_redis_server() {
+    print_header "Redis Sunucu Yapılandırması"
+    
+    if ! check_redis_connection; then
+        return 1
+    fi
+    
+    local config_file=$(get_redis_config_file)
+    local bind_addr=$(get_redis_config_value "bind")
+    local port=$(get_redis_config_value "port")
+    local requirepass=$(get_redis_config_value "requirepass")
+    
+    echo -e "${CYAN}Mevcut Ayarlar:${NC}"
+    echo "Config Dosyası: ${config_file}"
+    echo "Bind Address: ${bind_addr:-127.0.0.1}"
+    echo "Port: ${port:-6379}"
+    echo "Şifre: $([ -n "$requirepass" ] && echo "Ayarlı" || echo "Yok")"
+    echo ""
+    
+    echo -e "${CYAN}Yapılandırma Seçenekleri:${NC}"
+    echo "  1) Remote Erişim Ayarları (Bind Address)"
+    echo "  2) Port Ayarları"
+    echo "  3) Şifre Ayarla/Kaldır (requirepass)"
+    echo "  4) Max Memory Ayarla"
+    echo "  5) Max Memory Policy Ayarla"
+    echo "  6) Max Clients Ayarla"
+    echo "  7) Timeout Ayarla"
+    echo "  8) Protected Mode Aç/Kapat"
+    echo "  9) Config Dosyasını Görüntüle"
+    echo " 10) Config Dosyasını Düzenle (nano)"
+    echo " 11) Redis'i Yeniden Başlat"
+    echo ""
+    echo "  0) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz [0-11]: " config_choice
+    
+    case $config_choice in
+        1)
+            echo "Bind Address ayarları:"
+            echo "1) Sadece localhost (127.0.0.1) - Güvenli"
+            echo "2) Tüm IP'lere aç (0.0.0.0) - Dikkatli!"
+            echo "3) Belirli IP'ye aç"
+            read -p "Seçim [1]: " bind_choice
+            
+            case $bind_choice in
+                2)
+                    print_warning "⚠️  Tüm IP'lere açmak güvenlik riski!"
+                    if ask_yes_no "Devam etmek istiyormusunuz?"; then
+                        set_redis_config_value "bind" "0.0.0.0"
+                        print_success "Redis tüm IP'lerden erişilebilir yapıldı."
+                    fi
+                    ;;
+                3)
+                    read -p "IP adresi: " custom_ip
+                    if [ -n "$custom_ip" ]; then
+                        set_redis_config_value "bind" "$custom_ip"
+                        print_success "Bind address ayarlandı: ${custom_ip}"
+                    fi
+                    ;;
+                *)
+                    set_redis_config_value "bind" "127.0.0.1"
+                    print_success "Redis sadece localhost'tan erişilebilir."
+                    ;;
+            esac
+            ;;
+        2)
+            local current_port=$(get_redis_config_value "port")
+            current_port=${current_port:-6379}
+            
+            read -p "Yeni port [${current_port}]: " new_port
+            new_port=${new_port:-$current_port}
+            
+            set_redis_config_value "port" "$new_port"
+            print_success "Port ayarlandı: ${new_port}"
+            ;;
+        3)
+            echo "1) Şifre ayarla"
+            echo "2) Şifreyi kaldır"
+            read -p "Seçim: " pass_choice
+            
+            if [ "$pass_choice" = "1" ]; then
+                read -sp "Yeni şifre: " new_pass
+                echo ""
+                if [ -n "$new_pass" ]; then
+                    set_redis_config_value "requirepass" "$new_pass"
+                    redis_cmd CONFIG SET requirepass "$new_pass"
+                    print_success "Şifre ayarlandı."
+                    REDIS_PASS="$new_pass"
+                    REDIS_AUTH_REQUIRED=true
+                fi
+            else
+                set_redis_config_value "requirepass" '""'
+                redis_cmd CONFIG SET requirepass ""
+                print_success "Şifre kaldırıldı."
+                REDIS_PASS=""
+                REDIS_AUTH_REQUIRED=false
+            fi
+            ;;
+        4)
+            local current_maxmem=$(redis_cmd CONFIG GET maxmemory | tail -1)
+            echo "Mevcut max memory: ${current_maxmem} bytes"
+            
+            read -p "Yeni max memory (örn: 256mb, 1gb): " new_maxmem
+            if [ -n "$new_maxmem" ]; then
+                redis_cmd CONFIG SET maxmemory "$new_maxmem"
+                set_redis_config_value "maxmemory" "$new_maxmem"
+                print_success "Max memory ayarlandı: ${new_maxmem}"
+            fi
+            ;;
+        5)
+            echo "Max Memory Policy:"
+            echo "1) noeviction - Yeni yazma engelle"
+            echo "2) allkeys-lru - En az kullanılan key'i sil"
+            echo "3) volatile-lru - Expire'lı key'lerden en az kullanılanı sil"
+            echo "4) allkeys-random - Rastgele key sil"
+            echo "5) volatile-ttl - En yakın expire'lı key'i sil"
+            read -p "Seçim [2]: " policy_choice
+            
+            local policy="allkeys-lru"
+            case $policy_choice in
+                1) policy="noeviction";;
+                3) policy="volatile-lru";;
+                4) policy="allkeys-random";;
+                5) policy="volatile-ttl";;
+            esac
+            
+            redis_cmd CONFIG SET maxmemory-policy "$policy"
+            set_redis_config_value "maxmemory-policy" "$policy"
+            print_success "Policy ayarlandı: ${policy}"
+            ;;
+        6)
+            read -p "Max clients [10000]: " max_clients
+            max_clients=${max_clients:-10000}
+            
+            redis_cmd CONFIG SET maxclients "$max_clients"
+            set_redis_config_value "maxclients" "$max_clients"
+            print_success "Max clients ayarlandı: ${max_clients}"
+            ;;
+        7)
+            read -p "Timeout (saniye, 0=süresiz) [0]: " timeout
+            timeout=${timeout:-0}
+            
+            redis_cmd CONFIG SET timeout "$timeout"
+            set_redis_config_value "timeout" "$timeout"
+            print_success "Timeout ayarlandı: ${timeout}"
+            ;;
+        8)
+            local protected=$(get_redis_config_value "protected-mode")
+            if [ "$protected" = "yes" ]; then
+                set_redis_config_value "protected-mode" "no"
+                print_success "Protected mode kapatıldı."
+            else
+                set_redis_config_value "protected-mode" "yes"
+                print_success "Protected mode açıldı."
+            fi
+            ;;
+        9)
+            clear
+            print_header "Redis Konfigürasyon Dosyası"
+            cat "$config_file" 2>/dev/null || print_error "Dosya okunamadı!"
+            ;;
+        10)
+            nano "$config_file"
+            ;;
+        11)
+            print_warning "Redis yeniden başlatılıyor..."
+            if systemctl restart redis-server 2>/dev/null || systemctl restart redis 2>/dev/null; then
+                print_success "Redis başarıyla yeniden başlatıldı."
+            else
+                print_error "Redis yeniden başlatılamadı!"
+            fi
+            sleep 2
+            ;;
+    esac
+    
+    if [ "$config_choice" != "0" ] && [ "$config_choice" != "9" ] && [ "$config_choice" != "11" ]; then
+        echo ""
+        print_warning "Bazı değişiklikler için Redis'i yeniden başlatmanız gerekebilir."
+    fi
+}
+
+# Redis persistence ayarları
+configure_redis_persistence() {
+    print_header "Redis Persistence Ayarları"
+    
+    if ! check_redis_connection; then
+        return 1
+    fi
+    
+    echo -e "${CYAN}Mevcut Durum:${NC}"
+    redis_cmd INFO persistence | grep -E "rdb_|aof_"
+    
+    echo ""
+    echo -e "${CYAN}Persistence Türleri:${NC}"
+    echo "RDB (Snapshot): Belirli aralıklarla disk'e yazma"
+    echo "AOF (Append Only File): Her komutu log'a yazma"
+    echo ""
+    
+    echo "1) RDB Ayarları"
+    echo "2) AOF Etkinleştir/Kapat"
+    echo "3) Manuel RDB Save"
+    echo "4) Manuel AOF Rewrite"
+    echo "5) Persistence Devre Dışı Bırak"
+    echo "0) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz: " persist_choice
+    
+    case $persist_choice in
+        1)
+            echo "RDB snapshot ayarları:"
+            echo "Mevcut: $(get_redis_config_value 'save')"
+            echo ""
+            echo "Örnek: save 900 1 (900 saniyede en az 1 değişiklik)"
+            read -p "RDB save kuralı ekle (örn: 900 1): " save_rule
+            
+            if [ -n "$save_rule" ]; then
+                redis_cmd CONFIG SET save "$save_rule"
+                echo "save $save_rule" >> "$(get_redis_config_file)"
+                print_success "RDB kuralı eklendi."
+            fi
+            ;;
+        2)
+            local aof_enabled=$(redis_cmd CONFIG GET appendonly | tail -1)
+            if [ "$aof_enabled" = "yes" ]; then
+                redis_cmd CONFIG SET appendonly no
+                set_redis_config_value "appendonly" "no"
+                print_success "AOF kapatıldı."
+            else
+                redis_cmd CONFIG SET appendonly yes
+                set_redis_config_value "appendonly" "yes"
+                print_success "AOF etkinleştirildi."
+            fi
+            ;;
+        3)
+            print_info "RDB snapshot oluşturuluyor..."
+            redis_cmd SAVE
+            print_success "RDB snapshot oluşturuldu."
+            ;;
+        4)
+            print_info "AOF rewrite başlatılıyor..."
+            redis_cmd BGREWRITEAOF
+            print_success "AOF rewrite başlatıldı."
+            ;;
+        5)
+            print_warning "⚠️  Tüm persistence kapatılacak! Veri kaybı riski!"
+            if ask_yes_no "Devam etmek istiyor musunuz?"; then
+                redis_cmd CONFIG SET save ""
+                redis_cmd CONFIG SET appendonly no
+                print_success "Persistence devre dışı bırakıldı."
+            fi
+            ;;
+    esac
+}
+
+# Redis replication yönetimi
+configure_redis_replication() {
+    print_header "Redis Replication (Master-Slave)"
+    
+    if ! check_redis_connection; then
+        return 1
+    fi
+    
+    # Mevcut durum
+    local role=$(redis_cmd INFO replication | grep "^role:" | cut -d':' -f2 | tr -d '\r')
+    
+    echo -e "${CYAN}Mevcut Rol:${NC} ${role}"
+    echo ""
+    
+    if [ "$role" = "master" ]; then
+        local slaves=$(redis_cmd INFO replication | grep "connected_slaves:" | cut -d':' -f2 | tr -d '\r')
+        echo -e "${GREEN}Bu sunucu MASTER${NC}"
+        echo -e "Bağlı slave sayısı: ${slaves}"
+        echo ""
+        redis_cmd INFO replication | grep "^slave[0-9]"
+    elif [ "$role" = "slave" ]; then
+        echo -e "${YELLOW}Bu sunucu SLAVE${NC}"
+        redis_cmd INFO replication | grep -E "master_host|master_port|master_link_status|master_sync"
+    fi
+    
+    echo ""
+    echo "1) Slave Olarak Yapılandır (Master'a bağlan)"
+    echo "2) Master Olarak Yapılandır (Slave bağlantısını kes)"
+    echo "3) Replication Durumunu Göster"
+    echo "4) Slave'den Master'a yükselt (SLAVEOF NO ONE)"
+    echo "0) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz: " repl_choice
+    
+    case $repl_choice in
+        1)
+            read -p "Master IP: " master_ip
+            read -p "Master Port [6379]: " master_port
+            master_port=${master_port:-6379}
+            
+            read -sp "Master Şifresi (varsa): " master_pass
+            echo ""
+            
+            if [ -n "$master_pass" ]; then
+                redis_cmd CONFIG SET masterauth "$master_pass"
+                set_redis_config_value "masterauth" "$master_pass"
+            fi
+            
+            redis_cmd SLAVEOF "$master_ip" "$master_port"
+            set_redis_config_value "slaveof" "$master_ip $master_port"
+            
+            print_success "Slave olarak yapılandırıldı: ${master_ip}:${master_port}"
+            
+            sleep 2
+            redis_cmd INFO replication | grep -E "master_link_status|master_sync"
+            ;;
+        2)
+            redis_cmd SLAVEOF NO ONE
+            print_success "Master olarak yapılandırıldı."
+            ;;
+        3)
+            redis_cmd INFO replication
+            ;;
+        4)
+            print_warning "Bu slave Master'a yükseltilecek!"
+            if ask_yes_no "Devam etmek istiyor musunuz?"; then
+                redis_cmd SLAVEOF NO ONE
+                set_redis_config_value "slaveof" '""'
+                print_success "Slave Master'a yükseltildi."
+            fi
+            ;;
+    esac
+}
+
+# Redis yönetim menüsü
+redis_management_menu() {
+    while true; do
+        clear
+        print_header "REDİS YÖNETİM PANELİ"
+        
+        # Redis durumunu kontrol et
+        if systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
+            echo -e "${GREEN}✓ Redis Durumu: Çalışıyor${NC}"
+        else
+            echo -e "${RED}✗ Redis Durumu: Durmuş${NC}"
+        fi
+        
+        # Bağlantı bilgisi
+        if [ -n "$REDIS_HOST" ]; then
+            echo -e "${CYAN}Bağlantı: ${REDIS_HOST}:${REDIS_PORT}${NC}"
+        else
+            echo -e "${YELLOW}Kimlik bilgisi girilmemiş (ilk işlemde istenecek)${NC}"
+        fi
+        
+        echo ""
+        echo -e "${CYAN}Bilgi ve İzleme:${NC}"
+        echo "  1) Redis Bilgileri (INFO)"
+        echo "  2) Key Yönetimi"
+        echo "  3) Sunucu İstatistikleri"
+        echo ""
+        echo -e "${CYAN}Sunucu Yapılandırma:${NC}"
+        echo "  4) Sunucu Ayarları (Port, Bind, Şifre)"
+        echo "  5) Persistence Ayarları (RDB, AOF)"
+        echo "  6) Replication Ayarları (Master-Slave)"
+        echo ""
+        echo -e "${CYAN}Oturum Yönetimi:${NC}"
+        echo "  7) Bağlantı Bilgilerini Değiştir"
+        echo "  8) Oturumu Kapat"
+        echo ""
+        echo "  0) Ana Menüye Dön"
+        echo ""
+        
+        read -p "Seçiminiz [0-8]: " redis_choice
+        
+        case $redis_choice in
+            1)
+                show_redis_info
+                ;;
+            2)
+                manage_redis_keys
+                ;;
+            3)
+                print_header "Redis İstatistikleri"
+                if check_redis_connection; then
+                    redis_cmd INFO stats
+                    echo ""
+                    redis_cmd INFO cpu
+                fi
+                ;;
+            4)
+                configure_redis_server
+                ;;
+            5)
+                configure_redis_persistence
+                ;;
+            6)
+                configure_redis_replication
+                ;;
+            7)
+                # Bağlantı bilgilerini sıfırla
+                REDIS_HOST="127.0.0.1"
+                REDIS_PORT="6379"
+                REDIS_PASS=""
+                REDIS_AUTH_REQUIRED=false
+                print_info "Bağlantı bilgileri temizlendi."
+                sleep 2
+                continue
+                ;;
+            8)
+                # Oturumu kapat
+                REDIS_HOST="127.0.0.1"
+                REDIS_PORT="6379"
+                REDIS_PASS=""
+                REDIS_AUTH_REQUIRED=false
+                print_success "Oturum kapatıldı."
+                sleep 2
+                continue
+                ;;
+            0)
+                # Çıkarken şifreyi temizle
+                REDIS_PASS=""
                 return
                 ;;
             *)
@@ -14849,6 +16604,7 @@ main_menu() {
         echo "29) Multi-Server (Dağıtık Sistem) Yapılandırması"
         echo "31) Servis Sağlık Kontrolü (Health Check)"
         echo "32) MySQL/MariaDB Yönetim Paneli"
+        echo "33) Redis Yönetim Paneli"
         echo "30) Çıkış"
         echo ""
         
@@ -14859,7 +16615,7 @@ main_menu() {
             echo ""
         fi
         
-        read -p "Seçiminizi yapın (1-32): " choice
+        read -p "Seçiminizi yapın (1-33): " choice
         
         case $choice in
             1)
@@ -14992,12 +16748,15 @@ main_menu() {
             32)
                 mysql_management_menu
                 ;;
+            33)
+                redis_management_menu
+                ;;
             30)
                 print_success "Çıkılıyor..."
                 exit 0
                 ;;
             *)
-                print_error "Geçersiz seçim. Lütfen 1-32 arasında bir sayı girin."
+                print_error "Geçersiz seçim. Lütfen 1-33 arasında bir sayı girin."
                 sleep 2
                 ;;
         esac
