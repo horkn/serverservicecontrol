@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Ubuntu 24.04 Modüler Kurulum Betiği - Seçmeli Servis Kurulumu ve Yönetim
+ #Ubuntu 24.04 Modüler Kurulum Betiği - Seçmeli Servis Kurulumu ve Yönetim
 
-# Renk tanımlamaları
+ #Renk tanımlamaları
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -11,7 +11,7 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Multi-Server Yapılandırma Değişkenleri
+ #Multi-Server Yapılandırma Değişkenleri
 MULTI_SERVER_MODE=false
 DNS_SERVER_IP=""
 WEB_SERVER_IP=""
@@ -24,18 +24,18 @@ DATABASE_LOCAL_IP=""
 REDIS_LOCAL_IP=""
 MULTI_SERVER_CONFIG="/etc/server-cluster.conf"
 
-# Sunucular Arası Haberleşme Modu
+ #Sunucular Arası Haberleşme Modu
 CLUSTER_COMMUNICATION_MODE=""  # vpn, wireguard, ssh_tunnel, private_network, public
 VPN_NETWORK=""                 # Örn: 10.8.0.0/24
 WIREGUARD_NETWORK=""           # Örn: 10.9.0.0/24
 
-# Kök kullanıcı kontrolü
+ #Kök kullanıcı kontrolü
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}Hata: Lütfen bu betiği 'sudo' ile çalıştırın: sudo $0${NC}"
     exit 1
 fi
 
-# Multi-server yapılandırmasını yükle  - varsa
+ #Multi-server yapılandırmasını yükle  - varsa
 load_multi_server_config() {
     if [ -f "$MULTI_SERVER_CONFIG" ]; then
         source "$MULTI_SERVER_CONFIG"
@@ -44,7 +44,7 @@ load_multi_server_config() {
     fi
 }
 
-# Fonksiyonlar
+ #Fonksiyonlar
 print_header() {
     echo -e "${GREEN}"
     echo "=========================================="
@@ -61,7 +61,7 @@ print_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
-# BIND9 servisini reload et  - Ubuntu 24.04 uyumlu
+ #BIND9 servisini reload et  - Ubuntu 24.04 uyumlu
 reload_bind9() {
     # Ubuntu 24.04'te bind9, eski sistemlerde named
     if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
@@ -71,7 +71,7 @@ reload_bind9() {
     fi
 }
 
-# LOKAL DNS challenge hook'ları oluştur  - A sunucusunda
+ #LOKAL DNS challenge hook'ları oluştur  - A sunucusunda
 create_local_dns_hooks() {
     local domain=$1
     
@@ -80,36 +80,36 @@ create_local_dns_hooks() {
     # Auth hook  - TXT ekle - LOKAL
     cat > /usr/local/bin/certbot-dns-local-add.sh <<'HOOK_ADD'
 #!/bin/bash
-# LOKAL DNS Challenge - TXT Ekle
+ #LOKAL DNS Challenge - TXT Ekle
 
 DOMAIN="$CERTBOT_DOMAIN"
 TOKEN="$CERTBOT_VALIDATION"
-MAIN_DOMAIN=$ - echo "$DOMAIN" | rev | cut -d'.' -f1-2 | rev
+MAIN_DOMAIN=$echo "$DOMAIN" | rev | cut -d'.' -f1-2 | rev
 ZONE_FILE="/etc/bind/db.$MAIN_DOMAIN"
 
 echo "[INFO] TXT kaydı ekleniyor  - LOKAL: _acme-challenge.$DOMAIN"
 
-# Zone var mı
+ #Zone var mı
 if [ ! -f "$ZONE_FILE" ]; then
     echo "[HATA] Zone dosyası yok: $ZONE_FILE"
     exit 1
 fi
 
-# Subdomain parse
+ #Subdomain parse
 RECORD_NAME="_acme-challenge"
 if [ "$DOMAIN" != "$MAIN_DOMAIN" ]; then
-    SUBDOMAIN=$ - echo "$DOMAIN" | sed "s/\.$MAIN_DOMAIN//"
+    SUBDOMAIN=$echo "$DOMAIN" | sed "s/\.$MAIN_DOMAIN//"
     RECORD_NAME="_acme-challenge.$SUBDOMAIN"
 fi
 
-# Serial güncelle  - önce
-CURRENT_SERIAL=$ - grep "Serial" "$ZONE_FILE" | grep -oE '[0-9]+' | head -1
-NEW_SERIAL=$ - date +%Y%m%d%H
-[ "$NEW_SERIAL" -le "$CURRENT_SERIAL" ] && NEW_SERIAL=$ - (CURRENT_SERIAL + 1)
+ #Serial güncelle  - önce
+CURRENT_SERIAL=$grep "Serial" "$ZONE_FILE" | grep -oE '[0-9]+' | head -1
+NEW_SERIAL=$date +%Y%m%d%H
+[ "$NEW_SERIAL" -le "$CURRENT_SERIAL" ] && NEW_SERIAL=$((CURRENT_SERIAL + 1)
 sed -i "s/$CURRENT_SERIAL/$NEW_SERIAL/" "$ZONE_FILE"
 
-# TXT kaydı ekle  - ESKİLERİ SİLME! Wildcard için gerekli
-# Aynı token varsa tekrar ekleme
+ #TXT kaydı ekle  - ESKİLERİ SİLME! Wildcard için gerekli
+ #Aynı token varsa tekrar ekleme
 if ! grep -q "$RECORD_NAME.*IN.*TXT.*\"$TOKEN\"" "$ZONE_FILE"; then
     echo "$RECORD_NAME     IN      TXT     \"$TOKEN\"" >> "$ZONE_FILE"
     echo "[OK] Token eklendi: $TOKEN"
@@ -117,7 +117,7 @@ else
     echo "[INFO] Token zaten mevcut"
 fi
 
-# BIND9 reload
+ #BIND9 reload
 if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
     systemctl reload bind9
 else
@@ -131,10 +131,10 @@ HOOK_ADD
     # Cleanup hook  - TXT sil - LOKAL
     cat > /usr/local/bin/certbot-dns-local-cleanup.sh <<'HOOK_CLEANUP'
 #!/bin/bash
-# LOKAL DNS Challenge - TXT Sil
+ #LOKAL DNS Challenge - TXT Sil
 
 DOMAIN="$CERTBOT_DOMAIN"
-MAIN_DOMAIN=$ - echo "$DOMAIN" | rev | cut -d'.' -f1-2 | rev
+MAIN_DOMAIN=$echo "$DOMAIN" | rev | cut -d'.' -f1-2 | rev
 ZONE_FILE="/etc/bind/db.$MAIN_DOMAIN"
 
 echo "[INFO] TXT kaydı siliniyor  - LOKAL: _acme-challenge.$DOMAIN"
@@ -144,23 +144,23 @@ if [ ! -f "$ZONE_FILE" ]; then
     exit 0
 fi
 
-# Subdomain parse
+ #Subdomain parse
 RECORD_NAME="_acme-challenge"
 if [ "$DOMAIN" != "$MAIN_DOMAIN" ]; then
-    SUBDOMAIN=$ - echo "$DOMAIN" | sed "s/\.$MAIN_DOMAIN//"
+    SUBDOMAIN=$echo "$DOMAIN" | sed "s/\.$MAIN_DOMAIN//"
     RECORD_NAME="_acme-challenge.$SUBDOMAIN"
 fi
 
-# TÜM _acme-challenge TXT kayıtlarını sil  - wildcard için birden fazla olabilir
+ #TÜM _acme-challenge TXT kayıtlarını sil  - wildcard için birden fazla olabilir
 sed -i "/$RECORD_NAME.*IN.*TXT/d" "$ZONE_FILE"
 echo "[OK] TXT kayıtları silindi: $RECORD_NAME"
 
-# Serial güncelle
-CURRENT_SERIAL=$ - grep "Serial" "$ZONE_FILE" | grep -oE '[0-9]+' | head -1
-NEW_SERIAL=$ - (CURRENT_SERIAL + 1)
+ #Serial güncelle
+CURRENT_SERIAL=$grep "Serial" "$ZONE_FILE" | grep -oE '[0-9]+' | head -1
+NEW_SERIAL=$((CURRENT_SERIAL + 1)
 sed -i "s/$CURRENT_SERIAL/$NEW_SERIAL/" "$ZONE_FILE"
 
-# BIND9 reload
+ #BIND9 reload
 if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
     systemctl reload bind9
 else
@@ -186,7 +186,7 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Multi-Server Yapılandırma Fonksiyonları
+ #Multi-Server Yapılandırma Fonksiyonları
 configure_multi_server() {
     print_header "Multi-Server  - Dağıtık Yapılandırma - Master/Slave Destekli"
     
@@ -205,8 +205,8 @@ configure_multi_server() {
     MULTI_SERVER_MODE=true
     
     # Mevcut sunucu IP'lerini tespit et
-    local current_public_ip=$ - hostname -I | awk '{print $1}'
-    local current_private_ip=$ - ip addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d'/' -f1 | grep "^10\.\|^172\.\|^192\.168\." | head -1 || echo ""
+    local current_public_ip=$hostname -I | awk '{print $1}'
+    local current_private_ip=$ip addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d'/' -f1 | grep "^10\.\|^172\.\|^192\.168\." | head -1 || echo ""
     
     echo -e "${CYAN}Mevcut sunucu IP'leri:${NC}"
     echo -e "  Public IP:  ${GREEN}$current_public_ip${NC}"
@@ -288,21 +288,21 @@ configure_multi_server() {
     echo ""
     
     echo -e "${YELLOW}► DNS + Ana Site:${NC}"
-    echo -e "   Public IP: ${GREEN}$DNS_SERVER_IP${NC} $ - [ "$DNS_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]""
+    echo -e "   Public IP: ${GREEN}$DNS_SERVER_IP${NC} $[ "$DNS_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]""
     echo ""
     
     echo -e "${YELLOW}► Laravel Sistem:${NC}"
-    echo -e "   Public IP: ${GREEN}$WEB_SERVER_IP${NC} $ - [ "$WEB_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]""
+    echo -e "   Public IP: ${GREEN}$WEB_SERVER_IP${NC} $[ "$WEB_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]""
     echo ""
     
     echo -e "${YELLOW}► MySQL Database:${NC}"
-    echo -e "   Master Public:  ${GREEN}$DATABASE_SERVER_IP${NC} $ - [ "$DATABASE_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]""
+    echo -e "   Master Public:  ${GREEN}$DATABASE_SERVER_IP${NC} $[ "$DATABASE_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]""
     [ -n "$DATABASE_LOCAL_IP" ] && echo -e "   Master Local:   ${GREEN}$DATABASE_LOCAL_IP${NC} ${CYAN} - Laravel buradan bağlanacak${NC}"
     [ -n "$DATABASE_SLAVE_IP" ] && echo -e "   Slave Public:   ${GREEN}$DATABASE_SLAVE_IP${NC}"
     echo ""
     
     echo -e "${YELLOW}► Redis Cache:${NC}"
-    echo -e "   Master Public:  ${GREEN}$REDIS_SERVER_IP${NC} $ - [ "$REDIS_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]""
+    echo -e "   Master Public:  ${GREEN}$REDIS_SERVER_IP${NC} $[ "$REDIS_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]""
     [ -n "$REDIS_LOCAL_IP" ] && echo -e "   Master Local:   ${GREEN}$REDIS_LOCAL_IP${NC} ${CYAN} - Laravel buradan bağlanacak${NC}"
     [ -n "$REDIS_SLAVE_IP" ] && echo -e "   Slave Public:   ${GREEN}$REDIS_SLAVE_IP${NC}"
     echo ""
@@ -363,18 +363,18 @@ EOF
 
 save_multi_server_config() {
     cat > "$MULTI_SERVER_CONFIG" <<EOF
-# Multi-Server Cluster Yapılandırması - Master/Slave Destekli
-# Oluşturulma: $ - date
-# DİKKAT: Bu dosya hassas bilgiler içerir!  - chmod 600 yapın
+ #Multi-Server Cluster Yapılandırması - Master/Slave Destekli
+ #Oluşturulma: $date
+ #DİKKAT: Bu dosya hassas bilgiler içerir!  - chmod 600 yapın
 
 MULTI_SERVER_MODE=true
 
-# Sunucular Arası Haberleşme Modu
+ #Sunucular Arası Haberleşme Modu
 CLUSTER_COMMUNICATION_MODE="$CLUSTER_COMMUNICATION_MODE"
 WIREGUARD_NETWORK="$WIREGUARD_NETWORK"
 VPN_NETWORK="$VPN_NETWORK"
 
-# Public IP'ler  - Kullanıcı tanımlı
+ #Public IP'ler  - Kullanıcı tanımlı
 DNS_SERVER_IP="$DNS_SERVER_IP"
 WEB_SERVER_IP="$WEB_SERVER_IP"
 DATABASE_SERVER_IP="$DATABASE_SERVER_IP"
@@ -383,7 +383,7 @@ REDIS_SERVER_IP="$REDIS_SERVER_IP"
 REDIS_SLAVE_IP="$REDIS_SLAVE_IP"
 STORAGE_SERVER_IP="$STORAGE_SERVER_IP"
 
-# Local/VPN Network IP'ler  - Laravel için hızlı erişim
+ #Local/VPN Network IP'ler  - Laravel için hızlı erişim
 DATABASE_LOCAL_IP="$DATABASE_LOCAL_IP"
 REDIS_LOCAL_IP="$REDIS_LOCAL_IP"
 EOF
@@ -393,7 +393,7 @@ EOF
 }
 
 get_server_role() {
-    local current_ip=$ - hostname -I | awk '{print $1}'
+    local current_ip=$hostname -I | awk '{print $1}'
     local roles=""
     
     [ "$DNS_SERVER_IP" = "$current_ip" ] && roles="$roles DNS"
@@ -418,8 +418,8 @@ show_cluster_status() {
         return 1
     fi
     
-    local current_ip=$ - hostname -I | awk '{print $1}'
-    local current_role=$ - get_server_role
+    local current_ip=$hostname -I | awk '{print $1}'
+    local current_role=$get_server_role
     
     echo -e "${GREEN}Mevcut Sunucu:${NC} $current_ip"
     echo -e "${GREEN}Rol - ler:${NC} $current_role"
@@ -598,7 +598,7 @@ configure_remote_mysql() {
         return 1
     fi
     
-    local current_ip=$ - hostname -I | awk '{print $1}'
+    local current_ip=$hostname -I | awk '{print $1}'
     
     if [ "$DATABASE_SERVER_IP" = "$current_ip" ]; then
         print_info "Database sunucusu bu sunucu, uzak yapılandırma gerekmiyor"
@@ -658,7 +658,7 @@ configure_remote_redis() {
         return 1
     fi
     
-    local current_ip=$ - hostname -I | awk '{print $1}'
+    local current_ip=$hostname -I | awk '{print $1}'
     
     if [ "$REDIS_SERVER_IP" = "$current_ip" ]; then
         print_info "Redis sunucusu bu sunucu, uzak yapılandırma gerekmiyor"
@@ -715,8 +715,8 @@ multi_server_menu() {
         
         # Yapılandırma durumu
         if [ "$MULTI_SERVER_MODE" = true ]; then
-            local current_ip=$ - hostname -I | awk '{print $1}'
-            local current_role=$ - get_server_role
+            local current_ip=$hostname -I | awk '{print $1}'
+            local current_role=$get_server_role
             
             echo -e "${GREEN}✓ Multi-Server Modu: Aktif${NC}"
             echo -e "${CYAN}Bu Sunucu:${NC} $current_ip - Rol: $current_role"
@@ -835,8 +835,8 @@ install_by_server_role() {
         return 1
     fi
     
-    local current_ip=$ - hostname -I | awk '{print $1}'
-    local roles=$ - get_server_role
+    local current_ip=$hostname -I | awk '{print $1}'
+    local roles=$get_server_role
     
     if [ "$roles" = "UNDEFINED" ]; then
         print_error "Bu sunucu için rol tanımlı değil!"
@@ -951,7 +951,7 @@ install_by_server_role() {
 configure_mysql_remote_access() {
     print_header "MySQL Uzak Erişim Yapılandırması - Master/Slave"
     
-    local current_ip=$ - hostname -I | awk '{print $1}'
+    local current_ip=$hostname -I | awk '{print $1}'
     local is_master=false
     
     # Bu sunucu Master mı?
@@ -976,7 +976,7 @@ configure_mysql_remote_access() {
     fi
     
     # Yedek oluştur
-    cp "$mysql_conf" "${mysql_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$mysql_conf" "${mysql_conf}.backup.$date +%Y%m%d_%H%M%S"
     
     # bind-address kontrolü ve güncelleme
     print_info "MySQL bind-address kontrol ediliyor..."
@@ -1064,7 +1064,7 @@ configure_mysql_remote_access() {
         2)
             # Local network'ten
             if [ -n "$DATABASE_LOCAL_IP" ]; then
-                local subnet=$ - echo "$DATABASE_LOCAL_IP" | cut -d'.' -f1-3
+                local subnet=$echo "$DATABASE_LOCAL_IP" | cut -d'.' -f1-3
                 print_info "Local subnet erişimi: ${subnet}.%"
                 
                 mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF
@@ -1091,7 +1091,7 @@ CREATE DATABASE IF NOT EXISTS $db_name CHARACTER SET utf8mb4 COLLATE utf8mb4_uni
 EOF
             
             for ip in "${IP_ARRAY[@]}"; do
-                ip=$ - echo "$ip" | xargs  # Trim whitespace
+                ip=$echo "$ip" | xargs  # Trim whitespace
                 mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF
 CREATE USER IF NOT EXISTS '$remote_user'@'$ip' IDENTIFIED BY '$remote_password';
 GRANT ALL PRIVILEGES ON $db_name.* TO '$remote_user'@'$ip';
@@ -1192,7 +1192,7 @@ EOF
             
             # Local network için  - varsa
             if [ -n "$DATABASE_LOCAL_IP" ]; then
-                local subnet=$ - echo "$DATABASE_LOCAL_IP" | cut -d'.' -f1-3
+                local subnet=$echo "$DATABASE_LOCAL_IP" | cut -d'.' -f1-3
                 ufw allow from ${subnet}.0/24 to any port 3306 comment 'MySQL - Local Network'
             fi
             
@@ -1209,7 +1209,7 @@ EOF
 configure_redis_remote_access() {
     print_header "Redis Uzak Erişim Yapılandırması - Master/Slave"
     
-    local current_ip=$ - hostname -I | awk '{print $1}'
+    local current_ip=$hostname -I | awk '{print $1}'
     local is_master=false
     
     # Bu sunucu Master mı?
@@ -1228,7 +1228,7 @@ configure_redis_remote_access() {
     fi
     
     # Yedek oluştur
-    cp "$redis_conf" "${redis_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$redis_conf" "${redis_conf}.backup.$date +%Y%m%d_%H%M%S"
     
     print_info "Redis yapılandırması güncelleniyor..."
     
@@ -1268,7 +1268,7 @@ configure_redis_remote_access() {
         if ! grep -q "^repl-diskless-sync" "$redis_conf"; then
             cat >> "$redis_conf" <<EOF
 
-# Master-Slave Replication Settings
+ #Master-Slave Replication Settings
 repl-diskless-sync yes
 repl-diskless-sync-delay 5
 min-replicas-to-write 1
@@ -1315,7 +1315,7 @@ EOF
     local redis_host="${REDIS_LOCAL_IP:-$REDIS_SERVER_IP}"
     
     cat <<EOF
-REDIS_HOST=${GREEN}$redis_host${NC}  ${YELLOW}← $ - [ -n "$REDIS_LOCAL_IP" ] && echo "Local IP (hızlı" || echo "Public IP")${NC}
+REDIS_HOST=${GREEN}$redis_host${NC}  ${YELLOW}← $[ -n "$REDIS_LOCAL_IP" ] && echo "Local IP (hızlı" || echo "Public IP")${NC}
 REDIS_PASSWORD=${GREEN}$redis_password${NC}
 REDIS_PORT=6379
 REDIS_CLIENT=phpredis
@@ -1346,7 +1346,7 @@ EOF
             
             # Local network için  - varsa
             if [ -n "$REDIS_LOCAL_IP" ]; then
-                local subnet=$ - echo "$REDIS_LOCAL_IP" | cut -d'.' -f1-3
+                local subnet=$echo "$REDIS_LOCAL_IP" | cut -d'.' -f1-3
                 ufw allow from ${subnet}.0/24 to any port 6379 comment 'Redis - Local Network'
                 print_success "✓ ${subnet}.0/24 → Redis  - Local"
             fi
@@ -1362,7 +1362,7 @@ EOF
     else
         print_info "Manuel olarak ekleyin:"
         echo "  ufw allow from $WEB_SERVER_IP to any port 6379"
-        [ -n "$REDIS_LOCAL_IP" ] && echo "  ufw allow from $ - echo "$REDIS_LOCAL_IP" | cut -d'.' -f1-3.0/24 to any port 6379"
+        [ -n "$REDIS_LOCAL_IP" ] && echo "  ufw allow from $echo "$REDIS_LOCAL_IP" | cut -d'.' -f1-3.0/24 to any port 6379"
         [ -n "$REDIS_SLAVE_IP" ] && echo "  ufw allow from $REDIS_SLAVE_IP to any port 6379"
     fi
 }
@@ -1376,7 +1376,7 @@ configure_mysql_slave() {
         return 1
     fi
     
-    local current_ip=$ - hostname -I | awk '{print $1}'
+    local current_ip=$hostname -I | awk '{print $1}'
     
     if [ "$DATABASE_SLAVE_IP" != "$current_ip" ]; then
         print_error "Bu sunucu Slave olarak tanımlı değil!"
@@ -1407,7 +1407,7 @@ configure_mysql_slave() {
     fi
     
     # Yedek
-    cp "$mysql_conf" "${mysql_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$mysql_conf" "${mysql_conf}.backup.$date +%Y%m%d_%H%M%S"
     
     # Slave yapılandırması
     print_info "Slave yapılandırması yapılıyor..."
@@ -1491,7 +1491,7 @@ configure_redis_slave() {
         return 1
     fi
     
-    local current_ip=$ - hostname -I | awk '{print $1}'
+    local current_ip=$hostname -I | awk '{print $1}'
     
     if [ "$REDIS_SLAVE_IP" != "$current_ip" ]; then
         print_error "Bu sunucu Slave olarak tanımlı değil!"
@@ -1516,7 +1516,7 @@ configure_redis_slave() {
     local redis_conf="/etc/redis/redis.conf"
     
     # Yedek
-    cp "$redis_conf" "${redis_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$redis_conf" "${redis_conf}.backup.$date +%Y%m%d_%H%M%S"
     
     print_info "Slave yapılandırması yapılıyor..."
     
@@ -1691,7 +1691,7 @@ install_wireguard_cluster() {
     print_success "✓ WireGuard kuruldu"
     
     # Bu sunucunun rolünü OTOMATİK tespit et
-    local current_public_ip=$ - hostname -I | awk '{print $1}'
+    local current_public_ip=$hostname -I | awk '{print $1}'
     local vpn_ip=""
     local server_role=""
     local server_name=""
@@ -1776,8 +1776,8 @@ install_wireguard_cluster() {
     
     # Keys oluştur
     print_info "WireGuard keys oluşturuluyor..."
-    local private_key=$ - wg genkey
-    local public_key=$ - echo "$private_key" | wg pubkey
+    local private_key=$wg genkey
+    local public_key=$echo "$private_key" | wg pubkey
     
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════${NC}"
@@ -1798,8 +1798,8 @@ install_wireguard_cluster() {
     # Kayıt dosyası oluştur
     local peer_info_file="/tmp/wireguard-peer-${server_role}.txt"
     cat > "$peer_info_file" <<EOF
-# WireGuard Peer Bilgileri - $server_name
-# Bu bilgileri diğer sunucularda kullanın
+ #WireGuard Peer Bilgileri - $server_name
+ #Bu bilgileri diğer sunucularda kullanın
 
 [Peer]
 # $server_name
@@ -1817,14 +1817,14 @@ EOF
     local wg_conf="/etc/wireguard/wg0.conf"
     
     cat > "$wg_conf" <<EOF
-# WireGuard Cluster Config - $server_role
+ #WireGuard Cluster Config - $server_role
 [Interface]
 Address = $vpn_ip/24
 PrivateKey = $private_key
 ListenPort = 51820
 SaveConfig = false
 
-# IP Forwarding
+ #IP Forwarding
 PostUp = sysctl -w net.ipv4.ip_forward=1
 PostUp = iptables -A FORWARD -i wg0 -j ACCEPT
 PostUp = iptables -A FORWARD -o wg0 -j ACCEPT
@@ -1845,7 +1845,7 @@ EOF
     echo ""
     cat <<'EXAMPLE'
 [Peer]
-# Laravel System
+ #Laravel System
 PublicKey = <Laravel'ın public key'i>
 Endpoint = 185.255.4.197:51820
 AllowedIPs = 10.9.0.2/32
@@ -1859,7 +1859,7 @@ EXAMPLE
         echo ""
         
         [ -n "$DNS_SERVER_IP" ] && cat <<EOF
-# DNS + Ana Site  - 10.9.0.1
+ #DNS + Ana Site  - 10.9.0.1
 [Peer]
 PublicKey = <dns-public-key>
 Endpoint = $DNS_SERVER_IP:51820
@@ -1869,7 +1869,7 @@ PersistentKeepalive = 25
 EOF
         
         [ -n "$WEB_SERVER_IP" ] && cat <<EOF
-# Web/Laravel Sistem  - 10.9.0.2
+ #Web/Laravel Sistem  - 10.9.0.2
 [Peer]
 PublicKey = <web-public-key>
 Endpoint = $WEB_SERVER_IP:51820
@@ -1879,7 +1879,7 @@ PersistentKeepalive = 25
 EOF
         
         [ -n "$DATABASE_SERVER_IP" ] && cat <<EOF
-# MySQL Master  - 10.9.0.10
+ #MySQL Master  - 10.9.0.10
 [Peer]
 PublicKey = <mysql-master-key>
 Endpoint = $DATABASE_SERVER_IP:51820
@@ -1889,7 +1889,7 @@ PersistentKeepalive = 25
 EOF
         
         [ -n "$DATABASE_SLAVE_IP" ] && cat <<EOF
-# MySQL Slave  - 10.9.0.11
+ #MySQL Slave  - 10.9.0.11
 [Peer]
 PublicKey = <mysql-slave-key>
 Endpoint = $DATABASE_SLAVE_IP:51820
@@ -1899,7 +1899,7 @@ PersistentKeepalive = 25
 EOF
         
         [ -n "$REDIS_SERVER_IP" ] && cat <<EOF
-# Redis Master  - 10.9.0.20
+ #Redis Master  - 10.9.0.20
 [Peer]
 PublicKey = <redis-master-key>
 Endpoint = $REDIS_SERVER_IP:51820
@@ -1909,7 +1909,7 @@ PersistentKeepalive = 25
 EOF
         
         [ -n "$REDIS_SLAVE_IP" ] && cat <<EOF
-# Redis Slave  - 10.9.0.21
+ #Redis Slave  - 10.9.0.21
 [Peer]
 PublicKey = <redis-slave-key>
 Endpoint = $REDIS_SLAVE_IP:51820
@@ -1930,7 +1930,7 @@ EOF
     # Bu sunucu hariç diğerlerini göster
     local peer_list_file="/tmp/wireguard-peers-needed.txt"
     cat > "$peer_list_file" <<EOF
-# Eklenecek Peer'ler - $server_name için
+ #Eklenecek Peer'ler - $server_name için
 
 EOF
     
@@ -1938,7 +1938,7 @@ EOF
     if [ "$server_role" != "dns" ] && [ -n "$DNS_SERVER_IP" ]; then
         cat >> "$peer_list_file" <<EOF
 [Peer]
-# DNS + Ana Site
+ #DNS + Ana Site
 PublicKey = <$DNS_SERVER_IP'den alacaksınız>
 Endpoint = $DNS_SERVER_IP:51820
 AllowedIPs = 10.9.0.1/32
@@ -1952,7 +1952,7 @@ EOF
     if [ "$server_role" != "web" ] && [ -n "$WEB_SERVER_IP" ]; then
         cat >> "$peer_list_file" <<EOF
 [Peer]
-# Web/Laravel Sistem
+ #Web/Laravel Sistem
 PublicKey = <$WEB_SERVER_IP'den alacaksınız>
 Endpoint = $WEB_SERVER_IP:51820
 AllowedIPs = 10.9.0.2/32
@@ -1966,7 +1966,7 @@ EOF
     if [ "$server_role" != "db-master" ] && [ -n "$DATABASE_SERVER_IP" ]; then
         cat >> "$peer_list_file" <<EOF
 [Peer]
-# MySQL Master
+ #MySQL Master
 PublicKey = <$DATABASE_SERVER_IP'den alacaksınız>
 Endpoint = $DATABASE_SERVER_IP:51820
 AllowedIPs = 10.9.0.10/32
@@ -1980,7 +1980,7 @@ EOF
     if [ "$server_role" != "db-slave" ] && [ -n "$DATABASE_SLAVE_IP" ]; then
         cat >> "$peer_list_file" <<EOF
 [Peer]
-# MySQL Slave
+ #MySQL Slave
 PublicKey = <$DATABASE_SLAVE_IP'den alacaksınız>
 Endpoint = $DATABASE_SLAVE_IP:51820
 AllowedIPs = 10.9.0.11/32
@@ -1994,7 +1994,7 @@ EOF
     if [ "$server_role" != "redis-master" ] && [ -n "$REDIS_SERVER_IP" ]; then
         cat >> "$peer_list_file" <<EOF
 [Peer]
-# Redis Master
+ #Redis Master
 PublicKey = <$REDIS_SERVER_IP'den alacaksınız>
 Endpoint = $REDIS_SERVER_IP:51820
 AllowedIPs = 10.9.0.20/32
@@ -2008,7 +2008,7 @@ EOF
     if [ "$server_role" != "redis-slave" ] && [ -n "$REDIS_SLAVE_IP" ]; then
         cat >> "$peer_list_file" <<EOF
 [Peer]
-# Redis Slave
+ #Redis Slave
 PublicKey = <$REDIS_SLAVE_IP'den alacaksınız>
 Endpoint = $REDIS_SLAVE_IP:51820
 AllowedIPs = 10.9.0.21/32
@@ -2167,7 +2167,7 @@ ${server_count}. DNS + Ana Site
    VPN IP: 10.9.0.1
 
 EOF
-    [ -n "$DNS_SERVER_IP" ] &&  - (server_count++)
+    [ -n "$DNS_SERVER_IP" ] && ((server_count++))
     
     [ -n "$WEB_SERVER_IP" ] && cat >> "$summary_file" <<EOF
 ${server_count}. Web/Laravel Sistem
@@ -2175,7 +2175,7 @@ ${server_count}. Web/Laravel Sistem
    VPN IP: 10.9.0.2
 
 EOF
-    [ -n "$WEB_SERVER_IP" ] &&  - (server_count++)
+    [ -n "$WEB_SERVER_IP" ] && ((server_count++))
     
     [ -n "$DATABASE_SERVER_IP" ] && cat >> "$summary_file" <<EOF
 ${server_count}. MySQL Master
@@ -2183,7 +2183,7 @@ ${server_count}. MySQL Master
    VPN IP: 10.9.0.10
 
 EOF
-    [ -n "$DATABASE_SERVER_IP" ] &&  - (server_count++)
+    [ -n "$DATABASE_SERVER_IP" ] && ((server_count++))
     
     [ -n "$DATABASE_SLAVE_IP" ] && cat >> "$summary_file" <<EOF
 ${server_count}. MySQL Slave
@@ -2191,7 +2191,7 @@ ${server_count}. MySQL Slave
    VPN IP: 10.9.0.11
 
 EOF
-    [ -n "$DATABASE_SLAVE_IP" ] &&  - (server_count++)
+    [ -n "$DATABASE_SLAVE_IP" ] && ((server_count++))
     
     [ -n "$REDIS_SERVER_IP" ] && cat >> "$summary_file" <<EOF
 ${server_count}. Redis Master
@@ -2199,7 +2199,7 @@ ${server_count}. Redis Master
    VPN IP: 10.9.0.20
 
 EOF
-    [ -n "$REDIS_SERVER_IP" ] &&  - (server_count++)
+    [ -n "$REDIS_SERVER_IP" ] && ((server_count++))
     
     [ -n "$REDIS_SLAVE_IP" ] && cat >> "$summary_file" <<EOF
 ${server_count}. Redis Slave
@@ -2345,7 +2345,7 @@ setup_ssh_tunnel_cluster() {
     
     read -p "Seçiminiz  - 1-3: " tunnel_choice
     
-    local current_ip=$ - hostname -I | awk '{print $1}'
+    local current_ip=$hostname -I | awk '{print $1}'
     
     # Laravel sunucusunda mıyız?
     if [ "$WEB_SERVER_IP" != "$current_ip" ]; then
@@ -2593,7 +2593,7 @@ EOF
     print_success "Yapılandırma kaydedildi!"
     
     # Mevcut sunucunun rolünü tespit et ve bilgi ver
-    local current_ip=$ - hostname -I | awk '{print $1}'
+    local current_ip=$hostname -I | awk '{print $1}'
     echo ""
     echo -e "${CYAN}Mevcut Sunucu:${NC} $current_ip"
     
@@ -2706,10 +2706,10 @@ LOG_DEPRECATIONS_CHANNEL=null
 LOG_LEVEL=debug
 
 # ═══════════════════════════════════════════
-# DATABASE - Master/Slave Yapılandırması
+ #DATABASE - Master/Slave Yapılandırması
 # ═══════════════════════════════════════════
 
-# Master Database  - Okuma/Yazma
+ #Master Database  - Okuma/Yazma
 DB_CONNECTION=mysql
 DB_HOST=$db_host
 DB_PORT=3306
@@ -2722,9 +2722,9 @@ EOF
     # Slave varsa ekle
     if [ -n "$DATABASE_SLAVE_IP" ]; then
         cat >> "$env_file" <<EOF
-# Slave Database  - Sadece Okuma - Laravel'de kullanmak için
+ #Slave Database  - Sadece Okuma - Laravel'de kullanmak için
 DB_READ_HOST=$DATABASE_SLAVE_IP
-# Laravel config/database.php'de 'read' host olarak kullanın
+ #Laravel config/database.php'de 'read' host olarak kullanın
 
 EOF
     fi
@@ -2732,10 +2732,10 @@ EOF
     # Redis yapılandırması
     cat >> "$env_file" <<EOF
 # ═══════════════════════════════════════════
-# REDIS - Master/Slave Yapılandırması
+ #REDIS - Master/Slave Yapılandırması
 # ═══════════════════════════════════════════
 
-# Redis Master  - Okuma/Yazma
+ #Redis Master  - Okuma/Yazma
 REDIS_HOST=$redis_host
 REDIS_PASSWORD=$redis_pass
 REDIS_PORT=6379
@@ -2746,7 +2746,7 @@ EOF
     # Redis Slave varsa ekle
     if [ -n "$REDIS_SLAVE_IP" ]; then
         cat >> "$env_file" <<EOF
-# Redis Slave  - Sadece Okuma - Opsiyonel
+ #Redis Slave  - Sadece Okuma - Opsiyonel
 REDIS_SLAVE_HOST=$REDIS_SLAVE_IP
 REDIS_SLAVE_PASSWORD=$redis_pass
 
@@ -2755,19 +2755,19 @@ EOF
     
     # Cache ve Session
     cat >> "$env_file" <<EOF
-# Cache & Session & Queue
+ #Cache & Session & Queue
 CACHE_DRIVER=redis
 QUEUE_CONNECTION=redis
 SESSION_DRIVER=redis
 SESSION_LIFETIME=120
 
 # ═══════════════════════════════════════════
-# BROADCAST  - Socket.io, Pusher vb.
+ #BROADCAST  - Socket.io, Pusher vb.
 # ═══════════════════════════════════════════
 BROADCAST_DRIVER=log
 
 # ═══════════════════════════════════════════
-# MAIL  - SMTP
+ #MAIL  - SMTP
 # ═══════════════════════════════════════════
 MAIL_MAILER=smtp
 MAIL_HOST=mailpit
@@ -2779,16 +2779,16 @@ MAIL_FROM_ADDRESS="hello@example.com"
 MAIL_FROM_NAME="\${APP_NAME}"
 
 # ═══════════════════════════════════════════
-# CLUSTER SUNUCU BİLGİLERİ
+ #CLUSTER SUNUCU BİLGİLERİ
 # ═══════════════════════════════════════════
 
-# DNS + Ana Site
+ #DNS + Ana Site
 DNS_SERVER=$DNS_SERVER_IP
 
-# Laravel Sistem
+ #Laravel Sistem
 WEB_SERVER=$WEB_SERVER_IP
 
-# MySQL Master/Slave
+ #MySQL Master/Slave
 DB_MASTER_PUBLIC=$DATABASE_SERVER_IP
 EOF
     
@@ -2797,7 +2797,7 @@ EOF
     
     cat >> "$env_file" <<EOF
 
-# Redis Master/Slave
+ #Redis Master/Slave
 REDIS_MASTER_PUBLIC=$REDIS_SERVER_IP
 EOF
     
@@ -2851,7 +2851,7 @@ install_nfs_server() {
     
     # exports dosyasını yapılandır
     local exports_file="/etc/exports"
-    cp "$exports_file" "${exports_file}.backup.$ - date +%Y%m%d_%H%M%S" 2>/dev/null || true
+    cp "$exports_file" "${exports_file}.backup.$date +%Y%m%d_%H%M%S" 2>/dev/null || true
     
     echo ""
     print_info "İzin verilecek istemcileri belirleyin:"
@@ -2891,7 +2891,7 @@ install_nfs_server() {
     echo -e "${GREEN}İzin Verilen:${NC} $nfs_client"
     echo ""
     echo -e "${CYAN}İstemcide Mount Komutu:${NC}"
-    echo -e "${GREEN}sudo mount -t nfs $ - hostname -I | awk '{print $1}':$nfs_share /mnt/shared${NC}"
+    echo -e "${GREEN}sudo mount -t nfs $hostname -I | awk '{print $1}':$nfs_share /mnt/shared${NC}"
     
     # Firewall
     if command -v ufw &>/dev/null; then
@@ -3005,7 +3005,7 @@ select_framework() {
     done
 }
 
-# Servis kurulum fonksiyonları
+ #Servis kurulum fonksiyonları
 install_nginx() {
     print_info "Nginx kuruluyor..."
     apt install -y nginx
@@ -3020,7 +3020,7 @@ install_nginx() {
         
         # Yöntem 1: php -v komutundan versiyon al
         if command -v php &> /dev/null; then
-            php_version=$ - php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+            php_version=$php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
             if [ -n "$php_version" ]; then
                 print_info "PHP CLI'den versiyon tespit edildi: $php_version"
             fi
@@ -3030,7 +3030,7 @@ install_nginx() {
         if [ -z "$php_version" ]; then
             for php_bin in /usr/bin/php[0-9]* /usr/bin/php[0-9]*.[0-9]*; do
                 if [ -f "$php_bin" ] && [ -x "$php_bin" ]; then
-                    php_version=$ - basename "$php_bin" | sed 's/php//' | grep -oE "^[0-9]+\.[0-9]+"
+                    php_version=$basename "$php_bin" | sed 's/php//' | grep -oE "^[0-9]+\.[0-9]+"
                     if [ -n "$php_version" ]; then
                         print_info "PHP binary'den versiyon tespit edildi: $php_version"
                         break
@@ -3041,7 +3041,7 @@ install_nginx() {
         
         # Yöntem 3: PHP-FPM servislerinden versiyon bul
         if [ -z "$php_version" ]; then
-            local php_fpm_version=$ - systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+            local php_fpm_version=$systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
             if [ -n "$php_fpm_version" ]; then
                 php_version="$php_fpm_version"
                 print_info "PHP-FPM servisinden versiyon tespit edildi: $php_version"
@@ -3050,7 +3050,7 @@ install_nginx() {
         
         # Yöntem 4: dpkg ile kurulu PHP paketlerini kontrol et
         if [ -z "$php_version" ]; then
-            local php_package=$ - dpkg -l 2>/dev/null | grep -E "^ii.*php[0-9]+\.[0-9]+-fpm" | head -1 | awk '{print $2}' | sed 's/php\([0-9.]*\-fpm.*/\1/' || echo "")
+            local php_package=$dpkg -l 2>/dev/null | grep -E "^ii.*php[0-9]+\.[0-9]+-fpm" | head -1 | awk '{print $2}' | sed 's/php\([0-9.]*\-fpm.*/\1/' || echo "")
             if [ -n "$php_package" ]; then
                 php_version="$php_package"
                 print_info "Kurulu paketlerden versiyon tespit edildi: $php_version"
@@ -3082,12 +3082,12 @@ install_php() {
     
     if command -v php &> /dev/null; then
         existing_php_cli=true
-        existing_php_version=$ - php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+        existing_php_version=$php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
         print_info "Mevcut PHP CLI kurulumu tespit edildi: $existing_php_version"
     fi
     
     # PHP-FPM servislerini kontrol et
-    local php_fpm_services=$ - systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | awk '{print $1}' || echo ""
+    local php_fpm_services=$systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | awk '{print $1}' || echo ""
     if [ -n "$php_fpm_services" ]; then
         existing_php_fpm=true
         print_info "Mevcut PHP-FPM servisleri tespit edildi"
@@ -3139,7 +3139,7 @@ install_php() {
             fi
             
             # Repository ekle
-            echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ $ - lsb_release -sc main" > /etc/apt/sources.list.d/php.list
+            echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ $lsb_release -sc main" > /etc/apt/sources.list.d/php.list
             print_info "Alternatif PHP repository eklendi"
         else
             print_success "PHP PPA başarıyla eklendi"
@@ -3313,8 +3313,8 @@ install_php() {
             
             if systemctl is-active --quiet php$version-fpm; then
                 print_success "PHP $version kurulumu tamamlandı ve PHP-FPM servisi başlatıldı"
-                echo -e "${GREEN}PHP Versiyonu:${NC} $ - php$version -v | head -1 | cut -d' ' -f2"
-                echo -e "${GREEN}PHP-FPM Durumu:${NC} $ - systemctl is-active php$version-fpm"
+                echo -e "${GREEN}PHP Versiyonu:${NC} $php$version -v | head -1 | cut -d' ' -f2"
+                echo -e "${GREEN}PHP-FPM Durumu:${NC} $systemctl is-active php$version-fpm"
                 echo -e "${GREEN}PHP-FPM Socket:${NC} /var/run/php/php$version-fpm.sock"
                 
                 # Socket dosyasının varlığını kontrol et
@@ -3381,7 +3381,7 @@ EOF
     fi
     
     # 2. Gerekli .ini dosyalarını oluştur  - yoksa veya bozuksa
-    local critical_modules= - "dom" "xml" "simplexml" "xmlreader" "xmlwriter" "xsl"
+    local critical_modules="dom" "xml" "simplexml" "xmlreader" "xmlwriter" "xsl"
     
     for ext in "${critical_modules[@]}"; do
         local ini_file="$mods_dir/$ext.ini"
@@ -3434,20 +3434,20 @@ check_and_install_missing_php_extensions() {
     )
     
     # Kurulu eklentileri al
-    local installed_extensions=$ - php$version -m 2>/dev/null | tr '[:upper:]' '[:lower:]'
+    local installed_extensions=$php$version -m 2>/dev/null | tr '[:upper:]' '[:lower:]'
     
     # Eksik eklentileri tespit et
-    local missing_extensions= - 
+    local missing_extensions=
     local missing_count=0
     
     for ext in "${required_extensions[@]}"; do
         # Eklenti adını küçük harfe çevir
-        local ext_lower=$ - echo "$ext" | tr '[:upper:]' '[:lower:]'
+        local ext_lower=$echo "$ext" | tr '[:upper:]' '[:lower:]'
         
         # Eklenti kurulu mu kontrol et
         if ! echo "$installed_extensions" | grep -qi "^${ext_lower}$"; then
-            missing_extensions+= - "$ext_lower"
-             - (missing_count++)
+            missing_extensions+="$ext_lower"
+            ((missing_count++)
         fi
     done
     
@@ -3515,7 +3515,7 @@ check_and_install_missing_php_extensions() {
                         print_info "php$version-common yeniden kuruluyor  - $ext için..."
                         apt install --reinstall -y php$version-common 2>/dev/null || true
                     fi
-                     - (installed_count++)
+                    ((installed_count++)
                 fi
                 continue
                 ;;
@@ -3536,7 +3536,7 @@ check_and_install_missing_php_extensions() {
                 if ! php$version -m 2>/dev/null | grep -qi "^phar$"; then
                     print_info "php$version-common yeniden kuruluyor  - phar için..."
                     apt install --reinstall -y php$version-common 2>/dev/null || true
-                     - (installed_count++)
+                    ((installed_count++)
                 fi
                 continue
                 ;;
@@ -3574,7 +3574,7 @@ check_and_install_missing_php_extensions() {
             
             if apt install -y $pkg_name 2>/dev/null; then
                 print_success "$pkg_name kuruldu"
-                 - (installed_count++)
+                ((installed_count++)
             else
                 print_warning "$pkg_name kurulamadı, düzeltme deneniyor..."
                 
@@ -3584,15 +3584,15 @@ check_and_install_missing_php_extensions() {
                 # Tekrar dene
                 if apt install -y $pkg_name 2>/dev/null; then
                     print_success "$pkg_name kuruldu  - ikinci deneme"
-                     - (installed_count++)
+                    ((installed_count++)
                 else
                     print_error "$pkg_name kurulamadı!"
-                     - (failed_count++)
+                    ((failed_count++)
                 fi
             fi
         else
             print_warning "$pkg_name paketi repository'de bulunamadı"
-             - (failed_count++)
+            ((failed_count++)
         fi
     done
     
@@ -3610,7 +3610,7 @@ check_and_install_missing_php_extensions() {
             print_success "PHP-FPM başarıyla yeniden başlatıldı"
             
             # PHP-FPM loglarını kontrol et  - hata var mı?
-            local fpm_errors=$ - journalctl -u php$version-fpm -n 20 --no-pager 2>/dev/null | grep -i "warning\|error" | grep -i "unable to load" || echo ""
+            local fpm_errors=$journalctl -u php$version-fpm -n 20 --no-pager 2>/dev/null | grep -i "warning\|error" | grep -i "unable to load" || echo ""
             
             if [ -n "$fpm_errors" ]; then
                 print_warning "PHP-FPM'de bazı eklenti yükleme hataları tespit edildi"
@@ -3678,7 +3678,7 @@ check_and_install_missing_php_extensions() {
                 sleep 3
                 
                 # Son kontrol
-                local final_errors=$ - journalctl -u php$version-fpm -n 10 --no-pager 2>/dev/null | grep -i "warning\|error" | grep -i "unable to load" || echo ""
+                local final_errors=$journalctl -u php$version-fpm -n 10 --no-pager 2>/dev/null | grep -i "warning\|error" | grep -i "unable to load" || echo ""
                 
                 if [ -z "$final_errors" ]; then
                     print_success "Tüm PHP eklenti hataları düzeltildi!"
@@ -3732,8 +3732,8 @@ check_and_install_missing_php_extensions() {
             print_info "Kontrol: $conf_dir"
             
             for mod_def in "${critical_modules[@]}"; do
-                local mod=$ - echo "$mod_def" | cut -d':' -f1
-                local priority=$ - echo "$mod_def" | cut -d':' -f2
+                local mod=$echo "$mod_def" | cut -d':' -f1
+                local priority=$echo "$mod_def" | cut -d':' -f2
                 local mod_ini="/etc/php/$version/mods-available/${mod}.ini"
                 local expected_link="$conf_dir/${priority}-${mod}.ini"
                 
@@ -3749,7 +3749,7 @@ EOF
                 fi
                 
                 # Duplicate link kontrolü
-                local mod_links= - $(find "$conf_dir" -type l -name "*${mod}.ini" 2>/dev/null)
+                local mod_links=$(find "$conf_dir" -type l -name "*${mod}.ini" 2>/dev/null)
                 
                 if [ ${#mod_links[@]} -gt 1 ]; then
                     print_warning "  ✗ $mod için ${#mod_links[@]} duplicate link, temizleniyor..."
@@ -3791,7 +3791,7 @@ EOF
     
     # Final uyarı kontrolü
     echo ""
-    local final_warnings=$ - php$version -v 2>&1 | grep -i "warning.*already loaded" || echo ""
+    local final_warnings=$php$version -v 2>&1 | grep -i "warning.*already loaded" || echo ""
     if [ -z "$final_warnings" ]; then
         print_success "✓ Çift yükleme uyarısı YOK!"
     else
@@ -3815,7 +3815,7 @@ update_nginx_configs_for_php() {
     
     # Yöntem 1: php -v komutundan versiyon al
     if command -v php &> /dev/null; then
-        local php_version_from_cli=$ - php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+        local php_version_from_cli=$php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
         if [ -n "$php_version_from_cli" ]; then
             php_versions="$php_version_from_cli"
             print_info "PHP CLI'den versiyon tespit edildi: $php_version_from_cli"
@@ -3826,7 +3826,7 @@ update_nginx_configs_for_php() {
     if [ -z "$php_versions" ]; then
         for php_bin in /usr/bin/php[0-9]* /usr/bin/php[0-9]*.[0-9]*; do
             if [ -f "$php_bin" ] && [ -x "$php_bin" ]; then
-                local version=$ - basename "$php_bin" | sed 's/php//' | grep -oE "^[0-9]+\.[0-9]+"
+                local version=$basename "$php_bin" | sed 's/php//' | grep -oE "^[0-9]+\.[0-9]+"
                 if [ -n "$version" ]; then
                     if [ -z "$php_versions" ]; then
                         php_versions="$version"
@@ -3839,19 +3839,19 @@ update_nginx_configs_for_php() {
     fi
     
     # Yöntem 3: PHP-FPM servislerinden versiyon bul
-    local php_fpm_versions=$ - systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+    local php_fpm_versions=$systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
     if [ -n "$php_fpm_versions" ]; then
         if [ -z "$php_versions" ]; then
             php_versions="$php_fpm_versions"
         else
             # Versiyonları birleştir ve tekrarları kaldır
-            php_versions=$ - echo -e "$php_versions\n$php_fpm_versions" | sort -V -u
+            php_versions=$echo -e "$php_versions\n$php_fpm_versions" | sort -V -u
         fi
     fi
     
     # Yöntem 4: dpkg/apt ile kurulu PHP paketlerini kontrol et
     if [ -z "$php_versions" ]; then
-        local php_packages=$ - dpkg -l 2>/dev/null | grep -E "^ii.*php[0-9]+\.[0-9]+-fpm" | awk '{print $2}' | sed 's/php\([0-9.]*\-fpm.*/\1/' | sort -V -u || echo "")
+        local php_packages=$dpkg -l 2>/dev/null | grep -E "^ii.*php[0-9]+\.[0-9]+-fpm" | awk '{print $2}' | sed 's/php\([0-9.]*\-fpm.*/\1/' | sort -V -u || echo "")
         if [ -n "$php_packages" ]; then
             php_versions="$php_packages"
         fi
@@ -3872,11 +3872,11 @@ update_nginx_configs_for_php() {
     
     # PHP versiyonlarını listele
     echo -e "${CYAN}Kurulu PHP Versiyonları:${NC}"
-    local version_list= - $(echo "$php_versions" | sort -V)
+    local version_list=$(echo "$php_versions" | sort -V)
     local count=1
     for version in "${version_list[@]}"; do
         echo "$count) PHP $version"
-         - (count++)
+        ((count++)
     done
     echo ""
     
@@ -3888,7 +3888,7 @@ update_nginx_configs_for_php() {
         read -p "Hangi PHP versiyonu için güncelleme yapılacak?  - 1-${#version_list[@]} [1]: " version_choice
         version_choice=${version_choice:-1}
         if [ "$version_choice" -ge 1 ] && [ "$version_choice" -le ${#version_list[@]} ]; then
-            local selected_version="${version_list[$ - (version_choice-1)]}"
+            local selected_version="${version_list[$((version_choice-1)]}"
         else
             print_error "Geçersiz seçim!"
             return 1
@@ -3910,7 +3910,7 @@ update_nginx_for_php() {
     print_info "Mevcut Nginx yapılandırmaları PHP için güncelleniyor..."
     
     # Tüm aktif Nginx site yapılandırmalarını bul
-    local nginx_configs=$ - find /etc/nginx/sites-available -type f -name "*" ! -name "default" 2>/dev/null
+    local nginx_configs=$find /etc/nginx/sites-available -type f -name "*" ! -name "default" 2>/dev/null
     
     if [ -z "$nginx_configs" ]; then
         print_info "Güncellenecek Nginx yapılandırması bulunamadı"
@@ -3920,14 +3920,14 @@ update_nginx_for_php() {
     local updated_count=0
     
     for config_file in $nginx_configs; do
-        local domain=$ - basename "$config_file"
+        local domain=$basename "$config_file"
         
         # Eğer zaten PHP yapılandırması varsa sadece versiyonu güncelle
         if grep -q "location ~.*\.php" "$config_file" 2>/dev/null || grep -q "fastcgi_pass.*php.*-fpm" "$config_file" 2>/dev/null; then
             # PHP versiyonunu güncelle
             sed -i "s|php[0-9.]*-fpm|php${php_version}-fpm|g" "$config_file"
             print_info "✓ $domain - PHP versiyonu güncellendi"
-            updated_count=$ - (updated_count + 1)
+            updated_count=$((updated_count + 1)
             continue
         fi
         
@@ -3935,7 +3935,7 @@ update_nginx_for_php() {
         print_info "PHP yapılandırması ekleniyor: $domain"
         
         # Root dizinini bul
-        local root_dir=$ - grep -E "^\s*root\s+" "$config_file" 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';' | tr -d ' '
+        local root_dir=$grep -E "^\s*root\s+" "$config_file" 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';' | tr -d ' '
         
         if [ -z "$root_dir" ]; then
             print_warning "$domain için root dizini bulunamadı, atlanıyor"
@@ -3950,7 +3950,7 @@ update_nginx_for_php() {
         # PHP location bloğunu ekle
         cat >> "$config_file" <<EOF
 
-# PHP Configuration - Added automatically
+ #PHP Configuration - Added automatically
     location ~ \.php\$ {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/var/run/php/php${php_version}-fpm.sock;
@@ -3970,7 +3970,7 @@ EOF
 EOF
         fi
         
-        updated_count=$ - (updated_count + 1)
+        updated_count=$((updated_count + 1)
         print_success "✓ $domain - PHP yapılandırması eklendi"
     done
     
@@ -4133,8 +4133,8 @@ install_mysql() {
     # Eksik mariadb.cnf dosyasını oluştur  - update-alternatives hatasını önlemek için
     if [ ! -f "/etc/mysql/mariadb.cnf" ]; then
         cat > /etc/mysql/mariadb.cnf <<'EOF'
-# MariaDB yapılandırma dosyası
-# Bu dosya update-alternatives için gerekli
+ #MariaDB yapılandırma dosyası
+ #Bu dosya update-alternatives için gerekli
 [client-server]
 EOF
         chmod 644 /etc/mysql/mariadb.cnf
@@ -4224,7 +4224,7 @@ EOF
     chown -R mysql:mysql /run/mysqld 2>/dev/null || true
     
     # Veri dizini boşsa veya sistem tabloları yoksa initialize et
-    if [ ! -d "/var/lib/mysql/mysql" ] || [ -z "$ - ls -A /var/lib/mysql 2>/dev/null" ]; then
+    if [ ! -d "/var/lib/mysql/mysql" ] || [ -z "$ls -A /var/lib/mysql 2>/dev/null" ]; then
         print_info "MariaDB veri dizini initialize ediliyor  - InnoDB/Aria hatalarını önlemek için..."
         
         # mysql_install_db veya mariadb-install-db komutunu kullan
@@ -4322,7 +4322,7 @@ EOF
             break
         fi
         sleep 1
-         - (retry_count++)
+        ((retry_count++)
     done
     
     # Servis durumunu kontrol et
@@ -4334,7 +4334,7 @@ EOF
         print_error "MariaDB başlatılamadı!"
         
         # Log kontrolü - InnoDB/Aria hatalarını kontrol et
-        local error_log=$ - journalctl -u mariadb -n 20 --no-pager 2>/dev/null | grep -i "innodb\|aria\|storage engine" || echo ""
+        local error_log=$journalctl -u mariadb -n 20 --no-pager 2>/dev/null | grep -i "innodb\|aria\|storage engine" || echo ""
         
         if echo "$error_log" | grep -qi "innodb\|aria\|storage engine"; then
             print_warning "InnoDB/Aria storage engine hatası tespit edildi!"
@@ -4421,7 +4421,7 @@ EOF
     local attempt=0
     
     while [ $attempt -lt $max_attempts ] && [ "$password_set" = false ]; do
-         - (attempt++)
+        ((attempt++)
         print_info "Şifre ayarlama denemesi $attempt/$max_attempts..."
         
         # Yöntem 1: sudo mysql ile şifre ayarla  - MariaDB 10.4+ için en güvenilir
@@ -4523,7 +4523,7 @@ EOF
                 break
             fi
             sleep 1
-             - (safe_retry++)
+            ((safe_retry++)
         done
         
         if mysql -u root -e "SELECT 1;" 2>/dev/null; then
@@ -4640,7 +4640,7 @@ EOF
             break
         fi
         sleep 1
-         - (verify_count++)
+        ((verify_count++)
     done
     
     if [ "$verify_success" = false ]; then
@@ -4727,7 +4727,7 @@ EOF
         echo -e "${GREEN}MySQL Root Şifresi:${NC} Ayarlanmış ve doğrulandı"
         
         if systemctl is-active --quiet mariadb 2>/dev/null; then
-            echo -e "${GREEN}Servis Durumu:${NC} $ - systemctl is-active mariadb"
+            echo -e "${GREEN}Servis Durumu:${NC} $systemctl is-active mariadb"
         else
             echo -e "${GREEN}Servis Durumu:${NC} Çalışıyor  - process"
         fi
@@ -4830,8 +4830,8 @@ install_redis() {
        systemctl is-active --quiet redis 2>/dev/null || \
        pgrep -x redis-server > /dev/null 2>&1; then
         print_success "Redis kurulumu tamamlandı ve servis başlatıldı"
-        echo -e "${GREEN}Redis Versiyonu:${NC} $ - redis-server --version 2>/dev/null | cut -d' ' -f3 || echo "Kuruldu""
-        echo -e "${GREEN}Servis Durumu:${NC} $ - systemctl is-active redis-server 2>/dev/null || systemctl is-active redis 2>/dev/null || echo "Çalışıyor""
+        echo -e "${GREEN}Redis Versiyonu:${NC} $redis-server --version 2>/dev/null | cut -d' ' -f3 || echo "Kuruldu""
+        echo -e "${GREEN}Servis Durumu:${NC} $systemctl is-active redis-server 2>/dev/null || systemctl is-active redis 2>/dev/null || echo "Çalışıyor""
         
         # Bağlantı testi
         if redis-cli ping 2>/dev/null | grep -q "PONG"; then
@@ -4905,7 +4905,7 @@ fix_redis_connection() {
                 print_info "Redis yapılandırması kontrol ediliyor..."
                 
                 # bind adresini kontrol et
-                local bind_address=$ - grep "^bind" "$redis_conf" | head -1
+                local bind_address=$grep "^bind" "$redis_conf" | head -1
                 echo "Mevcut bind adresi: $bind_address"
                 
                 if ! echo "$bind_address" | grep -q "127.0.0.1"; then
@@ -4941,7 +4941,7 @@ fix_git_safe_directory() {
     if [ -d "/var/www" ]; then
         for dir in /var/www/*; do
             if [ -d "$dir/.git" ]; then
-                local dir_name=$ - basename "$dir"
+                local dir_name=$basename "$dir"
                 print_info "Git safe.directory ekleniyor: $dir"
                 
                 # Root için ekle
@@ -4972,16 +4972,16 @@ fix_php_duplicate_modules() {
     # Eğer parametre verilmediyse tespit et
     if [ -z "$php_version" ]; then
         # Yöntem 1: php -v
-        php_version=$ - php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+        php_version=$php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
         
         # Yöntem 2: PHP-FPM servisleri
         if [ -z "$php_version" ]; then
-            php_version=$ - systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+            php_version=$systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
         fi
         
         # Yöntem 3: dpkg paketleri
         if [ -z "$php_version" ]; then
-            php_version=$ - dpkg -l 2>/dev/null | grep -E "^ii.*php[0-9]+\.[0-9]+-fpm" | head -1 | awk '{print $2}' | sed 's/php\([0-9.]*\-fpm.*/\1/' || echo "")
+            php_version=$dpkg -l 2>/dev/null | grep -E "^ii.*php[0-9]+\.[0-9]+-fpm" | head -1 | awk '{print $2}' | sed 's/php\([0-9.]*\-fpm.*/\1/' || echo "")
         fi
         
         if [ -z "$php_version" ]; then
@@ -5000,18 +5000,18 @@ fix_php_duplicate_modules() {
             print_info "Kontrol ediliyor: $conf_dir"
             
             # TÜMU linkleri say  - dom, xml, pdo, mysqlnd, vb.
-            local dom_links= - $(find "$conf_dir" -type l -name "*dom*" 2>/dev/null)
-            local xml_links= - $(find "$conf_dir" -type l -name "*xml*" 2>/dev/null)
-            local pdo_links= - $(find "$conf_dir" -type l -name "*pdo.ini" 2>/dev/null)
-            local mysqlnd_links= - $(find "$conf_dir" -type l -name "*mysqlnd*" 2>/dev/null)
+            local dom_links=$(find "$conf_dir" -type l -name "*dom*" 2>/dev/null)
+            local xml_links=$(find "$conf_dir" -type l -name "*xml*" 2>/dev/null)
+            local pdo_links=$(find "$conf_dir" -type l -name "*pdo.ini" 2>/dev/null)
+            local mysqlnd_links=$(find "$conf_dir" -type l -name "*mysqlnd*" 2>/dev/null)
             
             print_info "Mevcut linkler → dom: ${#dom_links[@]}, xml: ${#xml_links[@]}, pdo: ${#pdo_links[@]}, mysqlnd: ${#mysqlnd_links[@]}"
             
             # Temizlenecek modüller  - çift yükleme önleme
-            local modules_to_clean= - "dom" "xml" "pdo" "mysqlnd" "mysqli" "simplexml" "xmlreader" "xmlwriter" "xsl"
+            local modules_to_clean="dom" "xml" "pdo" "mysqlnd" "mysqli" "simplexml" "xmlreader" "xmlwriter" "xsl"
             
             for mod in "${modules_to_clean[@]}"; do
-                local mod_links= - $(find "$conf_dir" -type l -name "*${mod}*" 2>/dev/null)
+                local mod_links=$(find "$conf_dir" -type l -name "*${mod}*" 2>/dev/null)
                 local mod_ini="/etc/php/$php_version/mods-available/${mod}.ini"
                 
                 # Eğer .ini dosyası yoksa atla
@@ -5020,7 +5020,7 @@ fix_php_duplicate_modules() {
                 fi
                 
                 # Priority'yi .ini dosyasından al
-                local priority=$ - grep "priority=" "$mod_ini" 2>/dev/null | sed 's/.*priority=//' | tr -d '; ' || echo "20"
+                local priority=$grep "priority=" "$mod_ini" 2>/dev/null | sed 's/.*priority=//' | tr -d '; ' || echo "20"
                 
                 # Özel durumlar
                 case $mod in
@@ -5071,8 +5071,8 @@ fix_php_duplicate_modules() {
     )
     
     for module_def in "${modules_to_fix[@]}"; do
-        local mod=$ - echo "$module_def" | cut -d':' -f1
-        local priority=$ - echo "$module_def" | cut -d':' -f2
+        local mod=$echo "$module_def" | cut -d':' -f1
+        local priority=$echo "$module_def" | cut -d':' -f2
         local ini_file="$mods_dir/${mod}.ini"
         
         # .ini dosyasını kontrol et
@@ -5083,7 +5083,7 @@ fix_php_duplicate_modules() {
         elif ! grep -q "^extension=$mod.so" "$ini_file"; then
             needs_fix=true
             print_info "✓ $mod.ini bozuk, düzeltiliyor..."
-        elif [ $ - grep -c "^extension=$mod.so" "$ini_file" -gt 1 ]; then
+        elif [ $grep -c "^extension=$mod.so" "$ini_file" -gt 1 ]; then
             needs_fix=true
             print_warning "✓ $mod.ini içinde duplicate extension, düzeltiliyor..."
         fi
@@ -5091,7 +5091,7 @@ fix_php_duplicate_modules() {
         # Düzeltme gerekiyorsa
         if [ "$needs_fix" = true ]; then
             # Yedek oluştur  - varsa
-            [ -f "$ini_file" ] && cp "$ini_file" "${ini_file}.backup.$ - date +%Y%m%d_%H%M%S" 2>/dev/null || true
+            [ -f "$ini_file" ] && cp "$ini_file" "${ini_file}.backup.$date +%Y%m%d_%H%M%S" 2>/dev/null || true
             
             # Temiz .ini oluştur
             cat > "$ini_file" <<EOF
@@ -5113,8 +5113,8 @@ EOF
             print_info "  → $conf_dir"
             
             for module_def in "${modules_to_fix[@]}"; do
-                local mod=$ - echo "$module_def" | cut -d':' -f1
-                local priority=$ - echo "$module_def" | cut -d':' -f2
+                local mod=$echo "$module_def" | cut -d':' -f1
+                local priority=$echo "$module_def" | cut -d':' -f2
                 local ini_file="$mods_dir/${mod}.ini"
                 
                 # .ini varsa link oluştur
@@ -5150,11 +5150,11 @@ EOF
     
     # CLI test
     print_info "1) PHP CLI testi..."
-    local cli_warnings=$ - $php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo ""
+    local cli_warnings=$$php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo ""
     
     if [ -z "$cli_warnings" ]; then
         print_success "✓ PHP CLI: Uyarı yok"
-        echo "   $ - $php_binary -v 2>&1 | head -1"
+        echo "   $$php_binary -v 2>&1 | head -1"
     else
         print_error "✗ PHP CLI: Hala uyarılar var"
         echo "$cli_warnings"
@@ -5163,7 +5163,7 @@ EOF
     # FPM test  - eğer çalışıyorsa
     if systemctl is-active --quiet php$php_version-fpm 2>/dev/null; then
         print_info "2) PHP-FPM log testi..."
-        local fpm_warnings=$ - journalctl -u php$php_version-fpm -n 10 --no-pager 2>/dev/null | grep -i "warning.*already loaded" || echo ""
+        local fpm_warnings=$journalctl -u php$php_version-fpm -n 10 --no-pager 2>/dev/null | grep -i "warning.*already loaded" || echo ""
         
         if [ -z "$fpm_warnings" ]; then
             print_success "✓ PHP-FPM: Uyarı yok"
@@ -5219,7 +5219,7 @@ quick_fix_php_extensions() {
     
     # Yöntem 1: php -v komutundan versiyon al
     if command -v php &> /dev/null; then
-        php_version=$ - php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+        php_version=$php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
         if [ -n "$php_version" ]; then
             print_info "PHP CLI'den versiyon tespit edildi: $php_version"
         fi
@@ -5230,7 +5230,7 @@ quick_fix_php_extensions() {
         print_info "Alternatif PHP binary'leri aranıyor..."
         for php_bin in /usr/bin/php8.4 /usr/bin/php8.3 /usr/bin/php8.2 /usr/bin/php8.1 /usr/bin/php[0-9]* /usr/bin/php[0-9]*.[0-9]*; do
             if [ -f "$php_bin" ] && [ -x "$php_bin" ]; then
-                php_version=$ - $php_bin -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+                php_version=$$php_bin -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
                 if [ -n "$php_version" ]; then
                     php_binary="$php_bin"
                     print_info "PHP binary bulundu: $php_bin  - versiyon: $php_version"
@@ -5243,7 +5243,7 @@ quick_fix_php_extensions() {
     # Yöntem 3: PHP-FPM servislerinden versiyon bul
     if [ -z "$php_version" ]; then
         print_info "PHP-FPM servisleri kontrol ediliyor..."
-        local php_fpm_version=$ - systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+        local php_fpm_version=$systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
         if [ -n "$php_fpm_version" ]; then
             php_version="$php_fpm_version"
             php_binary="php$php_version"
@@ -5254,7 +5254,7 @@ quick_fix_php_extensions() {
     # Yöntem 4: dpkg ile kurulu PHP paketlerini kontrol et
     if [ -z "$php_version" ]; then
         print_info "Kurulu PHP paketleri kontrol ediliyor..."
-        local php_package=$ - dpkg -l 2>/dev/null | grep -E "^ii.*php[0-9]+\.[0-9]+-fpm" | head -1 | awk '{print $2}' | sed 's/php\([0-9.]*\-fpm.*/\1/' || echo "")
+        local php_package=$dpkg -l 2>/dev/null | grep -E "^ii.*php[0-9]+\.[0-9]+-fpm" | head -1 | awk '{print $2}' | sed 's/php\([0-9.]*\-fpm.*/\1/' || echo "")
         if [ -n "$php_package" ]; then
             php_version="$php_package"
             php_binary="php$php_version"
@@ -5344,7 +5344,7 @@ quick_fix_php_extensions() {
     
     # dom/xml uyarısı var mı kontrol et
     local has_warnings=false
-    local cli_warnings=$ - $php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo ""
+    local cli_warnings=$$php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo ""
     
     if [ -n "$cli_warnings" ]; then
         has_warnings=true
@@ -5371,13 +5371,13 @@ quick_fix_php_extensions() {
     echo ""
     
     # Kritik eklentiler listesi  - Composer ve Laravel için
-    local critical_extensions= - "simplexml" "xmlreader" "xmlwriter" "fileinfo" "tokenizer" "iconv" "ctype" "phar" "redis" "memcached"
-    local missing_extensions= - 
+    local critical_extensions="simplexml" "xmlreader" "xmlwriter" "fileinfo" "tokenizer" "iconv" "ctype" "phar" "redis" "memcached"
+    local missing_extensions=
     
     print_info "Eksik eklentiler tespit ediliyor..."
     for ext in "${critical_extensions[@]}"; do
         if ! $php_binary -m 2>/dev/null | grep -qi "^$ext$"; then
-            missing_extensions+= - "$ext"
+            missing_extensions+="$ext"
             print_warning "✗ $ext eksik"
         else
             print_success "✓ $ext kurulu"
@@ -5438,7 +5438,7 @@ quick_fix_php_extensions() {
         sleep 1
         if php -m 2>/dev/null | grep -qi "^$ext$"; then
             print_success "[$ext] Başarıyla etkinleştirildi!"
-             - (fixed_count++)
+            ((fixed_count++)
         else
             print_error "[$ext] Hala yüklenemiyor!"
             
@@ -5465,7 +5465,7 @@ quick_fix_php_extensions() {
             sleep 1
             if php -m 2>/dev/null | grep -qi "^$ext$"; then
                 print_success "[$ext] Başarıyla etkinleştirildi  - ikinci deneme!"
-                 - (fixed_count++)
+                ((fixed_count++)
             else
                 print_error "[$ext] Etkinleştirilemedi! Manuel kontrol gerekli."
             fi
@@ -5556,7 +5556,7 @@ quick_fix_php_extensions() {
     if command -v composer &>/dev/null; then
         print_info "Composer çalışıyor mu test ediliyor..."
         if composer --version &>/dev/null 2>&1; then
-            print_success "✓ Composer çalışıyor: $ - composer --version 2>/dev/null | head -1"
+            print_success "✓ Composer çalışıyor: $composer --version 2>/dev/null | head -1"
             echo ""
             print_info "════════════════════════════════════════"
             print_info "  🎉 HER ŞEY HAZIR!"
@@ -5586,7 +5586,7 @@ install_composer() {
     fi
     
     # PHP versiyonunu tespit et
-    local php_version=$ - php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+    local php_version=$php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
     
     if [ -z "$php_version" ]; then
         print_error "PHP versiyonu tespit edilemedi!"
@@ -5598,12 +5598,12 @@ install_composer() {
     # Composer için gerekli PHP eklentilerini kontrol et
     print_info "Composer için gerekli PHP eklentileri kontrol ediliyor..."
     
-    local required_for_composer= - "phar" "json" "mbstring" "openssl" "curl" "zip" "fileinfo" "tokenizer" "iconv" "ctype" "simplexml" "xmlreader" "xmlwriter"
-    local missing_for_composer= - 
+    local required_for_composer="phar" "json" "mbstring" "openssl" "curl" "zip" "fileinfo" "tokenizer" "iconv" "ctype" "simplexml" "xmlreader" "xmlwriter"
+    local missing_for_composer=
     
     for ext in "${required_for_composer[@]}"; do
         if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
-            missing_for_composer+= - "$ext"
+            missing_for_composer+="$ext"
         fi
     done
     
@@ -5657,10 +5657,10 @@ install_composer() {
         
         # Tekrar kontrol et
         print_info "Eklentiler tekrar kontrol ediliyor..."
-        local still_missing= - 
+        local still_missing=
         for ext in "${required_for_composer[@]}"; do
             if ! php -m 2>/dev/null | grep -qi "^$ext$"; then
-                still_missing+= - "$ext"
+                still_missing+="$ext"
             fi
         done
         
@@ -5676,7 +5676,7 @@ install_composer() {
     
     # Mevcut Composer kurulumunu kontrol et
     if command -v composer &> /dev/null; then
-        local current_version=$ - composer --version 2>/dev/null | head -1 || echo "Bilinmiyor"
+        local current_version=$composer --version 2>/dev/null | head -1 || echo "Bilinmiyor"
         print_info "Composer zaten kurulu: $current_version"
         
         if ask_yes_no "Composer'ı güncellemek ister misiniz?"; then
@@ -5702,7 +5702,7 @@ install_composer() {
             
             # Versiyon bilgisi
             if command -v composer &> /dev/null; then
-                local version=$ - composer --version 2>/dev/null | head -1 || echo "Bilinmiyor"
+                local version=$composer --version 2>/dev/null | head -1 || echo "Bilinmiyor"
                 echo -e "${GREEN}Composer Versiyonu:${NC} $version"
             fi
         else
@@ -5739,7 +5739,7 @@ install_php_extensions() {
     
     # Yöntem 1: php -v
     if command -v php &> /dev/null; then
-        php_version=$ - php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+        php_version=$php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
         if [ -n "$php_version" ]; then
             print_info "PHP CLI'den versiyon tespit edildi: $php_version"
         fi
@@ -5750,7 +5750,7 @@ install_php_extensions() {
         print_info "Alternatif PHP binary'leri aranıyor..."
         for php_bin in /usr/bin/php8.4 /usr/bin/php8.3 /usr/bin/php8.2 /usr/bin/php[0-9]* /usr/bin/php[0-9]*.[0-9]*; do
             if [ -f "$php_bin" ] && [ -x "$php_bin" ]; then
-                php_version=$ - $php_bin -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+                php_version=$$php_bin -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
                 if [ -n "$php_version" ]; then
                     php_binary="$php_bin"
                     print_info "PHP binary bulundu: $php_bin  - versiyon: $php_version"
@@ -5763,7 +5763,7 @@ install_php_extensions() {
     # Yöntem 3: PHP-FPM servislerinden
     if [ -z "$php_version" ]; then
         print_info "PHP-FPM servisleri kontrol ediliyor..."
-        php_version=$ - systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+        php_version=$systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
         if [ -n "$php_version" ]; then
             php_binary="php$php_version"
             print_info "PHP-FPM servisinden versiyon tespit edildi: $php_version"
@@ -5802,7 +5802,7 @@ install_php_extensions() {
     
     # ÖNEMLİ: Önce çift yükleme sorunlarını düzelt  - extension kurulumundan önce
     print_info "ADIM 1: Mevcut modül yapılandırması temizleniyor..."
-    local has_warnings=$ - $php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo ""
+    local has_warnings=$$php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo ""
     if [ -n "$has_warnings" ]; then
         print_warning "Çift yükleme uyarıları tespit edildi, düzeltiliyor..."
         fix_php_duplicate_modules "$php_version"
@@ -5823,7 +5823,7 @@ install_php_extensions() {
     if [ $? -eq 0 ]; then
         # Son bir kez daha çift yükleme kontrolü  - fix_php_extension_loading_order çift yükleme yapabilir
         print_info "ADIM 3: Son kontrol ve temizlik..."
-        local final_warnings=$ - $php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo ""
+        local final_warnings=$$php_binary -v 2>&1 | grep -i "warning.*already loaded" || echo ""
         
         if [ -n "$final_warnings" ]; then
             print_warning "Yeni çift yükleme uyarıları tespit edildi, tekrar düzeltiliyor..."
@@ -5854,25 +5854,25 @@ install_php_extensions() {
     fi
 }
 
-# Otomatik optimizasyon fonksiyonları
+ #Otomatik optimizasyon fonksiyonları
 get_server_specs() {
     # CPU bilgileri
-    local cpu_cores=$ - nproc
-    local cpu_model=$ - grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs || echo "Unknown"
+    local cpu_cores=$nproc
+    local cpu_model=$grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs || echo "Unknown"
     
     # RAM bilgileri  - MB cinsinden
-    local total_ram_mb=$ - free -m | awk '/^Mem:/{print $2}'
-    local available_ram_mb=$ - free -m | awk '/^Mem:/{print $7}'
+    local total_ram_mb=$free -m | awk '/^Mem:/{print $2}'
+    local available_ram_mb=$free -m | awk '/^Mem:/{print $7}'
     
     # Disk bilgileri
-    local total_disk_gb=$ - df -BG / | awk 'NR==2 {print $2}' | sed 's/G//'
-    local available_disk_gb=$ - df -BG / | awk 'NR==2 {print $4}' | sed 's/G//'
+    local total_disk_gb=$df -BG / | awk 'NR==2 {print $2}' | sed 's/G//'
+    local available_disk_gb=$df -BG / | awk 'NR==2 {print $4}' | sed 's/G//'
     
     # Sistem için ayrılacak RAM  - GB
     local system_ram_gb=2  # Minimum 2GB sistem için
     
     # Kullanılabilir RAM  - sistem hariç, MB
-    local usable_ram_mb=$ - (total_ram_mb - (system_ram_gb * 1024))
+    local usable_ram_mb=$((total_ram_mb((system_ram_gb * 1024))
     if [ $usable_ram_mb -lt 512 ]; then
         usable_ram_mb=512  # Minimum 512MB
     fi
@@ -5889,10 +5889,10 @@ optimize_nginx() {
         return 1
     fi
     
-    local specs=$ - get_server_specs
-    local cpu_cores=$ - echo "$specs" | cut -d'|' -f1
-    local total_ram_mb=$ - echo "$specs" | cut -d'|' -f2
-    local usable_ram_mb=$ - echo "$specs" | cut -d'|' -f3
+    local specs=$get_server_specs
+    local cpu_cores=$echo "$specs" | cut -d'|' -f1
+    local total_ram_mb=$echo "$specs" | cut -d'|' -f2
+    local usable_ram_mb=$echo "$specs" | cut -d'|' -f3
     
     print_info "Sunucu Özellikleri:"
     echo -e "  CPU Çekirdek: ${GREEN}$cpu_cores${NC}"
@@ -5902,7 +5902,7 @@ optimize_nginx() {
     
     # Nginx yapılandırma dosyası
     local nginx_conf="/etc/nginx/nginx.conf"
-    local nginx_conf_backup="/etc/nginx/nginx.conf.backup.$ - date +%Y%m%d_%H%M%S"
+    local nginx_conf_backup="/etc/nginx/nginx.conf.backup.$date +%Y%m%d_%H%M%S"
     
     # Yedek oluştur
     cp "$nginx_conf" "$nginx_conf_backup"
@@ -5927,7 +5927,7 @@ optimize_nginx() {
     fi
     
     # Max connections = worker_processes * worker_connections
-    local max_connections=$ - (worker_processes * worker_connections)
+    local max_connections=$((worker_processes * worker_connections)
     
     # Keepalive timeout
     local keepalive_timeout=65
@@ -6020,7 +6020,7 @@ optimize_php_fpm() {
     print_header "PHP-FPM Performans Optimizasyonu"
     
     # PHP versiyonunu tespit et
-    local php_version=$ - php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+    local php_version=$php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
     
     if [ -z "$php_version" ]; then
         print_error "PHP kurulu değil veya versiyon tespit edilemedi!"
@@ -6034,10 +6034,10 @@ optimize_php_fpm() {
         return 1
     fi
     
-    local specs=$ - get_server_specs
-    local cpu_cores=$ - echo "$specs" | cut -d'|' -f1
-    local total_ram_mb=$ - echo "$specs" | cut -d'|' -f2
-    local usable_ram_mb=$ - echo "$specs" | cut -d'|' -f3
+    local specs=$get_server_specs
+    local cpu_cores=$echo "$specs" | cut -d'|' -f1
+    local total_ram_mb=$echo "$specs" | cut -d'|' -f2
+    local usable_ram_mb=$echo "$specs" | cut -d'|' -f3
     
     print_info "Sunucu Özellikleri:"
     echo -e "  CPU Çekirdek: ${GREEN}$cpu_cores${NC}"
@@ -6046,13 +6046,13 @@ optimize_php_fpm() {
     echo ""
     
     # PHP memory_limit'i al
-    local memory_limit=$ - php -i 2>/dev/null | grep "memory_limit" | awk '{print $3}' | head -1
+    local memory_limit=$php -i 2>/dev/null | grep "memory_limit" | awk '{print $3}' | head -1
     if [ -z "$memory_limit" ]; then
         memory_limit="128M"
     fi
     
     # Memory limit'i MB'ye çevir
-    local memory_limit_mb=$ - echo "$memory_limit" | sed 's/M//' | sed 's/m//'
+    local memory_limit_mb=$echo "$memory_limit" | sed 's/M//' | sed 's/m//'
     if [ -z "$memory_limit_mb" ] || [ "$memory_limit_mb" = "0" ]; then
         memory_limit_mb=128
     fi
@@ -6060,12 +6060,12 @@ optimize_php_fpm() {
     # PHP-FPM max_children hesaplama
     # Formül:  - Kullanılabilir RAM - 500MB /  - memory_limit * 1.2
     local reserved_ram=500
-    local available_for_php=$ - (usable_ram_mb - reserved_ram)
+    local available_for_php=$((usable_ram_mb - reserved_ram)
     if [ $available_for_php -lt 256 ]; then
         available_for_php=256
     fi
     
-    local max_children=$ - (available_for_php / (memory_limit_mb * 120 / 100))
+    local max_children=$((available_for_php / (memory_limit_mb * 120 / 100))
     if [ $max_children -lt 5 ]; then
         max_children=5
     elif [ $max_children -gt 200 ]; then
@@ -6073,13 +6073,13 @@ optimize_php_fpm() {
     fi
     
     # Diğer değerler
-    local start_servers=$ - (max_children / 4)
+    local start_servers=$((max_children / 4)
     if [ $start_servers -lt 3 ]; then
         start_servers=3
     fi
     
     local min_spare_servers=$start_servers
-    local max_spare_servers=$ - (max_children / 2)
+    local max_spare_servers=$((max_children / 2)
     if [ $max_spare_servers -lt $min_spare_servers ]; then
         max_spare_servers=$min_spare_servers
     fi
@@ -6100,7 +6100,7 @@ optimize_php_fpm() {
     fi
     
     # Yedek oluştur
-    local php_fpm_backup="$php_fpm_pool.backup.$ - date +%Y%m%d_%H%M%S"
+    local php_fpm_backup="$php_fpm_pool.backup.$date +%Y%m%d_%H%M%S"
     cp "$php_fpm_pool" "$php_fpm_backup"
     print_info "Yedek oluşturuldu: $php_fpm_backup"
     
@@ -6150,9 +6150,9 @@ optimize_mysql() {
         return 1
     fi
     
-    local specs=$ - get_server_specs
-    local total_ram_mb=$ - echo "$specs" | cut -d'|' -f2
-    local total_ram_gb=$ - (total_ram_mb / 1024)
+    local specs=$get_server_specs
+    local total_ram_mb=$echo "$specs" | cut -d'|' -f2
+    local total_ram_gb=$((total_ram_mb / 1024)
     
     # MySQL yapılandırma dosyası
     local mysql_conf="/etc/mysql/mariadb.conf.d/50-server.cnf"
@@ -6169,15 +6169,15 @@ optimize_mysql() {
     fi
     
     # InnoDB Buffer Pool Size hesaplama  - RAM'in %70'i, min 1GB, max RAM'in %80'i
-    local buffer_pool_gb=$ - (total_ram_gb * 70 / 100)
+    local buffer_pool_gb=$((total_ram_gb * 70 / 100)
     if [ $buffer_pool_gb -lt 1 ]; then
         buffer_pool_gb=1
     fi
-    local max_buffer_pool_gb=$ - (total_ram_gb * 80 / 100)
+    local max_buffer_pool_gb=$((total_ram_gb * 80 / 100)
     if [ $buffer_pool_gb -gt $max_buffer_pool_gb ]; then
         buffer_pool_gb=$max_buffer_pool_gb
     fi
-    local buffer_pool_mb=$ - (buffer_pool_gb * 1024)
+    local buffer_pool_mb=$((buffer_pool_gb * 1024)
     
     # Max connections  - RAM'e göre
     local max_connections=200
@@ -6208,7 +6208,7 @@ optimize_mysql() {
     fi
     
     # Yedek oluştur
-    local mysql_backup="$mysql_conf.backup.$ - date +%Y%m%d_%H%M%S"
+    local mysql_backup="$mysql_conf.backup.$date +%Y%m%d_%H%M%S"
     cp "$mysql_conf" "$mysql_backup"
     print_info "Yedek oluşturuldu: $mysql_backup"
     
@@ -6233,7 +6233,7 @@ optimize_mysql() {
     
     # InnoDB log file size
     if ! grep -q "^innodb_log_file_size" "$mysql_conf"; then
-        local log_file_size=$ - (buffer_pool_mb / 4)
+        local log_file_size=$((buffer_pool_mb / 4)
         if [ $log_file_size -gt 2048 ]; then
             log_file_size=2048
         fi
@@ -6268,9 +6268,9 @@ optimize_redis() {
         return 1
     fi
     
-    local specs=$ - get_server_specs
-    local total_ram_mb=$ - echo "$specs" | cut -d'|' -f2
-    local total_ram_gb=$ - (total_ram_mb / 1024)
+    local specs=$get_server_specs
+    local total_ram_mb=$echo "$specs" | cut -d'|' -f2
+    local total_ram_gb=$((total_ram_mb / 1024)
     
     # Redis yapılandırma dosyası
     local redis_conf="/etc/redis/redis.conf"
@@ -6281,7 +6281,7 @@ optimize_redis() {
     fi
     
     # Max memory  - RAM'in %10-20'si
-    local max_memory_mb=$ - (total_ram_mb * 15 / 100)
+    local max_memory_mb=$((total_ram_mb * 15 / 100)
     if [ $max_memory_mb -lt 256 ]; then
         max_memory_mb=256
     fi
@@ -6304,7 +6304,7 @@ optimize_redis() {
     fi
     
     # Yedek oluştur
-    local redis_backup="$redis_conf.backup.$ - date +%Y%m%d_%H%M%S"
+    local redis_backup="$redis_conf.backup.$date +%Y%m%d_%H%M%S"
     cp "$redis_conf" "$redis_backup"
     print_info "Yedek oluşturuldu: $redis_backup"
     
@@ -6353,9 +6353,9 @@ optimize_redis() {
 optimize_system_limits() {
     print_header "Sistem Limitleri Optimizasyonu"
     
-    local specs=$ - get_server_specs
-    local cpu_cores=$ - echo "$specs" | cut -d'|' -f1
-    local total_ram_mb=$ - echo "$specs" | cut -d'|' -f2
+    local specs=$get_server_specs
+    local cpu_cores=$echo "$specs" | cut -d'|' -f1
+    local total_ram_mb=$echo "$specs" | cut -d'|' -f2
     
     # Open files limit hesaplama
     local worker_connections=2048
@@ -6367,7 +6367,7 @@ optimize_system_limits() {
         worker_connections=1024
     fi
     
-    local open_files_limit=$ - (worker_connections * cpu_cores * 2)
+    local open_files_limit=$((worker_connections * cpu_cores * 2)
     if [ $open_files_limit -lt 65536 ]; then
         open_files_limit=65536
     fi
@@ -6383,7 +6383,7 @@ optimize_system_limits() {
     
     # /etc/security/limits.conf güncelle
     local limits_conf="/etc/security/limits.conf"
-    local limits_backup="$limits_conf.backup.$ - date +%Y%m%d_%H%M%S"
+    local limits_backup="$limits_conf.backup.$date +%Y%m%d_%H%M%S"
     cp "$limits_conf" "$limits_backup"
     
     # Mevcut limitleri kaldır
@@ -6392,7 +6392,7 @@ optimize_system_limits() {
     # Yeni limitleri ekle
     cat >> "$limits_conf" <<EOF
 
-# Optimized limits for web server
+ #Optimized limits for web server
 www-data soft nofile $open_files_limit
 www-data hard nofile $open_files_limit
 nginx soft nofile $open_files_limit
@@ -6403,7 +6403,7 @@ EOF
     
     # /etc/sysctl.conf optimizasyonları
     local sysctl_conf="/etc/sysctl.conf"
-    local sysctl_backup="$sysctl_conf.backup.$ - date +%Y%m%d_%H%M%S"
+    local sysctl_backup="$sysctl_conf.backup.$date +%Y%m%d_%H%M%S"
     cp "$sysctl_conf" "$sysctl_backup"
     
     # Mevcut ayarları kaldır
@@ -6412,7 +6412,7 @@ EOF
     # Yeni ayarları ekle
     cat >> "$sysctl_conf" <<EOF
 
-# Network optimizations
+ #Network optimizations
 net.core.somaxconn = 65535
 net.ipv4.tcp_max_syn_backlog = 65535
 net.ipv4.ip_local_port_range = 1024 65535
@@ -6435,10 +6435,10 @@ optimize_services_menu() {
         clear
         print_header "Servis Optimizasyonu - Performans & Güvenlik"
         
-        local specs=$ - get_server_specs
-        local cpu_cores=$ - echo "$specs" | cut -d'|' -f1
-        local total_ram_mb=$ - echo "$specs" | cut -d'|' -f2
-        local cpu_model=$ - echo "$specs" | cut -d'|' -f6
+        local specs=$get_server_specs
+        local cpu_cores=$echo "$specs" | cut -d'|' -f1
+        local total_ram_mb=$echo "$specs" | cut -d'|' -f2
+        local cpu_model=$echo "$specs" | cut -d'|' -f6
         
         echo -e "${CYAN}Sunucu Donanım Bilgileri:${NC}"
         echo -e "  CPU: ${GREEN}$cpu_model${NC}"
@@ -6497,10 +6497,10 @@ optimize_services_menu() {
 optimize_all_services() {
     print_header "Tüm Servisleri Otomatik Optimize Et"
     
-    local specs=$ - get_server_specs
-    local cpu_cores=$ - echo "$specs" | cut -d'|' -f1
-    local total_ram_mb=$ - echo "$specs" | cut -d'|' -f2
-    local cpu_model=$ - echo "$specs" | cut -d'|' -f6
+    local specs=$get_server_specs
+    local cpu_cores=$echo "$specs" | cut -d'|' -f1
+    local total_ram_mb=$echo "$specs" | cut -d'|' -f2
+    local cpu_model=$echo "$specs" | cut -d'|' -f6
     
     echo -e "${CYAN}Sunucu Özellikleri:${NC}"
     echo -e "  CPU: ${GREEN}$cpu_model${NC}"
@@ -6685,7 +6685,7 @@ EOF
     cp pki/crl.pem /etc/openvpn/crl.pem 2>/dev/null || true
     
     # OpenVPN yapılandırma dosyası oluştur
-    local server_ip=$ - hostname -I | awk '{print $1}'
+    local server_ip=$hostname -I | awk '{print $1}'
     local openvpn_port=1194
     local openvpn_proto="udp"
     
@@ -6706,7 +6706,7 @@ EOF
     
     # Mevcut yapılandırma varsa yedekle
     if [ -f "$openvpn_conf" ]; then
-        cp $openvpn_conf ${openvpn_conf}.backup.$ - date +%Y%m%d_%H%M%S
+        cp $openvpn_conf ${openvpn_conf}.backup.$date +%Y%m%d_%H%M%S
     fi
     
     cat > $openvpn_conf <<EOF
@@ -6742,7 +6742,7 @@ status /var/log/openvpn/openvpn-status.log
 log /var/log/openvpn/openvpn.log
 verb 3
 
-# Güvenlik ayarları
+ #Güvenlik ayarları
 tls-version-min 1.2
 EOF
     
@@ -6940,7 +6940,7 @@ server {
 
     location ~ \.php\$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php$ - php -v | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1-fpm.sock;
+        fastcgi_pass unix:/var/run/php/php$php -v | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1-fpm.sock;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
     }
@@ -7053,9 +7053,9 @@ install_pritunl() {
         print_info "MongoDB repository ekleniyor..."
         local ubuntu_codename="noble"
         if command -v lsb_release &>/dev/null; then
-            ubuntu_codename=$ - lsb_release -cs
+            ubuntu_codename=$lsb_release -cs
         elif [ -f /etc/os-release ]; then
-            ubuntu_codename=$ - grep VERSION_CODENAME /etc/os-release | cut -d'=' -f2 | tr -d '"'
+            ubuntu_codename=$grep VERSION_CODENAME /etc/os-release | cut -d'=' -f2 | tr -d '"'
         fi
         
         # Ubuntu 24.04 için noble kullan
@@ -7110,7 +7110,7 @@ EOF
                 break
             fi
             sleep 2
-             - (mongodb_start_retry++)
+            ((mongodb_start_retry++)
         done
         
         if [ "$mongodb_running" = false ]; then
@@ -7141,7 +7141,7 @@ EOF
             break
         fi
         sleep 2
-         - (mongodb_retry++)
+        ((mongodb_retry++)
     done
     
     if ! systemctl is-active --quiet mongod 2>/dev/null; then
@@ -7202,9 +7202,9 @@ EOF
     # Repository ekle
     local ubuntu_codename="noble"
     if command -v lsb_release &>/dev/null; then
-        ubuntu_codename=$ - lsb_release -cs
+        ubuntu_codename=$lsb_release -cs
     elif [ -f /etc/os-release ]; then
-        ubuntu_codename=$ - grep VERSION_CODENAME /etc/os-release | cut -d'=' -f2 | tr -d '"'
+        ubuntu_codename=$grep VERSION_CODENAME /etc/os-release | cut -d'=' -f2 | tr -d '"'
     fi
     
     # Ubuntu 24.04 için noble kullan
@@ -7282,7 +7282,7 @@ PYTHON_SCRIPT
             else
                 # Python yoksa, dosyayı yedekle ve yeniden oluştur
                 print_warning "Python3 bulunamadı, yapılandırma dosyası yeniden oluşturuluyor..."
-                cp "$pritunl_conf" "${pritunl_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+                cp "$pritunl_conf" "${pritunl_conf}.backup.$date +%Y%m%d_%H%M%S"
                 cat > "$pritunl_conf" <<EOF
 {
   "mongodb_uri": "$mongodb_uri"
@@ -7293,10 +7293,10 @@ EOF
         else
             # Python config formatında ise, JSON'a dönüştür
             print_info "Mevcut yapılandırma Python formatında, JSON'a dönüştürülüyor..."
-            cp "$pritunl_conf" "${pritunl_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+            cp "$pritunl_conf" "${pritunl_conf}.backup.$date +%Y%m%d_%H%M%S"
             
             # Mevcut ayarları oku  - varsa
-            local existing_uri=$ - grep -E "^mongodb_uri" "$pritunl_conf" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo ""
+            local existing_uri=$grep -E "^mongodb_uri" "$pritunl_conf" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo ""
             if [ -z "$existing_uri" ]; then
                 existing_uri="$mongodb_uri"
             fi
@@ -7372,7 +7372,7 @@ EOF
             break
         fi
         sleep 2
-         - (pritunl_start_retry++)
+        ((pritunl_start_retry++)
     done
     
     if systemctl is-active --quiet pritunl 2>/dev/null; then
@@ -7382,17 +7382,17 @@ EOF
         local setup_key=""
         local retry_count=0
         while [ $retry_count -lt 10 ] && [ -z "$setup_key" ]; do
-            setup_key=$ - pritunl default-key 2>/dev/null | grep -oE '[a-f0-9]{32}' | head -1
+            setup_key=$pritunl default-key 2>/dev/null | grep -oE '[a-f0-9]{32}' | head -1
             if [ -z "$setup_key" ]; then
                 sleep 2
-                 - (retry_count++)
+                ((retry_count++)
             fi
         done
         
-        local server_ip=$ - hostname -I | awk '{print $1}'
+        local server_ip=$hostname -I | awk '{print $1}'
         
         print_info "Pritunl kurulum bilgileri:"
-        echo -e "${GREEN}MongoDB Durumu:${NC} $ - systemctl is-active mongod"
+        echo -e "${GREEN}MongoDB Durumu:${NC} $systemctl is-active mongod"
         echo -e "${GREEN}MongoDB URI:${NC} mongodb://localhost:27017/pritunl"
         if [ -n "$setup_key" ]; then
             echo -e "${GREEN}Setup Key:${NC} $setup_key"
@@ -7464,7 +7464,7 @@ install_mongodb_for_pritunl() {
                 if python3 -c "import json; json.load - open('$pritunl_conf')" 2>/dev/null && \
                    python3 -c "import json; data=json.load - open('$pritunl_conf'); 'mongodb_uri' in data" 2>/dev/null; then
                     print_success "Pritunl MongoDB yapılandırması mevcut  - JSON formatında"
-                    local existing_uri=$ - python3 -c "import json; print(json.load(open('$pritunl_conf').get - 'mongodb_uri', '')" 2>/dev/null || echo "")
+                    local existing_uri=$python3 -c "import json; print(json.load(open('$pritunl_conf').get - 'mongodb_uri', '')" 2>/dev/null || echo "")
                     if [ -n "$existing_uri" ]; then
                         echo -e "${GREEN}MongoDB URI:${NC} $existing_uri"
                     fi
@@ -7485,7 +7485,7 @@ PYTHON_SCRIPT
             else
                 # Python formatında ise JSON'a dönüştür
                 print_warning "Pritunl yapılandırması eski formatta, JSON'a dönüştürülüyor..."
-                cp "$pritunl_conf" "${pritunl_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+                cp "$pritunl_conf" "${pritunl_conf}.backup.$date +%Y%m%d_%H%M%S"
                 if command -v python3 &>/dev/null; then
                     python3 <<PYTHON_SCRIPT
 import json
@@ -7542,9 +7542,9 @@ PYTHON_SCRIPT
         print_info "MongoDB repository ekleniyor..."
         local ubuntu_codename="noble"
         if command -v lsb_release &>/dev/null; then
-            ubuntu_codename=$ - lsb_release -cs
+            ubuntu_codename=$lsb_release -cs
         elif [ -f /etc/os-release ]; then
-            ubuntu_codename=$ - grep VERSION_CODENAME /etc/os-release | cut -d'=' -f2 | tr -d '"'
+            ubuntu_codename=$grep VERSION_CODENAME /etc/os-release | cut -d'=' -f2 | tr -d '"'
         fi
         
         if [ -z "$ubuntu_codename" ] || [ "$ubuntu_codename" = "" ]; then
@@ -7598,7 +7598,7 @@ EOF
                 break
             fi
             sleep 2
-             - (mongodb_start_retry++)
+            ((mongodb_start_retry++)
         done
         
         if [ "$mongodb_running" = false ]; then
@@ -7694,7 +7694,7 @@ PYTHON_SCRIPT
                     print_success "MongoDB URI JSON formatında güncellendi: $mongodb_uri"
                 else
                     print_warning "Python ile güncelleme başarısız, dosya yeniden oluşturuluyor..."
-                    cp "$pritunl_conf" "${pritunl_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+                    cp "$pritunl_conf" "${pritunl_conf}.backup.$date +%Y%m%d_%H%M%S"
                     cat > "$pritunl_conf" <<EOF
 {
   "mongodb_uri": "$mongodb_uri"
@@ -7705,7 +7705,7 @@ EOF
             else
                 # Python yoksa, dosyayı yedekle ve yeniden oluştur
                 print_warning "Python3 bulunamadı, yapılandırma dosyası yeniden oluşturuluyor..."
-                cp "$pritunl_conf" "${pritunl_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+                cp "$pritunl_conf" "${pritunl_conf}.backup.$date +%Y%m%d_%H%M%S"
                 cat > "$pritunl_conf" <<EOF
 {
   "mongodb_uri": "$mongodb_uri"
@@ -7716,10 +7716,10 @@ EOF
         else
             # Python config formatında ise, JSON'a dönüştür
             print_info "Mevcut yapılandırma Python formatında, JSON'a dönüştürülüyor..."
-            cp "$pritunl_conf" "${pritunl_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+            cp "$pritunl_conf" "${pritunl_conf}.backup.$date +%Y%m%d_%H%M%S"
             
             # Mevcut ayarları oku  - varsa
-            local existing_uri=$ - grep -E "^mongodb_uri" "$pritunl_conf" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo ""
+            local existing_uri=$grep -E "^mongodb_uri" "$pritunl_conf" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo ""
             if [ -z "$existing_uri" ]; then
                 existing_uri="$mongodb_uri"
             fi
@@ -7752,9 +7752,9 @@ EOF
     if systemctl is-active --quiet pritunl 2>/dev/null; then
         print_success "Pritunl MongoDB yapılandırması tamamlandı!"
         echo ""
-        echo -e "${GREEN}MongoDB Durumu:${NC} $ - systemctl is-active mongod"
+        echo -e "${GREEN}MongoDB Durumu:${NC} $systemctl is-active mongod"
         echo -e "${GREEN}MongoDB URI:${NC} $mongodb_uri"
-        echo -e "${GREEN}Pritunl Durumu:${NC} $ - systemctl is-active pritunl"
+        echo -e "${GREEN}Pritunl Durumu:${NC} $systemctl is-active pritunl"
         echo ""
         print_info "Pritunl artık MongoDB'ye bağlı ve çalışıyor"
     else
@@ -7800,9 +7800,9 @@ create_openvpn_client() {
     ./easyrsa sign-req client $client_name
     
     # İstemci yapılandırma dosyası oluştur
-    local server_ip=$ - hostname -I | awk '{print $1}'
-    local openvpn_port=$ - grep "^port" /etc/openvpn/server.conf 2>/dev/null | awk '{print $2}' || echo "1194"
-    local openvpn_proto=$ - grep "^proto" /etc/openvpn/server.conf 2>/dev/null | awk '{print $2}' || echo "udp"
+    local server_ip=$hostname -I | awk '{print $1}'
+    local openvpn_port=$grep "^port" /etc/openvpn/server.conf 2>/dev/null | awk '{print $2}' || echo "1194"
+    local openvpn_proto=$grep "^proto" /etc/openvpn/server.conf 2>/dev/null | awk '{print $2}' || echo "udp"
     
     local client_config_dir="/etc/openvpn/clients"
     mkdir -p $client_config_dir
@@ -7869,7 +7869,7 @@ list_openvpn_clients() {
     local count=1
     for cert_file in $easyrsa_dir/pki/issued/*.crt; do
         if [ -f "$cert_file" ]; then
-            local client_name=$ - basename "$cert_file" .crt
+            local client_name=$basename "$cert_file" .crt
             if [ "$client_name" != "server" ]; then
                 local client_ovpn="$client_config_dir/${client_name}.ovpn"
                 local status=""
@@ -7880,7 +7880,7 @@ list_openvpn_clients() {
                 fi
                 
                 echo "$count) $client_name $status"
-                 - (count++)
+                ((count++)
             fi
         fi
     done
@@ -8211,14 +8211,14 @@ create_sample_files() {
         <div class='info' style='margin-top: 20px;'>
             <h3>Kurulan Servisler:</h3>
             <ul>
-                $ - [ "$INSTALL_NGINX" = true ] && echo "<li>✓ Nginx</li>"
-                $ - [ "$INSTALL_PHP" = true ] && echo "<li>✓ PHP $PHP_VERSION</li>"
-                $ - [ "$INSTALL_MYSQL" = true ] && echo "<li>✓ MySQL/MariaDB</li>"
-                $ - [ "$INSTALL_NODEJS" = true ] && echo "<li>✓ Node.js</li>"
-                $ - [ "$INSTALL_REDIS" = true ] && echo "<li>✓ Redis</li>"
-                $ - [ "$INSTALL_COMPOSER" = true ] && echo "<li>✓ Composer</li>"
-                $ - [ "$INSTALL_PHPMYADMIN" = true ] && echo "<li>✓ phpMyAdmin</li>"
-                $ - [ "$INSTALL_SSL" = true ] && echo "<li>✓ SSL Sertifikası</li>"
+                $[ "$INSTALL_NGINX" = true ] && echo "<li>✓ Nginx</li>"
+                $[ "$INSTALL_PHP" = true ] && echo "<li>✓ PHP $PHP_VERSION</li>"
+                $[ "$INSTALL_MYSQL" = true ] && echo "<li>✓ MySQL/MariaDB</li>"
+                $[ "$INSTALL_NODEJS" = true ] && echo "<li>✓ Node.js</li>"
+                $[ "$INSTALL_REDIS" = true ] && echo "<li>✓ Redis</li>"
+                $[ "$INSTALL_COMPOSER" = true ] && echo "<li>✓ Composer</li>"
+                $[ "$INSTALL_PHPMYADMIN" = true ] && echo "<li>✓ phpMyAdmin</li>"
+                $[ "$INSTALL_SSL" = true ] && echo "<li>✓ SSL Sertifikası</li>"
             </ul>
         </div>
         
@@ -8250,7 +8250,7 @@ EOF
     print_success "Örnek dosyalar oluşturuldu"
 }
 
-# Yeni eklenen yönetim fonksiyonları
+ #Yeni eklenen yönetim fonksiyonları
 list_domains() {
     print_header "Mevcut Domain ve Subdomain'ler"
     
@@ -8259,7 +8259,7 @@ list_domains() {
         return 1
     fi
     
-    local domains=$ - ls /etc/nginx/sites-available/ 2>/dev/null | grep -v default
+    local domains=$ls /etc/nginx/sites-available/ 2>/dev/null | grep -v default
     
     if [ -z "$domains" ]; then
         print_warning "Henüz yapılandırılmış domain bulunamadı."
@@ -8277,14 +8277,14 @@ list_domains() {
             enabled="${RED}[Pasif]${NC}"
         fi
         
-        local root_dir=$ - grep -E "^\s*root\s+" /etc/nginx/sites-available/$domain 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';'
-        local server_names=$ - grep -E "^\s*server_name\s+" /etc/nginx/sites-available/$domain 2>/dev/null | head -1 | sed 's/server_name//' | sed 's/;//'
+        local root_dir=$grep -E "^\s*root\s+" /etc/nginx/sites-available/$domain 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';'
+        local server_names=$grep -E "^\s*server_name\s+" /etc/nginx/sites-available/$domain 2>/dev/null | head -1 | sed 's/server_name//' | sed 's/;//'
         
         echo -e "${count}) ${GREEN}$domain${NC} $enabled"
         echo "   Server Names: $server_names"
         echo "   Root: $root_dir"
         echo ""
-         - (count++)
+        ((count++)
     done
 }
 
@@ -8341,7 +8341,7 @@ add_subdomain() {
         # PHP-FPM servisinin gerçekten var olup olmadığını kontrol et
         if ! systemctl list-units --type=service | grep -q "php${php_version}-fpm"; then
             # Mevcut PHP versiyonunu bul
-            local installed_php=$ - systemctl list-units --type=service | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/')
+            local installed_php=$systemctl list-units --type=service | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/')
             if [ -n "$installed_php" ]; then
                 php_version="$installed_php"
                 print_info "PHP $php_version kullanılıyor"
@@ -8489,7 +8489,7 @@ change_directory() {
         return 1
     fi
     
-    local current_dir=$ - grep -E "^\s*root\s+" /etc/nginx/sites-available/$domain 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';'
+    local current_dir=$grep -E "^\s*root\s+" /etc/nginx/sites-available/$domain 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';'
     echo -e "${CYAN}Mevcut dizin:${NC} $current_dir"
     
     local new_dir=""
@@ -8577,7 +8577,7 @@ create_ssl() {
     echo "  B Server  - Laravel: Nginx + PHP çalışıyor ← SSL BURDA OLUŞTURULMALI!"
     echo ""
     echo -e "${YELLOW}Şu anda bu script hangi sunucuda çalışıyor?${NC}"
-    local current_ip=$ - curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'
+    local current_ip=$curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'
     echo "  Bu sunucu IP: ${GREEN}$current_ip${NC}"
     echo ""
     
@@ -8624,9 +8624,9 @@ create_ssl() {
         if command -v idn &>/dev/null || command -v idn2 &>/dev/null; then
             local punycode_domain=""
             if command -v idn2 &>/dev/null; then
-                punycode_domain=$ - echo "$domain" | idn2 --no-tld
+                punycode_domain=$echo "$domain" | idn2 --no-tld
             elif command -v idn &>/dev/null; then
-                punycode_domain=$ - echo "$domain" | idn --no-tld
+                punycode_domain=$echo "$domain" | idn --no-tld
             fi
             
             if [ -n "$punycode_domain" ]; then
@@ -8648,7 +8648,7 @@ create_ssl() {
             if ask_yes_no "idn2 paketini şimdi kurmak ister misiniz?"; then
                 apt update && apt install -y idn2
                 if command -v idn2 &>/dev/null; then
-                    punycode_domain=$ - echo "$domain" | idn2 --no-tld
+                    punycode_domain=$echo "$domain" | idn2 --no-tld
                     print_success "✓ Punycode: $punycode_domain"
                     domain="$punycode_domain"
                 else
@@ -8669,7 +8669,7 @@ create_ssl() {
     local use_dns_challenge=false
     
     if [ "$MULTI_SERVER_MODE" = true ]; then
-        local current_ip=$ - hostname -I | awk '{print $1}'
+        local current_ip=$hostname -I | awk '{print $1}'
         
         if [ "$DNS_SERVER_IP" != "$current_ip" ] && [ -n "$DNS_SERVER_IP" ]; then
             print_warning "═══════════════════════════════════════════"
@@ -8851,7 +8851,7 @@ create_ssl_dns_auto() {
     print_header "SSL - DNS-01 Challenge  - Otomatik - BIND9"
     
     # DNS sunucusu kontrolü
-    local dns_type=$ - detect_dns_server
+    local dns_type=$detect_dns_server
     
     if [ "$dns_type" != "bind9" ]; then
         print_error "Bu özellik sadece BIND9 için çalışır!"
@@ -8871,7 +8871,7 @@ create_ssl_dns_auto() {
     if [ ! -d "/etc/bind" ] && ! command -v named-checkzone &>/dev/null; then
         print_error "Bu sunucuda BIND9 bulunamadı!"
         print_info "Bu fonksiyon DNS sunucusunda çalıştırılmalıdır"
-        print_info "Mevcut sunucu: $ - hostname -I | awk '{print $1}'"
+        print_info "Mevcut sunucu: $hostname -I | awk '{print $1}'"
         return 1
     fi
     
@@ -8885,13 +8885,13 @@ create_ssl_dns_auto() {
         web_server_ip="$WEB_SERVER_IP"
         echo -e "${CYAN}Web sunucusu  - Nginx:${NC} $web_server_ip"
     else
-        local current_ip=$ - hostname -I | awk '{print $1}'
+        local current_ip=$hostname -I | awk '{print $1}'
         ask_input "Web sunucusu IP  - Nginx'in çalıştığı yer" web_server_ip "$current_ip"
     fi
     
     # Aynı sunucudaysa SSH gerektirmez
     local same_server=false
-    local current_ip=$ - hostname -I | awk '{print $1}'
+    local current_ip=$hostname -I | awk '{print $1}'
     if [ "$web_server_ip" = "$current_ip" ] || [ "$web_server_ip" = "127.0.0.1" ] || [ "$web_server_ip" = "localhost" ]; then
         same_server=true
         print_info "DNS ve Web aynı sunucuda, SSH gerektirmez"
@@ -9024,7 +9024,7 @@ create_ssl_dns_auto() {
         echo ""
         
         # Detaylı hata göster
-        local ssh_error=$ - sshpass -p "$ssh_password" ssh -v -o ConnectTimeout=5 -o StrictHostKeyChecking=no $web_server_user@$web_server_ip "echo test" 2>&1
+        local ssh_error=$sshpass -p "$ssh_password" ssh -v -o ConnectTimeout=5 -o StrictHostKeyChecking=no $web_server_user@$web_server_ip "echo test" 2>&1
         local ssh_result=$?
         
         if [ $ssh_result -eq 0 ]; then
@@ -9140,7 +9140,7 @@ create_dns_challenge_hooks() {
         # Şifre ile version
         cat > /usr/local/bin/certbot-dns-add.sh <<HOOK_ADD
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydı Ekle  - Şifre ile
+ #Certbot DNS-01 Challenge - TXT Kaydı Ekle  - Şifre ile
 
 DNS_SERVER="$dns_server"
 DNS_USER="$dns_user"
@@ -9150,17 +9150,17 @@ TOKEN="\$CERTBOT_VALIDATION"
 
 echo "[INFO] TXT kaydı ekleniyor: _acme-challenge.\$DOMAIN"
 
-# Ana domain'i bul
-MAIN_DOMAIN=\$ - echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev
+ #Ana domain'i bul
+MAIN_DOMAIN=\$echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev
 
-# Subdomain parse
+ #Subdomain parse
 RECORD_NAME="_acme-challenge"
 if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
-    SUBDOMAIN=\$ - echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//"
+    SUBDOMAIN=\$echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//"
     RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
 fi
 
-# SSH ile DNS sunucusunda TXT kaydı ekle  - A sunucusunda çalışır
+ #SSH ile DNS sunucusunda TXT kaydı ekle  - A sunucusunda çalışır
 sshpass -f "\$PASSWORD_FILE" ssh -o StrictHostKeyChecking=no \$DNS_USER@\$DNS_SERVER "
 set -e
 MAIN_DOMAIN='\$MAIN_DOMAIN'
@@ -9168,7 +9168,7 @@ RECORD_NAME='\$RECORD_NAME'
 TOKEN='\$TOKEN'
 ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
-# Zone dosyası var mı kontrol et  - A sunucusunda
+ #Zone dosyası var mı kontrol et  - A sunucusunda
 if [ ! -f \"\\\$ZONE_FILE\" ]; then
     echo '[INFO] Zone yok, oluşturuluyor: '\\\$ZONE_FILE
     
@@ -9185,7 +9185,7 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     fi
     
     WEB_SERVER_IP=\"$web_server_ip\"
-    SERIAL=\\\$ - date +%Y%m%d01
+    SERIAL=\\\$date +%Y%m%d01
     
     # printf + tee ile dosya oluştur
     printf '%s\\\\n' \\\
@@ -9226,13 +9226,13 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     echo '[OK] Zone oluşturuldu: '\\\$ZONE_FILE' -> '\\\$WEB_SERVER_IP
 fi
 
-# Root mu kontrol et
-if [ \"\\\$ - id -u\" -eq 0 ]; then
+ #Root mu kontrol et
+if [ \"\\\$id -u\" -eq 0 ]; then
     # Root - sudo gereksiz
     sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
-    CURRENT_SERIAL=\\\$ - grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
-    NEW_SERIAL=\\\$ - date +%Y%m%d%H
-    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$ - (CURRENT_SERIAL + 1)
+    CURRENT_SERIAL=\\\$grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
+    NEW_SERIAL=\\\$date +%Y%m%d%H
+    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1)
     sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
     echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" >> \"\\\$ZONE_FILE\"
     
@@ -9245,9 +9245,9 @@ if [ \"\\\$ - id -u\" -eq 0 ]; then
 else
     # Root değil - sudo gerekli
     sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
-    CURRENT_SERIAL=\\\$ - sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
-    NEW_SERIAL=\\\$ - date +%Y%m%d%H
-    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$ - (CURRENT_SERIAL + 1)
+    CURRENT_SERIAL=\\\$sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
+    NEW_SERIAL=\\\$date +%Y%m%d%H
+    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1)
     sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
     echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
     
@@ -9276,7 +9276,7 @@ HOOK_ADD
         # Key ile version
         cat > /usr/local/bin/certbot-dns-add.sh <<HOOK_ADD
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydı Ekle  - SSH Key ile
+ #Certbot DNS-01 Challenge - TXT Kaydı Ekle  - SSH Key ile
 
 DNS_SERVER="$dns_server"
 DNS_USER="$dns_user"
@@ -9285,11 +9285,11 @@ TOKEN="\$CERTBOT_VALIDATION"
 
 echo "[INFO] TXT kaydı ekleniyor: _acme-challenge.\$DOMAIN"
 
-MAIN_DOMAIN=\$ - echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev
+MAIN_DOMAIN=\$echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev
 
 RECORD_NAME="_acme-challenge"
 if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
-    SUBDOMAIN=\$ - echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//"
+    SUBDOMAIN=\$echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//"
     RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
 fi
 
@@ -9300,25 +9300,25 @@ RECORD_NAME='\$RECORD_NAME'
 TOKEN='\$TOKEN'
 ZONE_FILE=\"/etc/bind/db.\\\$MAIN_DOMAIN\"
 
-# BIND9 kurulu mu detaylı kontrol
+ #BIND9 kurulu mu detaylı kontrol
 BIND9_OK=false
 
-# Kontrol 1: /etc/bind dizini
+ #Kontrol 1: /etc/bind dizini
 if [ -d '/etc/bind' ]; then
     BIND9_OK=true
 fi
 
-# Kontrol 2: named-checkzone komutu
+ #Kontrol 2: named-checkzone komutu
 if command -v named-checkzone >/dev/null 2>&1; then
     BIND9_OK=true
 fi
 
-# Kontrol 3: bind9 paketi
+ #Kontrol 3: bind9 paketi
 if dpkg -l 2>/dev/null | grep -q '^ii.*bind9 '; then
     BIND9_OK=true
 fi
 
-# BIND9 yoksa kur
+ #BIND9 yoksa kur
 if [ \"\$BIND9_OK\" = \"false\" ]; then
     echo '[UYARI] BIND9 tespit edilemedi, kuruluyor...'
     
@@ -9329,7 +9329,7 @@ if [ \"\$BIND9_OK\" = \"false\" ]; then
     echo '[OK] BIND9 kuruldu'
 fi
 
-# Servis kontrolü  - sessiz
+ #Servis kontrolü  - sessiz
 if ! systemctl is-active --quiet bind9 2>/dev/null && ! systemctl is-active --quiet named 2>/dev/null; then
     if systemctl list-unit-files 2>/dev/null | grep -q 'bind9.service'; then
         systemctl start bind9 2>/dev/null || true
@@ -9338,12 +9338,12 @@ if ! systemctl is-active --quiet bind9 2>/dev/null && ! systemctl is-active --qu
     fi
 fi
 
-# Zone dosyası kontrolü ve otomatik oluşturma
+ #Zone dosyası kontrolü ve otomatik oluşturma
 if [ ! -f \"\\\$ZONE_FILE\" ]; then
     echo '[INFO] Zone oluşturuluyor: '\\\$ZONE_FILE
     
     WEB_SERVER_IP=\"$web_server_ip\"
-    SERIAL=\\\$ - date +%Y%m%d01
+    SERIAL=\\\$date +%Y%m%d01
     
     # printf + tee ile dosya oluştur
     printf '%s\\\\n' \\\
@@ -9377,19 +9377,19 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     echo '[OK] Zone oluşturuldu: '\\\$ZONE_FILE' -> '\\\$WEB_SERVER_IP
 fi
 
-if [ \"\\\$ - id -u\" -eq 0 ]; then
+if [ \"\\\$id -u\" -eq 0 ]; then
     sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
-    CURRENT_SERIAL=\\\$ - grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
-    NEW_SERIAL=\\\$ - date +%Y%m%d%H
-    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$ - (CURRENT_SERIAL + 1)
+    CURRENT_SERIAL=\\\$grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
+    NEW_SERIAL=\\\$date +%Y%m%d%H
+    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1)
     sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
     echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" >> \"\\\$ZONE_FILE\"
     systemctl reload named
 else
     sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
-    CURRENT_SERIAL=\\\$ - sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
-    NEW_SERIAL=\\\$ - date +%Y%m%d%H
-    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$ - (CURRENT_SERIAL + 1)
+    CURRENT_SERIAL=\\\$sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
+    NEW_SERIAL=\\\$date +%Y%m%d%H
+    [ \"\\\$NEW_SERIAL\" -le \"\\\$CURRENT_SERIAL\" ] && NEW_SERIAL=\\\$((CURRENT_SERIAL + 1)
     sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
     echo \"\\\$RECORD_NAME     IN      TXT     \\\\\"\\\$TOKEN\\\\\"\" | sudo tee -a \"\\\$ZONE_FILE\" >/dev/null
     sudo systemctl reload named
@@ -9415,7 +9415,7 @@ HOOK_ADD
         # Şifre ile version
         cat > /usr/local/bin/certbot-dns-cleanup.sh <<HOOK_CLEANUP
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydını Sil  - Şifre ile
+ #Certbot DNS-01 Challenge - TXT Kaydını Sil  - Şifre ile
 
 DNS_SERVER="$dns_server"
 DNS_USER="$dns_user"
@@ -9424,15 +9424,15 @@ DOMAIN="\$CERTBOT_DOMAIN"
 
 echo "[INFO] TXT kaydı siliniyor: _acme-challenge.\$DOMAIN"
 
-MAIN_DOMAIN=\$ - echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev
+MAIN_DOMAIN=\$echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev
 
 RECORD_NAME="_acme-challenge"
 if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
-    SUBDOMAIN=\$ - echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//"
+    SUBDOMAIN=\$echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//"
     RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
 fi
 
-# SSH ile DNS sunucusunda TXT kaydını sil
+ #SSH ile DNS sunucusunda TXT kaydını sil
 sshpass -f "\$PASSWORD_FILE" ssh -o StrictHostKeyChecking=no \$DNS_USER@\$DNS_SERVER "
 MAIN_DOMAIN='\$MAIN_DOMAIN'
 RECORD_NAME='\$RECORD_NAME'
@@ -9443,16 +9443,16 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     exit 0
 fi
 
-if [ \"\\\$ - id -u\" -eq 0 ]; then
+if [ \"\\\$id -u\" -eq 0 ]; then
     sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
-    CURRENT_SERIAL=\\\$ - grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
-    NEW_SERIAL=\\\$ - (CURRENT_SERIAL + 1)
+    CURRENT_SERIAL=\\\$grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
+    NEW_SERIAL=\\\$((CURRENT_SERIAL + 1)
     sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
     systemctl reload named
 else
     sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
-    CURRENT_SERIAL=\\\$ - sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
-    NEW_SERIAL=\\\$ - (CURRENT_SERIAL + 1)
+    CURRENT_SERIAL=\\\$sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
+    NEW_SERIAL=\\\$((CURRENT_SERIAL + 1)
     sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
     sudo systemctl reload named
 fi
@@ -9466,7 +9466,7 @@ HOOK_CLEANUP
         # Key ile version
         cat > /usr/local/bin/certbot-dns-cleanup.sh <<HOOK_CLEANUP
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydını Sil  - SSH Key ile
+ #Certbot DNS-01 Challenge - TXT Kaydını Sil  - SSH Key ile
 
 DNS_SERVER="$dns_server"
 DNS_USER="$dns_user"
@@ -9474,11 +9474,11 @@ DOMAIN="\$CERTBOT_DOMAIN"
 
 echo "[INFO] TXT kaydı siliniyor: _acme-challenge.\$DOMAIN"
 
-MAIN_DOMAIN=\$ - echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev
+MAIN_DOMAIN=\$echo "\$DOMAIN" | rev | cut -d'.' -f1-2 | rev
 
 RECORD_NAME="_acme-challenge"
 if [ "\$DOMAIN" != "\$MAIN_DOMAIN" ]; then
-    SUBDOMAIN=\$ - echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//"
+    SUBDOMAIN=\$echo "\$DOMAIN" | sed "s/\.\$MAIN_DOMAIN//"
     RECORD_NAME="_acme-challenge.\$SUBDOMAIN"
 fi
 
@@ -9492,16 +9492,16 @@ if [ ! -f \"\\\$ZONE_FILE\" ]; then
     exit 0
 fi
 
-if [ \"\\\$ - id -u\" -eq 0 ]; then
+if [ \"\\\$id -u\" -eq 0 ]; then
     sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
-    CURRENT_SERIAL=\\\$ - grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
-    NEW_SERIAL=\\\$ - (CURRENT_SERIAL + 1)
+    CURRENT_SERIAL=\\\$grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
+    NEW_SERIAL=\\\$((CURRENT_SERIAL + 1)
     sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
     systemctl reload named
 else
     sudo sed -i \"/\\\$RECORD_NAME.*IN.*TXT/d\" \"\\\$ZONE_FILE\"
-    CURRENT_SERIAL=\\\$ - sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
-    NEW_SERIAL=\\\$ - (CURRENT_SERIAL + 1)
+    CURRENT_SERIAL=\\\$sudo grep 'Serial' \"\\\$ZONE_FILE\" | grep -oE '[0-9]+' | head -1
+    NEW_SERIAL=\\\$((CURRENT_SERIAL + 1)
     sudo sed -i \"s/\\\$CURRENT_SERIAL/\\\$NEW_SERIAL/\" \"\\\$ZONE_FILE\"
     sudo systemctl reload named
 fi
@@ -9603,11 +9603,11 @@ install_ssl_to_remote_nginx() {
         echo ""
         print_info "SSH bağlantı testi yapılıyor..."
         
-        local manual_test=$ - $ssh_cmd $remote_user@$remote_ip "hostname && echo 'SSH_OK'" 2>&1
+        local manual_test=$$ssh_cmd $remote_user@$remote_ip "hostname && echo 'SSH_OK'" 2>&1
         
         if echo "$manual_test" | grep -q "SSH_OK"; then
             print_success "✓ SSH bağlantısı çalışıyor!"
-            echo "  Hostname: $ - echo "$manual_test" | head -1"
+            echo "  Hostname: $echo "$manual_test" | head -1"
         else
             print_error "✗ SSH bağlantısı çalışmıyor!"
             echo ""
@@ -9635,7 +9635,7 @@ install_ssl_to_remote_nginx() {
         echo ""
         
         # Debug: SSH bağlantısını test et
-        local test_result=$ - $ssh_cmd $remote_user@$remote_ip "echo 'SSH_TEST_OK'" 2>&1
+        local test_result=$$ssh_cmd $remote_user@$remote_ip "echo 'SSH_TEST_OK'" 2>&1
         
         if echo "$test_result" | grep -q "SSH_TEST_OK"; then
             print_success "✓ ROOT SSH bağlantısı çalışıyor"
@@ -9679,7 +9679,7 @@ install_ssl_to_remote_nginx() {
             # Key ile - NOPASSWD sudo gerekli
             print_warning "NOPASSWD sudo gerekli!"
             print_info "B sunucusunda çalıştırın:"
-            echo "  echo '$remote_user ALL= - ALL NOPASSWD: ALL' | sudo tee /etc/sudoers.d/$remote_user"
+            echo "  echo '$remote_user ALL=ALL NOPASSWD: ALL' | sudo tee /etc/sudoers.d/$remote_user"
             echo ""
             
             if ! ask_yes_no "NOPASSWD sudo ayarlandı mı?"; then
@@ -9708,7 +9708,7 @@ install_ssl_to_remote_nginx() {
         echo "   sudo usermod -aG sudo $remote_user"
         echo ""
         echo "3. NOPASSWD sudo ayarlayın  - güvenlik riski:"
-        echo "   echo '$remote_user ALL= - ALL NOPASSWD: ALL' | sudo tee /etc/sudoers.d/$remote_user"
+        echo "   echo '$remote_user ALL=ALL NOPASSWD: ALL' | sudo tee /etc/sudoers.d/$remote_user"
         echo ""
         return 1
     fi
@@ -9803,7 +9803,7 @@ install_ssl_to_remote_nginx() {
             echo ""
             echo "B sunucusunda çalıştırın:"
             echo "  sudo usermod -aG sudo $remote_user"
-            echo "  echo '$remote_user ALL= - ALL NOPASSWD: ALL' | sudo tee /etc/sudoers.d/$remote_user"
+            echo "  echo '$remote_user ALL=ALL NOPASSWD: ALL' | sudo tee /etc/sudoers.d/$remote_user"
             echo ""
             
             if ! ask_yes_no "Ayarlandı mı?"; then
@@ -9854,7 +9854,7 @@ install_ssl_to_nginx() {
     fi
     
     # Yedek oluştur
-    cp "$nginx_config" "${nginx_config}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$nginx_config" "${nginx_config}.backup.$date +%Y%m%d_%H%M%S"
     
     # SSL zaten yapılandırılmış mı?
     if grep -q "ssl_certificate" "$nginx_config" 2>/dev/null; then
@@ -9896,7 +9896,7 @@ EOF
         echo -e "${GREEN}Test edin:${NC} https://$domain"
     else
         print_error "Nginx yapılandırma hatası!"
-        cp "${nginx_config}.backup."$ - ls -t ${nginx_config}.backup.* | head -1 | sed 's/.*backup\.//' "$nginx_config"
+        cp "${nginx_config}.backup."$ls -t ${nginx_config}.backup.* | head -1 | sed 's/.*backup\.//' "$nginx_config"
         return 1
     fi
 }
@@ -9907,7 +9907,7 @@ add_dns_txt_record_for_ssl() {
     local domain=$1
     local txt_value=$2
     
-    local dns_type=$ - detect_dns_server
+    local dns_type=$detect_dns_server
     
     case $dns_type in
         "bind9"|"bind9-stopped")
@@ -9959,13 +9959,13 @@ fix_remote_ssh_config() {
     print_info "SSH yapılandırması düzeltiliyor..."
     
     sshpass -p "$ssh_password" ssh -o StrictHostKeyChecking=no $remote_user@$remote_ip <<'REMOTE_COMMANDS'
-# SSH yapılandırma dosyası
+ #SSH yapılandırma dosyası
 SSHD_CONFIG="/etc/ssh/sshd_config"
 
-# Yedek oluştur
-cp $SSHD_CONFIG ${SSHD_CONFIG}.backup.$ - date +%Y%m%d_%H%M%S
+ #Yedek oluştur
+cp $SSHD_CONFIG ${SSHD_CONFIG}.backup.$date +%Y%m%d_%H%M%S
 
-# PasswordAuthentication etkinleştir
+ #PasswordAuthentication etkinleştir
 if grep -q "^PasswordAuthentication no" $SSHD_CONFIG; then
     sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' $SSHD_CONFIG
     echo "[DEĞIŞTI] PasswordAuthentication yes"
@@ -9976,7 +9976,7 @@ else
     echo "[ZATEN AKTİF] PasswordAuthentication yes"
 fi
 
-# PubkeyAuthentication etkinleştir
+ #PubkeyAuthentication etkinleştir
 if ! grep -q "^PubkeyAuthentication yes" $SSHD_CONFIG; then
     if grep -q "^PubkeyAuthentication" $SSHD_CONFIG; then
         sed -i 's/^PubkeyAuthentication.*/PubkeyAuthentication yes/' $SSHD_CONFIG
@@ -9986,7 +9986,7 @@ if ! grep -q "^PubkeyAuthentication yes" $SSHD_CONFIG; then
     echo "[DEĞIŞTI] PubkeyAuthentication yes"
 fi
 
-# PermitRootLogin etkinleştir  - root için
+ #PermitRootLogin etkinleştir  - root için
 if [ "$USER" = "root" ]; then
     if grep -q "^PermitRootLogin no" $SSHD_CONFIG || grep -q "^PermitRootLogin prohibit-password" $SSHD_CONFIG; then
         sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' $SSHD_CONFIG
@@ -9997,7 +9997,7 @@ if [ "$USER" = "root" ]; then
     fi
 fi
 
-# SSH servisini yeniden başlat
+ #SSH servisini yeniden başlat
 systemctl restart sshd || systemctl restart ssh
 
 echo ""
@@ -10068,7 +10068,7 @@ test_dns_hook_manually() {
     ask_password "DNS sunucusu şifresi" dns_password
     
     # Ana domain'i bul
-    local main_domain=$ - echo "$test_domain" | rev | cut -d'.' -f1-2 | rev
+    local main_domain=$echo "$test_domain" | rev | cut -d'.' -f1-2 | rev
     local record_name="_acme-challenge-test"
     
     echo ""
@@ -10115,7 +10115,7 @@ test_dns_hook_manually() {
         ZONE_FILE='/etc/bind/db.$main_domain'
         
         # Root mu kontrol et
-        if [ \\\$ - id -u -eq 0 ]; then
+        if [ \\\$id -u -eq 0 ]; then
             echo '$record_name     IN      TXT     \"$test_token\"' >> \\\$ZONE_FILE
             systemctl reload named
         else
@@ -10141,7 +10141,7 @@ test_dns_hook_manually() {
     sleep 10
     
     if command -v dig &>/dev/null; then
-        local dns_result=$ - dig @$dns_ip ${record_name}.${main_domain} TXT +short 2>/dev/null
+        local dns_result=$dig @$dns_ip ${record_name}.${main_domain} TXT +short 2>/dev/null
         if echo "$dns_result" | grep -q "$test_token"; then
             print_success "✓ TXT kaydı DNS'de görünüyor!"
             echo "  Sonuç: $dns_result"
@@ -10159,7 +10159,7 @@ test_dns_hook_manually() {
     local del_result=$(sshpass -p "$dns_password" ssh -o StrictHostKeyChecking=no $dns_user@$dns_ip "
         ZONE_FILE='/etc/bind/db.$main_domain'
         
-        if [ \\\$ - id -u -eq 0 ]; then
+        if [ \\\$id -u -eq 0 ]; then
             sed -i '/$record_name.*IN.*TXT/d' \\\$ZONE_FILE
             systemctl reload named
         else
@@ -10266,7 +10266,7 @@ add_bind9_txt_record() {
     local txt_value=$2
     
     # Ana domain'i bul
-    local main_domain=$ - echo "$domain" | rev | cut -d'.' -f1-2 | rev
+    local main_domain=$echo "$domain" | rev | cut -d'.' -f1-2 | rev
     local zone_file="/etc/bind/db.$main_domain"
     
     if [ ! -f "$zone_file" ]; then
@@ -10277,13 +10277,13 @@ add_bind9_txt_record() {
     print_info "TXT kaydı ekleniyor: _acme-challenge.$domain"
     
     # Yedek oluştur
-    cp "$zone_file" "${zone_file}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$zone_file" "${zone_file}.backup.$date +%Y%m%d_%H%M%S"
     
     # Serial güncelle
-    local current_serial=$ - grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1
-    local new_serial=$ - date +%Y%m%d01
+    local current_serial=$grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1
+    local new_serial=$date +%Y%m%d01
     if [ "$new_serial" -le "$current_serial" ]; then
-        new_serial=$ - (current_serial + 1)
+        new_serial=$((current_serial + 1)
     fi
     sed -i "s/$current_serial/$new_serial/" "$zone_file"
     
@@ -10302,7 +10302,7 @@ add_bind9_txt_record() {
         sleep 30
         
         # Doğrula
-        local txt_check=$ - dig @127.0.0.1 _acme-challenge.$domain TXT +short 2>/dev/null
+        local txt_check=$dig @127.0.0.1 _acme-challenge.$domain TXT +short 2>/dev/null
         if [ -n "$txt_check" ]; then
             print_success "✓ TXT kaydı doğrulandı: $txt_check"
         else
@@ -10310,7 +10310,7 @@ add_bind9_txt_record() {
         fi
     else
         print_error "Zone geçersiz!"
-        cp "${zone_file}.backup."$ - ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//' "$zone_file"
+        cp "${zone_file}.backup."$ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//' "$zone_file"
         return 1
     fi
 }
@@ -10395,8 +10395,8 @@ install_gitlab() {
     # Sistem gereksinimleri kontrolü
     print_info "Sistem gereksinimleri kontrol ediliyor..."
     
-    local total_ram=$ - free -g | awk '/^Mem:/{print $2}'
-    local available_disk=$ - df -BG / | awk 'NR==2 {print $4}' | sed 's/G//'
+    local total_ram=$free -g | awk '/^Mem:/{print $2}'
+    local available_disk=$df -BG / | awk 'NR==2 {print $4}' | sed 's/G//'
     
     if [ "$total_ram" -lt 4 ]; then
         print_warning "GitLab için en az 4GB RAM önerilir. Mevcut RAM: ${total_ram}GB"
@@ -10419,7 +10419,7 @@ install_gitlab() {
     echo -e "${GREEN}Domain:${NC} $gitlab_domain"
     echo -e "${GREEN}Edition:${NC} GitLab ${gitlab_edition^^}"
     echo -e "${GREEN}E-posta:${NC} $gitlab_email"
-    echo -e "${GREEN}SSL:${NC} $ - [ "$install_ssl_gitlab" = true ] && echo "Evet" || echo "Hayır""
+    echo -e "${GREEN}SSL:${NC} $[ "$install_ssl_gitlab" = true ] && echo "Evet" || echo "Hayır""
     echo ""
     
     if ! ask_yes_no "GitLab kurulumunu başlatmak istiyor musunuz?"; then
@@ -10451,7 +10451,7 @@ install_gitlab() {
     
     # Repository kaynağını ekle
     cat > /etc/apt/sources.list.d/gitlab_${gitlab_edition}.list <<EOF
-deb [signed-by=/usr/share/keyrings/gitlab-${gitlab_edition}.gpg] https://packages.gitlab.com/gitlab/gitlab-${gitlab_edition}/ubuntu/ $ - lsb_release -cs main
+deb [signed-by=/usr/share/keyrings/gitlab-${gitlab_edition}.gpg] https://packages.gitlab.com/gitlab/gitlab-${gitlab_edition}/ubuntu/ $lsb_release -cs main
 EOF
     
     # Paket listesini güncelle
@@ -10525,7 +10525,7 @@ EOF
             # Yeni SSL ayarlarını ekle
             cat >> $gitlab_config <<EOF
 
-# SSL Configuration
+ #SSL Configuration
 nginx['redirect_http_to_https'] = true
 nginx['ssl_certificate'] = "/etc/letsencrypt/live/$gitlab_domain/fullchain.pem"
 nginx['ssl_certificate_key'] = "/etc/letsencrypt/live/$gitlab_domain/privkey.pem"
@@ -10557,7 +10557,7 @@ EOF
     
     # İlk root şifresini göster
     print_header "GitLab Kurulumu Tamamlandı!"
-    echo -e "${GREEN}✓ Domain:${NC} $ - [ "$install_ssl_gitlab" = true ] && echo "https://" || echo "http://"$gitlab_domain"
+    echo -e "${GREEN}✓ Domain:${NC} $[ "$install_ssl_gitlab" = true ] && echo "https://" || echo "http://"$gitlab_domain"
     echo -e "${GREEN}✓ Edition:${NC} GitLab ${gitlab_edition^^}"
     echo ""
     echo -e "${YELLOW}ÖNEMLİ:${NC}"
@@ -10569,7 +10569,7 @@ EOF
         echo ""
         echo -e "${CYAN}İlk giriş bilgileri:${NC}"
         echo -e "${CYAN}Kullanıcı adı:${NC} root"
-        echo -e "${CYAN}Şifre:${NC} $ - grep 'Password:' $password_file | cut -d' ' -f2"
+        echo -e "${CYAN}Şifre:${NC} $grep 'Password:' $password_file | cut -d' ' -f2"
         echo ""
         echo -e "${YELLOW}UYARI:${NC} Bu şifre dosyası 24 saat sonra otomatik olarak silinir!"
         echo "Şifreyi güvenli bir yere kaydedin ve ilk girişte değiştirin."
@@ -10633,7 +10633,7 @@ configure_gitlab_smtp() {
     # GitLab SMTP yapılandırmasını ekle
     cat >> $gitlab_config <<EOF
 
-# SMTP Configuration
+ #SMTP Configuration
 gitlab_rails['smtp_enable'] = true
 gitlab_rails['smtp_address'] = "$smtp_host"
 gitlab_rails['smtp_port'] = $smtp_port
@@ -10650,28 +10650,28 @@ EOF
     print_success "SMTP yapılandırması eklendi"
 }
 
-# Yeni eklenen yardımcı fonksiyonlar
+ #Yeni eklenen yardımcı fonksiyonlar
 show_server_info() {
     print_header "Sunucu Bilgileri"
     
     echo -e "${CYAN}Sistem Bilgileri:${NC}"
     if command -v lsb_release &> /dev/null; then
-        echo -e "İşletim Sistemi: ${GREEN}$ - lsb_release -d | cut -f2${NC}"
+        echo -e "İşletim Sistemi: ${GREEN}$lsb_release -d | cut -f2${NC}"
     else
-        echo -e "İşletim Sistemi: ${GREEN}$ - cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2${NC}"
+        echo -e "İşletim Sistemi: ${GREEN}$cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2${NC}"
     fi
-    echo -e "Kernel: ${GREEN}$ - uname -r${NC}"
-    echo -e "Hostname: ${GREEN}$ - hostname${NC}"
-    echo -e "Uptime: ${GREEN}$ - uptime -p 2>/dev/null || uptime | awk -F'up ' '{print $2}' | awk -F',' '{print $1}'${NC}"
+    echo -e "Kernel: ${GREEN}$uname -r${NC}"
+    echo -e "Hostname: ${GREEN}$hostname${NC}"
+    echo -e "Uptime: ${GREEN}$uptime -p 2>/dev/null || uptime | awk -F'up ' '{print $2}' | awk -F',' '{print $1}'${NC}"
     echo ""
     
     echo -e "${CYAN}Donanım Bilgileri:${NC}"
-    local total_ram=$ - free -h | awk '/^Mem:/{print $2}'
-    local used_ram=$ - free -h | awk '/^Mem:/{print $3}'
-    local total_disk=$ - df -h / | awk 'NR==2 {print $2}'
-    local used_disk=$ - df -h / | awk 'NR==2 {print $3}'
-    local cpu_cores=$ - nproc
-    local cpu_model=$ - grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs
+    local total_ram=$free -h | awk '/^Mem:/{print $2}'
+    local used_ram=$free -h | awk '/^Mem:/{print $3}'
+    local total_disk=$df -h / | awk 'NR==2 {print $2}'
+    local used_disk=$df -h / | awk 'NR==2 {print $3}'
+    local cpu_cores=$nproc
+    local cpu_model=$grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs
     
     echo -e "CPU: ${GREEN}$cpu_model${NC}"
     echo -e "CPU Çekirdek: ${GREEN}$cpu_cores${NC}"
@@ -10680,19 +10680,19 @@ show_server_info() {
     echo ""
     
     echo -e "${CYAN}Ağ Bilgileri:${NC}"
-    local ip_address=$ - hostname -I | awk '{print $1}'
+    local ip_address=$hostname -I | awk '{print $1}'
     echo -e "IP Adresi: ${GREEN}$ip_address${NC}"
     echo ""
     
     echo -e "${CYAN}Kurulu Servisler:${NC}"
-    [ -f /usr/sbin/nginx ] && echo -e "✓ ${GREEN}Nginx${NC} - $ - nginx -v 2>&1 | cut -d' ' -f3"
-    [ -f /usr/bin/php ] && echo -e "✓ ${GREEN}PHP${NC} - $ - php -v | head -1 | cut -d' ' -f2"
-    [ -f /usr/bin/mysql ] && echo -e "✓ ${GREEN}MySQL${NC} - $ - mysql --version | cut -d' ' -f5-6"
-    [ -f /usr/bin/node ] && echo -e "✓ ${GREEN}Node.js${NC} - $ - node --version"
-    [ -f /usr/local/bin/composer ] && echo -e "✓ ${GREEN}Composer${NC} - $ - composer --version 2>/dev/null | head -1 | cut -d' ' -f3"
-    [ -f /usr/bin/redis-cli ] && echo -e "✓ ${GREEN}Redis${NC} - $ - redis-server --version | cut -d' ' -f3"
+    [ -f /usr/sbin/nginx ] && echo -e "✓ ${GREEN}Nginx${NC} - $nginx -v 2>&1 | cut -d' ' -f3"
+    [ -f /usr/bin/php ] && echo -e "✓ ${GREEN}PHP${NC} - $php -v | head -1 | cut -d' ' -f2"
+    [ -f /usr/bin/mysql ] && echo -e "✓ ${GREEN}MySQL${NC} - $mysql --version | cut -d' ' -f5-6"
+    [ -f /usr/bin/node ] && echo -e "✓ ${GREEN}Node.js${NC} - $node --version"
+    [ -f /usr/local/bin/composer ] && echo -e "✓ ${GREEN}Composer${NC} - $composer --version 2>/dev/null | head -1 | cut -d' ' -f3"
+    [ -f /usr/bin/redis-cli ] && echo -e "✓ ${GREEN}Redis${NC} - $redis-server --version | cut -d' ' -f3"
     [ -f /usr/bin/gitlab-ctl ] && echo -e "✓ ${GREEN}GitLab${NC}"
-    [ -f /usr/bin/docker ] && echo -e "✓ ${GREEN}Docker${NC} - $ - docker --version | cut -d' ' -f3 | tr -d ','"
+    [ -f /usr/bin/docker ] && echo -e "✓ ${GREEN}Docker${NC} - $docker --version | cut -d' ' -f3 | tr -d ','"
     echo ""
     
     echo -e "${CYAN}Servis Durumları:${NC}"
@@ -10720,7 +10720,7 @@ install_firewall() {
     ufw default allow outgoing
     
     # SSH portunu aç  - mevcut bağlantıyı kesmemek için
-    local ssh_port=$ - grep -E "^Port\s+" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "22"
+    local ssh_port=$grep -E "^Port\s+" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "22"
     ufw allow $ssh_port/tcp comment 'SSH'
     
     # Yaygın servis portları
@@ -10845,7 +10845,7 @@ backup_database() {
     
     local db_name=""
     local backup_file=""
-    local timestamp=$ - date +%Y%m%d_%H%M%S
+    local timestamp=$date +%Y%m%d_%H%M%S
     
     case $backup_choice in
         2)
@@ -10868,7 +10868,7 @@ backup_database() {
     esac
     
     if [ $? -eq 0 ] && [ -f "$backup_file" ]; then
-        local file_size=$ - du -h "$backup_file" | cut -f1
+        local file_size=$du -h "$backup_file" | cut -f1
         print_success "Yedekleme tamamlandı!"
         echo -e "${GREEN}Yedek Dosyası:${NC} $backup_file"
         echo -e "${GREEN}Boyut:${NC} $file_size"
@@ -10896,7 +10896,7 @@ restore_database() {
     
     local backup_dir="/var/backups/mysql"
     
-    if [ ! -d "$backup_dir" ] || [ -z "$ - ls -A $backup_dir 2>/dev/null" ]; then
+    if [ ! -d "$backup_dir" ] || [ -z "$ls -A $backup_dir 2>/dev/null" ]; then
         print_error "Yedek dosyası bulunamadı: $backup_dir"
         return 1
     fi
@@ -10906,7 +10906,7 @@ restore_database() {
     echo ""
     
     read -p "Geri yüklenecek yedek dosyasının numarasını girin: " file_num
-    local backup_file=$ - ls -1 $backup_dir/*.sql.gz 2>/dev/null | sed -n "${file_num}p"
+    local backup_file=$ls -1 $backup_dir/*.sql.gz 2>/dev/null | sed -n "${file_num}p"
     
     if [ -z "$backup_file" ] || [ ! -f "$backup_file" ]; then
         print_error "Geçersiz dosya seçimi!"
@@ -10934,7 +10934,7 @@ install_docker() {
     print_header "Docker Kurulumu"
     
     if command -v docker &> /dev/null; then
-        print_warning "Docker zaten kurulu: $ - docker --version"
+        print_warning "Docker zaten kurulu: $docker --version"
         if ! ask_yes_no "Yeniden kurmak istiyor musunuz?"; then
             return 0
         fi
@@ -10956,8 +10956,8 @@ install_docker() {
     
     # Repository ekle
     echo \
-      "deb [arch=$ - dpkg --print-architecture signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      $ - lsb_release -cs stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+      "deb [arch=$dpkg --print-architecture signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $lsb_release -cs stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
     
     # Docker kur
     apt update
@@ -10974,8 +10974,8 @@ install_docker() {
     fi
     
     print_success "Docker başarıyla kuruldu!"
-    echo -e "${GREEN}Docker Version:${NC} $ - docker --version"
-    echo -e "${GREEN}Docker Compose Version:${NC} $ - docker compose version 2>/dev/null || docker-compose --version"
+    echo -e "${GREEN}Docker Version:${NC} $docker --version"
+    echo -e "${GREEN}Docker Compose Version:${NC} $docker compose version 2>/dev/null || docker-compose --version"
     echo ""
     echo -e "${CYAN}Docker Yönetim Komutları:${NC}"
     echo "• Durum: ${GREEN}sudo systemctl status docker${NC}"
@@ -11008,7 +11008,7 @@ install_individual_service() {
             
             # Yöntem 1: php -v komutundan versiyon al
             if command -v php &> /dev/null; then
-                php_version=$ - php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+                php_version=$php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
                 if [ -n "$php_version" ]; then
                     php_installed=true
                     print_info "Kurulu PHP versiyonu tespit edildi: $php_version"
@@ -11019,7 +11019,7 @@ install_individual_service() {
             if [ -z "$php_version" ]; then
                 for php_bin in /usr/bin/php[0-9]* /usr/bin/php[0-9]*.[0-9]*; do
                     if [ -f "$php_bin" ] && [ -x "$php_bin" ]; then
-                        php_version=$ - basename "$php_bin" | sed 's/php//' | grep -oE "^[0-9]+\.[0-9]+"
+                        php_version=$basename "$php_bin" | sed 's/php//' | grep -oE "^[0-9]+\.[0-9]+"
                         if [ -n "$php_version" ]; then
                             php_installed=true
                             print_info "Kurulu PHP versiyonu tespit edildi: $php_version"
@@ -11031,7 +11031,7 @@ install_individual_service() {
             
             # Yöntem 3: PHP-FPM servislerinden versiyon bul
             if [ -z "$php_version" ]; then
-                local php_fpm_version=$ - systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+                local php_fpm_version=$systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
                 if [ -n "$php_fpm_version" ]; then
                     php_version="$php_fpm_version"
                     php_installed=true
@@ -11044,7 +11044,7 @@ install_individual_service() {
             fi
             
             if command -v nginx &> /dev/null; then
-                print_warning "Nginx zaten kurulu: $ - nginx -v 2>&1"
+                print_warning "Nginx zaten kurulu: $nginx -v 2>&1"
                 if ask_yes_no "Yeniden kurmak istiyor musunuz?"; then
                     install_nginx
                 elif [ "$php_installed" = true ] && [ -n "$php_version" ]; then
@@ -11096,12 +11096,12 @@ install_individual_service() {
             
             if command -v php &> /dev/null; then
                 has_php_cli=true
-                local current_version=$ - php -v | head -1 | cut -d' ' -f2 | cut -d'.' -f1,2
+                local current_version=$php -v | head -1 | cut -d' ' -f2 | cut -d'.' -f1,2
                 print_info "PHP CLI kurulu: $current_version"
             fi
             
             # PHP-FPM servislerini kontrol et
-            local php_fpm_services=$ - systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | awk '{print $1}' || echo ""
+            local php_fpm_services=$systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | awk '{print $1}' || echo ""
             if [ -n "$php_fpm_services" ]; then
                 has_php_fpm=true
                 print_info "PHP-FPM servisleri tespit edildi"
@@ -11193,7 +11193,7 @@ install_individual_service() {
                                 break
                             fi
                             sleep 1
-                             - (retry_count++)
+                            ((retry_count++)
                         done
                         
                         # Şifre ayarlamayı dene  - birden fazla yöntem
@@ -11202,7 +11202,7 @@ install_individual_service() {
                         local attempt=0
                         
                         while [ $attempt -lt $max_attempts ] && [ "$manual_password_set" = false ]; do
-                             - (attempt++)
+                            ((attempt++)
                             print_info "Şifre ayarlama denemesi $attempt/$max_attempts..."
                             
                             # Yöntem 1: sudo mysql  - MariaDB 10.4+ için en güvenilir
@@ -11247,7 +11247,7 @@ EOF
                                     break
                                 fi
                                 sleep 1
-                                 - (verify_count++)
+                                ((verify_count++)
                             done
                             
                             if [ "$verify_success" = false ]; then
@@ -11377,7 +11377,7 @@ EOF
             ;;
         4)
             if command -v node &> /dev/null; then
-                print_warning "Node.js zaten kurulu: $ - node --version"
+                print_warning "Node.js zaten kurulu: $node --version"
                 if ask_yes_no "Yeniden kurmak istiyor musunuz?"; then
                     install_nodejs
                 fi
@@ -11397,7 +11397,7 @@ EOF
             ;;
         6)
             if command -v composer &> /dev/null; then
-                print_warning "Composer zaten kurulu: $ - composer --version 2>/dev/null | head -1"
+                print_warning "Composer zaten kurulu: $composer --version 2>/dev/null | head -1"
                 if ask_yes_no "Yeniden kurmak istiyor musunuz?"; then
                     install_composer
                 fi
@@ -11496,7 +11496,7 @@ view_logs() {
             log_file="/var/log/nginx/error.log"
             ;;
         3)
-            local php_version=$ - systemctl list-units --type=service | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/')
+            local php_version=$systemctl list-units --type=service | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/')
             if [ -n "$php_version" ]; then
                 log_file="/var/log/php${php_version}-fpm.log"
             else
@@ -11534,9 +11534,9 @@ view_logs() {
     fi
 }
 
-# Nginx'teki domain'leri tespit et
+ #Nginx'teki domain'leri tespit et
 get_nginx_domains() {
-    local domains= - 
+    local domains=
     
     if [ ! -d "/etc/nginx/sites-available" ]; then
         return 1
@@ -11544,7 +11544,7 @@ get_nginx_domains() {
     
     # Nginx yapılandırma dosyalarından server_name'leri çıkar
     for config_file in /etc/nginx/sites-available/*; do
-        if [ -f "$config_file" ] && [ "$ - basename "$config_file"" != "default" ]; then
+        if [ -f "$config_file" ] && [ "$basename "$config_file"" != "default" ]; then
             # server_name direktiflerini bul
             local server_names=$(grep -E "^\s*server_name\s+" "$config_file" 2>/dev/null | \
                 sed 's/server_name//' | sed 's/;//' | tr -s ' ' | tr ' ' '\n' | \
@@ -11553,7 +11553,7 @@ get_nginx_domains() {
             if [ -n "$server_names" ]; then
                 while IFS= read -r domain; do
                     if [ -n "$domain" ] && [[ ! " ${domains[@]} " =~ " ${domain} " ]]; then
-                        domains+= - "$domain"
+                        domains+="$domain"
                     fi
                 done <<< "$server_names"
             fi
@@ -11564,7 +11564,7 @@ get_nginx_domains() {
     printf '%s\n' "${domains[@]}"
 }
 
-# Nginx domain'lerini DNS kayıtlarına ekle  - BIND9
+ #Nginx domain'lerini DNS kayıtlarına ekle  - BIND9
 add_nginx_domains_to_bind9() {
     local forward_zone=$1
     local server_ip=$2
@@ -11575,7 +11575,7 @@ add_nginx_domains_to_bind9() {
     
     print_info "Nginx'teki domain'ler DNS kayıtlarına ekleniyor..."
     
-    local nginx_domains= - $(get_nginx_domains)
+    local nginx_domains=$(get_nginx_domains)
     local added_count=0
     
     if [ ${#nginx_domains[@]} -eq 0 ]; then
@@ -11584,7 +11584,7 @@ add_nginx_domains_to_bind9() {
     fi
     
     # Zone dosyasını yedekle
-    cp "$forward_zone" "${forward_zone}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$forward_zone" "${forward_zone}.backup.$date +%Y%m%d_%H%M%S"
     
     for domain in "${nginx_domains[@]}"; do
         # Domain'i parse et  - subdomain ve ana domain
@@ -11599,7 +11599,7 @@ add_nginx_domains_to_bind9() {
         fi
         
         # Zone dosyasının domain'i ile eşleşiyor mu kontrol et
-        local zone_domain=$ - basename "$forward_zone" | sed 's/^db\.//'
+        local zone_domain=$basename "$forward_zone" | sed 's/^db\.//'
         
         if [ "$main_domain" = "$zone_domain" ]; then
             # Subdomain kaydı ekle
@@ -11608,7 +11608,7 @@ add_nginx_domains_to_bind9() {
                     # Zone dosyasının sonuna ekle  - SOA kaydından önce değil
                     sed -i "/^@[[:space:]]*IN[[:space:]]*MX/a\\$subdomain     IN      A       $server_ip" "$forward_zone"
                     print_success "DNS kaydı eklendi: $subdomain.$main_domain -> $server_ip"
-                     - (added_count++)
+                    ((added_count++)
                 fi
             fi
         fi
@@ -11616,8 +11616,8 @@ add_nginx_domains_to_bind9() {
     
     if [ $added_count -gt 0 ]; then
         # Serial numarasını güncelle
-        local current_serial=$ - grep -E "^\s*[0-9]+\s*;" "$forward_zone" | head -1 | awk '{print $1}'
-        local new_serial=$ - date +%Y%m%d01
+        local current_serial=$grep -E "^\s*[0-9]+\s*;" "$forward_zone" | head -1 | awk '{print $1}'
+        local new_serial=$date +%Y%m%d01
         if [ -n "$current_serial" ] && [ "$new_serial" -gt "$current_serial" ]; then
             sed -i "s/^[[:space:]]*$current_serial[[:space:]]*;/$new_serial        ;/" "$forward_zone"
         fi
@@ -11625,7 +11625,7 @@ add_nginx_domains_to_bind9() {
         print_success "$added_count Nginx domain'i DNS kayıtlarına eklendi"
         
         # Zone dosyasını kontrol et
-        local zone_domain=$ - basename "$forward_zone" | sed 's/^db\.//'
+        local zone_domain=$basename "$forward_zone" | sed 's/^db\.//'
         if named-checkzone "$zone_domain" "$forward_zone" 2>/dev/null; then
             print_success "Zone dosyası geçerli"
             systemctl reload named 2>/dev/null || systemctl restart named
@@ -11637,7 +11637,7 @@ add_nginx_domains_to_bind9() {
     fi
 }
 
-# Nginx domain'lerini DNS kayıtlarına ekle  - dnsmasq
+ #Nginx domain'lerini DNS kayıtlarına ekle  - dnsmasq
 add_nginx_domains_to_dnsmasq() {
     local dnsmasq_hosts=$1
     local server_ip=$2
@@ -11648,7 +11648,7 @@ add_nginx_domains_to_dnsmasq() {
     
     print_info "Nginx'teki domain'ler DNS kayıtlarına ekleniyor..."
     
-    local nginx_domains= - $(get_nginx_domains)
+    local nginx_domains=$(get_nginx_domains)
     local added_count=0
     
     if [ ${#nginx_domains[@]} -eq 0 ]; then
@@ -11657,14 +11657,14 @@ add_nginx_domains_to_dnsmasq() {
     fi
     
     # Hosts dosyasını yedekle
-    cp "$dnsmasq_hosts" "${dnsmasq_hosts}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$dnsmasq_hosts" "${dnsmasq_hosts}.backup.$date +%Y%m%d_%H%M%S"
     
     for domain in "${nginx_domains[@]}"; do
         # Domain kaydı var mı kontrol et
         if ! grep -qE "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[[:space:]]+$domain" "$dnsmasq_hosts" 2>/dev/null; then
             echo "$server_ip    $domain" >> "$dnsmasq_hosts"
             print_success "DNS kaydı eklendi: $domain -> $server_ip"
-             - (added_count++)
+            ((added_count++)
         fi
     done
     
@@ -11687,7 +11687,7 @@ add_nginx_domains_to_dns() {
     fi
     
     # Nginx domain'lerini tespit et
-    local nginx_domains= - $(get_nginx_domains)
+    local nginx_domains=$(get_nginx_domains)
     
     if [ ${#nginx_domains[@]} -eq 0 ]; then
         print_warning "Nginx'te yapılandırılmış domain bulunamadı!"
@@ -11702,7 +11702,7 @@ add_nginx_domains_to_dns() {
     
     # DNS sunucusu kontrolü
     local dns_type=""
-    local server_ip=$ - hostname -I | awk '{print $1}'
+    local server_ip=$hostname -I | awk '{print $1}'
     
     if systemctl is-active --quiet named 2>/dev/null; then
         dns_type="bind9"
@@ -11753,7 +11753,7 @@ add_nginx_domains_to_dns() {
             if [ -f "$forward_zone" ]; then
                 print_info "Zone dosyası bulundu: $forward_zone"
                 add_nginx_domains_to_bind9 "$forward_zone" "$server_ip"
-                 - (added_count++)
+                ((added_count++)
             else
                 print_warning "Zone dosyası bulunamadı: $forward_zone"
                 print_info "Bu domain için önce BIND9 zone oluşturmanız gerekiyor."
@@ -11781,12 +11781,12 @@ add_nginx_domains_to_dns() {
     fi
 }
 
-# Mevcut zone dosyalarını RFC uyumlu hale getir
+ #Mevcut zone dosyalarını RFC uyumlu hale getir
 update_zone_soa_values() {
     print_header "Zone Dosyalarını RFC Uyumlu Hale Getirme"
     
     # Zone dosyalarını bul  - sadece domain zone dosyaları, sistem zone dosyaları değil
-    local zone_files=$ - find /etc/bind -name "db.*" -type f 2>/dev/null | grep -v ".backup" | grep -vE "(db\.127|db\.0|db\.255|db\.empty|db\.local|db\.root")
+    local zone_files=$find /etc/bind -name "db.*" -type f 2>/dev/null | grep -v ".backup" | grep -vE "(db\.127|db\.0|db\.255|db\.empty|db\.local|db\.root")
     
     if [ -z "$zone_files" ]; then
         print_warning "Domain zone dosyası bulunamadı!"
@@ -11802,7 +11802,7 @@ update_zone_soa_values() {
         fi
         
         # Sistem zone dosyalarını atla
-        local zone_basename=$ - basename "$zone_file"
+        local zone_basename=$basename "$zone_file"
         if [[ "$zone_basename" =~ ^db\. - 127|0|255|empty|local|root$ ]]; then
             print_info "Sistem zone dosyası atlanıyor: $zone_file"
             continue
@@ -11811,7 +11811,7 @@ update_zone_soa_values() {
         print_info "Güncelleniyor: $zone_file"
         
         # Yedekleme
-        cp "$zone_file" "${zone_file}.backup.$ - date +%Y%m%d_%H%M%S"
+        cp "$zone_file" "${zone_file}.backup.$date +%Y%m%d_%H%M%S"
         
         # Python ile güvenli güncelleme - satır satır işleme
         if command -v python3 &>/dev/null; then
@@ -11930,7 +11930,7 @@ PYTHON_UPDATE
                 print_success "Zone dosyası güncellendi: $zone_file"
                 
                 # Zone dosyasını kontrol et
-                local zone_name=$ - basename "$zone_file" | sed 's/^db\.//'
+                local zone_name=$basename "$zone_file" | sed 's/^db\.//'
                 if named-checkzone "$zone_name" "$zone_file" 2>/dev/null; then
                     print_success "Zone dosyası geçerli: $zone_name"
                 else
@@ -11963,7 +11963,7 @@ PYTHON_UPDATE
             # www kaydını kontrol et ve ekle
             if ! grep -qE "^www[[:space:]]+IN[[:space:]]+A" "$zone_file" 2>/dev/null; then
                 # IP adresini al
-                local server_ip=$ - grep -E "^@[[:space:]]+IN[[:space:]]+A" "$zone_file" | head -1 | awk '{print $4}'
+                local server_ip=$grep -E "^@[[:space:]]+IN[[:space:]]+A" "$zone_file" | head -1 | awk '{print $4}'
                 if [ -n "$server_ip" ]; then
                     # NS kayıtlarından sonra www ekle
                     sed -i "/^@[[:space:]]*IN[[:space:]]*NS/a\\www     IN      A       $server_ip" "$zone_file"
@@ -11991,7 +11991,7 @@ PYTHON_UPDATE
     fi
 }
 
-# BIND9 yapılandırma hatasını düzelt
+ #BIND9 yapılandırma hatasını düzelt
 fix_bind9_config() {
     print_header "BIND9 Yapılandırma Hatası Düzeltme"
     
@@ -12005,7 +12005,7 @@ fix_bind9_config() {
     print_info "Duplicate kayıtlar temizleniyor..."
     
     # Yedekleme
-    cp "$named_conf_options" "${named_conf_options}.backup.fix.$ - date +%Y%m%d_%H%M%S"
+    cp "$named_conf_options" "${named_conf_options}.backup.fix.$date +%Y%m%d_%H%M%S"
     
     if command -v python3 &>/dev/null; then
         python3 <<PYTHON_FIX
@@ -12138,7 +12138,7 @@ dns_management_menu() {
         print_header "DNS Yönetim Paneli"
         
         # DNS durumunu tespit et
-        local dns_type=$ - detect_dns_server
+        local dns_type=$detect_dns_server
         
         echo -e "${CYAN}DNS Sunucu Durumu:${NC}"
         case $dns_type in
@@ -12246,17 +12246,17 @@ list_bind9_zones() {
     local zone_count=0
     while IFS= read -r line; do
         if echo "$line" | grep -q "^zone"; then
-            local zone_name=$ - echo "$line" | sed 's/zone "\(.*\".*/\1/')
-            local zone_file=$ - grep -A5 "zone \"$zone_name\"" "$named_conf_local" | grep "file" | sed 's/.*file "\(.*\".*/\1/' | tr -d ';' | xargs)
+            local zone_name=$echo "$line" | sed 's/zone "\(.*\".*/\1/')
+            local zone_file=$grep -A5 "zone \"$zone_name\"" "$named_conf_local" | grep "file" | sed 's/.*file "\(.*\".*/\1/' | tr -d ';' | xargs)
             
-             - (zone_count++)
+            ((zone_count++)
             echo -e "${GREEN}$zone_count) $zone_name${NC}"
             echo "   Zone dosyası: $zone_file"
             
             # SOA serial numarasını göster
             if [ -f "$zone_file" ]; then
-                local serial=$ - grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1
-                local record_count=$ - grep -cE "^\s*[a-zA-Z0-9@-]+\s+IN\s+(A|AAAA|CNAME|MX" "$zone_file" 2>/dev/null || echo "0")
+                local serial=$grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1
+                local record_count=$grep -cE "^\s*[a-zA-Z0-9@-]+\s+IN\s+(A|AAAA|CNAME|MX" "$zone_file" 2>/dev/null || echo "0")
                 echo "   Serial: $serial, Kayıt sayısı: $record_count"
             fi
             echo ""
@@ -12276,7 +12276,7 @@ add_bind9_zone() {
     
     ask_input "Yeni domain adı  - örn: example.com" domain_name
     
-    server_ip=$ - hostname -I | awk '{print $1}'
+    server_ip=$hostname -I | awk '{print $1}'
     ask_input "DNS sunucusu IP adresi" server_ip "$server_ip"
     
     local forward_zone="/etc/bind/db.$domain_name"
@@ -12294,7 +12294,7 @@ add_bind9_zone() {
     cat > "$forward_zone" <<EOF
 \$TTL    3600
 @       IN      SOA     ns1.$domain_name. admin.$domain_name. (
-                          $ - date +%Y%m%d01        ; Serial
+                          $date +%Y%m%d01        ; Serial
                           3600          ; Refresh
                           600           ; Retry
                           604800        ; Expire
@@ -12399,14 +12399,14 @@ add_bind9_record() {
     esac
     
     # Yedek oluştur
-    cp "$zone_file" "${zone_file}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$zone_file" "${zone_file}.backup.$date +%Y%m%d_%H%M%S"
     
     # Serial numarasını güncelle
-    local current_serial=$ - grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1
-    local new_serial=$ - date +%Y%m%d01
+    local current_serial=$grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1
+    local new_serial=$date +%Y%m%d01
     
     if [ -n "$current_serial" ] && [ "$new_serial" -le "$current_serial" ]; then
-        new_serial=$ - (current_serial + 1)
+        new_serial=$((current_serial + 1)
     fi
     
     sed -i "s/$current_serial/$new_serial/" "$zone_file"
@@ -12432,7 +12432,7 @@ add_bind9_record() {
         dig @127.0.0.1 $record_name.$domain_name +short 2>/dev/null || echo "Test başarısız"
     else
         print_error "Zone geçersiz, yedek geri yükleniyor..."
-        cp "${zone_file}.backup."$ - ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//' "$zone_file"
+        cp "${zone_file}.backup."$ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//' "$zone_file"
     fi
 }
 
@@ -12461,13 +12461,13 @@ delete_bind9_record() {
     ask_input "Silinecek kayıt adı  - örn: api, www" record_name
     
     # Yedek oluştur
-    cp "$zone_file" "${zone_file}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$zone_file" "${zone_file}.backup.$date +%Y%m%d_%H%M%S"
     
     # Serial güncelle
-    local current_serial=$ - grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1
-    local new_serial=$ - date +%Y%m%d01
+    local current_serial=$grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1
+    local new_serial=$date +%Y%m%d01
     if [ "$new_serial" -le "$current_serial" ]; then
-        new_serial=$ - (current_serial + 1)
+        new_serial=$((current_serial + 1)
     fi
     sed -i "s/$current_serial/$new_serial/" "$zone_file"
     
@@ -12482,7 +12482,7 @@ delete_bind9_record() {
         print_success "✓ BIND9 yeniden yüklendi"
     else
         print_error "Zone bozuldu, yedek geri yükleniyor"
-        cp "${zone_file}.backup."$ - ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//' "$zone_file"
+        cp "${zone_file}.backup."$ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//' "$zone_file"
     fi
 }
 
@@ -12519,7 +12519,7 @@ list_dnsmasq_records() {
     
     # addn-hosts dosyasını bul
     if grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
-        hosts_file=$ - grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2
+        hosts_file=$grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2
     fi
     
     if [ ! -f "$hosts_file" ]; then
@@ -12535,11 +12535,11 @@ list_dnsmasq_records() {
         # Boş satır veya yorum satırını atla
         [[ -z "$line" || "$line" =~ ^# ]] && continue
         
-        local ip=$ - echo "$line" | awk '{print $1}'
-        local hostname=$ - echo "$line" | awk '{print $2}'
+        local ip=$echo "$line" | awk '{print $1}'
+        local hostname=$echo "$line" | awk '{print $2}'
         
         echo -e "${GREEN}$count)${NC} $hostname → $ip"
-         - (count++)
+        ((count++)
     done < "$hosts_file"
     
     if [ $count -eq 1 ]; then
@@ -12557,7 +12557,7 @@ add_dnsmasq_record() {
     local hosts_file="/etc/dnsmasq.hosts"
     
     if grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
-        hosts_file=$ - grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2
+        hosts_file=$grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2
     fi
     
     if [ ! -f "$hosts_file" ]; then
@@ -12570,7 +12570,7 @@ add_dnsmasq_record() {
     
     ask_input "Hostname  - örn: api.example.com, blog.example.com" hostname
     
-    server_ip=$ - hostname -I | awk '{print $1}'
+    server_ip=$hostname -I | awk '{print $1}'
     ask_input "IP adresi" ip_address "$server_ip"
     
     # Kayıt zaten var mı?
@@ -12580,7 +12580,7 @@ add_dnsmasq_record() {
     fi
     
     # Yedek oluştur
-    cp "$hosts_file" "${hosts_file}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$hosts_file" "${hosts_file}.backup.$date +%Y%m%d_%H%M%S"
     
     # Kaydı ekle
     echo "$ip_address    $hostname" >> "$hosts_file"
@@ -12609,7 +12609,7 @@ delete_dnsmasq_record() {
     local hosts_file="/etc/dnsmasq.hosts"
     
     if grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
-        hosts_file=$ - grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2
+        hosts_file=$grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2
     fi
     
     # Mevcut kayıtları listele
@@ -12620,7 +12620,7 @@ delete_dnsmasq_record() {
     ask_input "Silinecek hostname" hostname
     
     # Yedek oluştur
-    cp "$hosts_file" "${hosts_file}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$hosts_file" "${hosts_file}.backup.$date +%Y%m%d_%H%M%S"
     
     # Kaydı sil
     sed -i "/\s$hostname\s*$/d" "$hosts_file"
@@ -12639,7 +12639,7 @@ edit_dnsmasq_record() {
     local hosts_file="/etc/dnsmasq.hosts"
     
     if grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
-        hosts_file=$ - grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2
+        hosts_file=$grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2
     fi
     
     list_dnsmasq_records
@@ -12652,7 +12652,7 @@ edit_dnsmasq_record() {
     ask_input "Yeni IP adresi" new_ip
     
     # Yedek oluştur
-    cp "$hosts_file" "${hosts_file}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$hosts_file" "${hosts_file}.backup.$date +%Y%m%d_%H%M%S"
     
     # IP'yi güncelle
     sed -i "s/^\ - [0-9.]*\\s\+$hostname\s*$/$new_ip    $hostname/" "$hosts_file"
@@ -12670,7 +12670,7 @@ view_dnsmasq_hosts() {
     local hosts_file="/etc/dnsmasq.hosts"
     
     if grep -q "^addn-hosts=" "$dnsmasq_conf" 2>/dev/null; then
-        hosts_file=$ - grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2
+        hosts_file=$grep "^addn-hosts=" "$dnsmasq_conf" | cut -d'=' -f2
     fi
     
     if [ ! -f "$hosts_file" ]; then
@@ -12714,13 +12714,13 @@ edit_bind9_record() {
     ask_input "Yeni değer  - IP veya CNAME" new_value
     
     # Yedek oluştur
-    cp "$zone_file" "${zone_file}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$zone_file" "${zone_file}.backup.$date +%Y%m%d_%H%M%S"
     
     # Serial güncelle
-    local current_serial=$ - grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1
-    local new_serial=$ - date +%Y%m%d01
+    local current_serial=$grep "Serial" "$zone_file" | grep -oE "[0-9]+" | head -1
+    local new_serial=$date +%Y%m%d01
     if [ "$new_serial" -le "$current_serial" ]; then
-        new_serial=$ - (current_serial + 1)
+        new_serial=$((current_serial + 1)
     fi
     sed -i "s/$current_serial/$new_serial/" "$zone_file"
     
@@ -12734,7 +12734,7 @@ edit_bind9_record() {
         print_success "✓ BIND9 yeniden yüklendi"
     else
         print_error "Zone bozuldu, yedek geri yükleniyor"
-        cp "${zone_file}.backup."$ - ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//' "$zone_file"
+        cp "${zone_file}.backup."$ls -t ${zone_file}.backup.* | head -1 | sed 's/.*backup\.//' "$zone_file"
     fi
 }
 
@@ -12809,7 +12809,7 @@ install_bind9() {
     ask_input "DNS sunucusu için ana domain adını girin  - örn: example.com" domain_name
     
     # Sunucu IP'sini otomatik tespit et
-    server_ip=$ - hostname -I | awk '{print $1}'
+    server_ip=$hostname -I | awk '{print $1}'
     ask_input "DNS sunucusu IP adresi" server_ip "$server_ip"
     
     # Forward zone dosyası oluştur
@@ -12817,7 +12817,7 @@ install_bind9() {
     local reverse_zone=""
     
     # Reverse zone için IP'yi parse et
-    local ip_octets= - $(echo $server_ip | tr '.' ' ')
+    local ip_octets=$(echo $server_ip | tr '.' ' ')
     if [ ${#ip_octets[@]} -eq 4 ]; then
         reverse_zone="/etc/bind/db.${ip_octets[2]}.${ip_octets[1]}.${ip_octets[0]}"
     fi
@@ -12827,7 +12827,7 @@ install_bind9() {
     cat > "$forward_zone" <<EOF
 \$TTL    3600
 @       IN      SOA     ns1.$domain_name. admin.$domain_name. (
-                          $ - date +%Y%m%d01        ; Serial
+                          $date +%Y%m%d01        ; Serial
                           3600          ; Refresh  - 1 saat - RFC önerisi
                           600           ; Retry  - 10 dakika - RFC önerisi
                           604800        ; Expire  - 7 gün
@@ -12855,7 +12855,7 @@ EOF
         cat > "$reverse_zone" <<EOF
 \$TTL    3600
 @       IN      SOA     ns1.$domain_name. admin.$domain_name. (
-                          $ - date +%Y%m%d01        ; Serial
+                          $date +%Y%m%d01        ; Serial
                           3600          ; Refresh  - 1 saat - RFC önerisi
                           600           ; Retry  - 10 dakika - RFC önerisi
                           604800        ; Expire  - 7 gün
@@ -12914,7 +12914,7 @@ EOF
     local named_conf_options="/etc/bind/named.conf.options"
     
     # Yedekleme
-    cp "$named_conf_options" "${named_conf_options}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$named_conf_options" "${named_conf_options}.backup.$date +%Y%m%d_%H%M%S"
     
     # Önce duplicate kayıtları temizle
     print_info "Duplicate kayıtlar temizleniyor..."
@@ -12993,7 +12993,7 @@ PYTHON_CLEANUP
         has_recursion=true
     fi
     
-    local local_network=$ - echo $server_ip | cut -d'.' -f1-3
+    local local_network=$echo $server_ip | cut -d'.' -f1-3
     
     # Python ile güvenli ekleme
     if command -v python3 &>/dev/null; then
@@ -13239,7 +13239,7 @@ PYTHON_FIX
     
     # Nginx'teki domain'leri otomatik ekle
     if command -v nginx &>/dev/null && [ -d "/etc/nginx/sites-available" ]; then
-        local nginx_domains= - $(get_nginx_domains)
+        local nginx_domains=$(get_nginx_domains)
         if [ ${#nginx_domains[@]} -gt 0 ]; then
             echo ""
             print_info "Nginx'te yapılandırılmış domain'ler tespit edildi:"
@@ -13300,7 +13300,7 @@ install_dnsmasq() {
     local dnsmasq_conf="/etc/dnsmasq.conf"
     
     # Yedekleme
-    cp "$dnsmasq_conf" "${dnsmasq_conf}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$dnsmasq_conf" "${dnsmasq_conf}.backup.$date +%Y%m%d_%H%M%S"
     
     # Domain bilgisi
     local domain_name=""
@@ -13309,7 +13309,7 @@ install_dnsmasq() {
     ask_input "DNS sunucusu için ana domain adını girin  - örn: example.com" domain_name
     
     # Sunucu IP'sini otomatik tespit et
-    server_ip=$ - hostname -I | awk '{print $1}'
+    server_ip=$hostname -I | awk '{print $1}'
     ask_input "DNS sunucusu IP adresi" server_ip "$server_ip"
     
     # dnsmasq yapılandırması
@@ -13384,7 +13384,7 @@ EOF
     
     # Nginx'teki domain'leri otomatik ekle
     if command -v nginx &>/dev/null && [ -d "/etc/nginx/sites-available" ]; then
-        local nginx_domains= - $(get_nginx_domains)
+        local nginx_domains=$(get_nginx_domains)
         if [ ${#nginx_domains[@]} -gt 0 ]; then
             echo ""
             print_info "Nginx'te yapılandırılmış domain'ler tespit edildi:"
@@ -13416,15 +13416,15 @@ EOF
 }
 
 # ==========================================
-# MYSQL/MARIADB YÖNETİM FONKSİYONLARI
+ #MYSQL/MARIADB YÖNETİM FONKSİYONLARI
 # ==========================================
 
-# MySQL kimlik bilgileri  - oturum bazlı
+ #MySQL kimlik bilgileri  - oturum bazlı
 MYSQL_USER=""
 MYSQL_PASS=""
 MYSQL_AUTH_REQUIRED=false
 
-# MySQL komut oluşturucu  - kimlik bilgileriyle
+ #MySQL komut oluşturucu  - kimlik bilgileriyle
 mysql_cmd() {
     if [ "$MYSQL_AUTH_REQUIRED" = true ] && [ -n "$MYSQL_USER" ]; then
         if [ -n "$MYSQL_PASS" ]; then
@@ -13437,7 +13437,7 @@ mysql_cmd() {
     fi
 }
 
-# MySQL kimlik bilgilerini iste
+ #MySQL kimlik bilgilerini iste
 request_mysql_credentials() {
     print_header "MySQL/MariaDB Kimlik Bilgileri"
     
@@ -13490,7 +13490,7 @@ request_mysql_credentials() {
     fi
 }
 
-# MySQL bağlantı kontrolü
+ #MySQL bağlantı kontrolü
 check_mysql_connection() {
     if ! command -v mysql &>/dev/null; then
         print_error "MySQL/MariaDB istemcisi bulunamadı!"
@@ -13529,7 +13529,7 @@ check_mysql_connection() {
     return 0
 }
 
-# Veritabanı listesi göster
+ #Veritabanı listesi göster
 list_databases() {
     print_header "Veritabanı Listesi"
     
@@ -13554,14 +13554,14 @@ list_databases() {
     echo ""
     
     # Toplam istatistikler
-    local db_count=$ - mysql_cmd -N -e "SELECT COUNT(* FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN  - 'information_schema', 'mysql', 'performance_schema', 'sys';" 2>/dev/null)
-    local total_size=$ - mysql_cmd -N -e "SELECT ROUND(SUM(DATA_LENGTH + INDEX_LENGTH / 1024 / 1024, 2) FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN  - 'information_schema', 'mysql', 'performance_schema', 'sys';" 2>/dev/null)
+    local db_count=$mysql_cmd -N -e "SELECT COUNT(* FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN  - 'information_schema', 'mysql', 'performance_schema', 'sys';" 2>/dev/null)
+    local total_size=$mysql_cmd -N -e "SELECT ROUND(SUM(DATA_LENGTH + INDEX_LENGTH / 1024 / 1024, 2) FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN  - 'information_schema', 'mysql', 'performance_schema', 'sys';" 2>/dev/null)
     
     echo -e "${GREEN}Toplam Veritabanı:${NC} ${db_count}"
     echo -e "${GREEN}Toplam Boyut:${NC} ${total_size} MB"
 }
 
-# Yeni veritabanı oluştur
+ #Yeni veritabanı oluştur
 create_database() {
     print_header "Yeni Veritabanı Oluştur"
     
@@ -13618,7 +13618,7 @@ create_database() {
     fi
 }
 
-# Veritabanı sil
+ #Veritabanı sil
 delete_database() {
     print_header "Veritabanı Sil"
     
@@ -13679,7 +13679,7 @@ delete_database() {
     fi
 }
 
-# Kullanıcı listesi göster
+ #Kullanıcı listesi göster
 list_mysql_users() {
     print_header "MySQL Kullanıcı Listesi"
     
@@ -13702,11 +13702,11 @@ list_mysql_users() {
     echo ""
     
     # Toplam kullanıcı sayısı
-    local user_count=$ - mysql_cmd -N -e "SELECT COUNT(* FROM mysql.user WHERE User != '';" 2>/dev/null)
+    local user_count=$mysql_cmd -N -e "SELECT COUNT(* FROM mysql.user WHERE User != '';" 2>/dev/null)
     echo -e "${GREEN}Toplam Kullanıcı:${NC} ${user_count}"
 }
 
-# Kullanıcı yetkilerini göster
+ #Kullanıcı yetkilerini göster
 show_user_grants() {
     print_header "Kullanıcı Yetkileri"
     
@@ -13731,7 +13731,7 @@ show_user_grants() {
     fi
 }
 
-# Yeni kullanıcı oluştur
+ #Yeni kullanıcı oluştur
 create_database_user() {
     local target_db=$1
     
@@ -13843,7 +13843,7 @@ create_database_user() {
     fi
 }
 
-# Kullanıcı sil
+ #Kullanıcı sil
 delete_mysql_user() {
     print_header "Kullanıcı Sil"
     
@@ -13890,7 +13890,7 @@ delete_mysql_user() {
     fi
 }
 
-# Kullanıcı şifresini değiştir
+ #Kullanıcı şifresini değiştir
 change_mysql_password() {
     print_header "Kullanıcı Şifresi Değiştir"
     
@@ -13934,7 +13934,7 @@ change_mysql_password() {
     fi
 }
 
-# MySQL/MariaDB ayarlarını göster
+ #MySQL/MariaDB ayarlarını göster
 show_mysql_settings() {
     print_header "MySQL/MariaDB Ayarları"
     
@@ -13968,7 +13968,7 @@ show_mysql_settings() {
     mysql_cmd -e "SHOW STATUS LIKE 'Threads%'; SHOW STATUS LIKE 'Questions'; SHOW STATUS LIKE 'Uptime';" 2>/dev/null
 }
 
-# MySQL konfigürasyon dosyasını bul
+ #MySQL konfigürasyon dosyasını bul
 get_mysql_config_file() {
     if [ -f "/etc/mysql/mariadb.conf.d/50-server.cnf" ]; then
         echo "/etc/mysql/mariadb.conf.d/50-server.cnf"
@@ -13983,13 +13983,13 @@ get_mysql_config_file() {
     fi
 }
 
-# Konfigürasyon değeri oku
+ #Konfigürasyon değeri oku
 get_mysql_config_value() {
     local param=$1
-    local config_file=$ - get_mysql_config_file
+    local config_file=$get_mysql_config_file
     
     # Önce çalışan sunucudan al
-    local value=$ - mysql_cmd -N -e "SELECT @@${param};" 2>/dev/null
+    local value=$mysql_cmd -N -e "SELECT @@${param};" 2>/dev/null
     if [ -n "$value" ]; then
         echo "$value"
         return 0
@@ -14001,14 +14001,14 @@ get_mysql_config_value() {
     fi
 }
 
-# Konfigürasyon değeri ayarla
+ #Konfigürasyon değeri ayarla
 set_mysql_config_value() {
     local param=$1
     local value=$2
-    local config_file=$ - get_mysql_config_file
+    local config_file=$get_mysql_config_file
     
     # Config dosyasını yedekle
-    cp "$config_file" "${config_file}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$config_file" "${config_file}.backup.$date +%Y%m%d_%H%M%S"
     
     # Parametreyi güncellemek veya eklemek
     if grep -q "^${param}" "$config_file" 2>/dev/null; then
@@ -14029,7 +14029,7 @@ set_mysql_config_value() {
     fi
 }
 
-# Remote erişim ayarları
+ #Remote erişim ayarları
 configure_mysql_remote_access() {
     print_header "MySQL Remote Erişim Ayarları"
     
@@ -14037,8 +14037,8 @@ configure_mysql_remote_access() {
         return 1
     fi
     
-    local config_file=$ - get_mysql_config_file
-    local current_bind=$ - get_mysql_config_value "bind-address"
+    local config_file=$get_mysql_config_file
+    local current_bind=$get_mysql_config_value "bind-address"
     
     echo -e "${CYAN}Mevcut Durum:${NC}"
     echo -e "Config Dosyası: ${config_file}"
@@ -14099,7 +14099,7 @@ configure_mysql_remote_access() {
     fi
 }
 
-# Port değiştirme
+ #Port değiştirme
 configure_mysql_port() {
     print_header "MySQL Port Ayarları"
     
@@ -14107,7 +14107,7 @@ configure_mysql_port() {
         return 1
     fi
     
-    local current_port=$ - get_mysql_config_value "port"
+    local current_port=$get_mysql_config_value "port"
     current_port=${current_port:-3306}
     
     echo -e "${CYAN}Mevcut Port:${NC} ${current_port}"
@@ -14141,7 +14141,7 @@ configure_mysql_port() {
     fi
 }
 
-# Güvenlik ayarları
+ #Güvenlik ayarları
 configure_mysql_security() {
     print_header "MySQL Güvenlik Ayarları"
     
@@ -14170,7 +14170,7 @@ configure_mysql_security() {
             print_success "Local-infile devre dışı bırakıldı."
             ;;
         2)
-            local strict_mode=$ - mysql_cmd -N -e "SELECT @@sql_mode LIKE '%STRICT%';" 2>/dev/null
+            local strict_mode=$mysql_cmd -N -e "SELECT @@sql_mode LIKE '%STRICT%';" 2>/dev/null
             if [ "$strict_mode" = "1" ]; then
                 mysql_cmd -e "SET GLOBAL sql_mode = 'NO_ENGINE_SUBSTITUTION';" 2>/dev/null
                 print_success "Strict mode devre dışı bırakıldı."
@@ -14234,7 +14234,7 @@ configure_mysql_security() {
     fi
 }
 
-# Log ayarları
+ #Log ayarları
 configure_mysql_logs() {
     print_header "MySQL Log Ayarları"
     
@@ -14242,21 +14242,21 @@ configure_mysql_logs() {
         return 1
     fi
     
-    local config_file=$ - get_mysql_config_file
+    local config_file=$get_mysql_config_file
     
     echo -e "${CYAN}Mevcut Log Durumu:${NC}"
     echo ""
     
-    local error_log=$ - get_mysql_config_value "log_error"
-    local slow_log=$ - mysql_cmd -N -e "SELECT @@slow_query_log;" 2>/dev/null
-    local slow_log_file=$ - mysql_cmd -N -e "SELECT @@slow_query_log_file;" 2>/dev/null
-    local general_log=$ - mysql_cmd -N -e "SELECT @@general_log;" 2>/dev/null
-    local bin_log=$ - mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null
+    local error_log=$get_mysql_config_value "log_error"
+    local slow_log=$mysql_cmd -N -e "SELECT @@slow_query_log;" 2>/dev/null
+    local slow_log_file=$mysql_cmd -N -e "SELECT @@slow_query_log_file;" 2>/dev/null
+    local general_log=$mysql_cmd -N -e "SELECT @@general_log;" 2>/dev/null
+    local bin_log=$mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null
     
     echo "Error Log: ${error_log:-/var/log/mysql/error.log}"
-    echo "Slow Query Log: $ - [ "$slow_log" = "1" ] && echo "Aktif" || echo "Devre Dışı" - ${slow_log_file}"
-    echo "General Log: $ - [ "$general_log" = "1" ] && echo "Aktif" || echo "Devre Dışı""
-    echo "Binary Log: $ - [ "$bin_log" = "1" ] && echo "Aktif" || echo "Devre Dışı""
+    echo "Slow Query Log: $[ "$slow_log" = "1" ] && echo "Aktif" || echo "Devre Dışı" - ${slow_log_file}"
+    echo "General Log: $[ "$general_log" = "1" ] && echo "Aktif" || echo "Devre Dışı""
+    echo "Binary Log: $[ "$bin_log" = "1" ] && echo "Aktif" || echo "Devre Dışı""
     echo ""
     
     echo -e "${CYAN}Log Ayarları:${NC}"
@@ -14283,7 +14283,7 @@ configure_mysql_logs() {
             fi
             ;;
         2)
-            local current_time=$ - mysql_cmd -N -e "SELECT @@long_query_time;" 2>/dev/null
+            local current_time=$mysql_cmd -N -e "SELECT @@long_query_time;" 2>/dev/null
             echo "Mevcut slow query time: ${current_time} saniye"
             read -p "Yeni değer  - saniye [2]: " new_time
             new_time=${new_time:-2}
@@ -14331,7 +14331,7 @@ configure_mysql_logs() {
     esac
 }
 
-# Karakter seti ve collation ayarları
+ #Karakter seti ve collation ayarları
 configure_mysql_charset() {
     print_header "MySQL Karakter Seti Ayarları"
     
@@ -14391,15 +14391,15 @@ configure_mysql_charset() {
     fi
 }
 
-# Sunucu yapılandırma menüsü
+ #Sunucu yapılandırma menüsü
 mysql_server_configuration_menu() {
     while true; do
         clear
         print_header "MYSQL SUNUCU YAPILANDIRMA"
         
-        local config_file=$ - get_mysql_config_file
-        local bind_addr=$ - get_mysql_config_value "bind-address"
-        local port=$ - get_mysql_config_value "port"
+        local config_file=$get_mysql_config_file
+        local bind_addr=$get_mysql_config_value "bind-address"
+        local port=$get_mysql_config_value "port"
         
         echo -e "${CYAN}Mevcut Ayarlar:${NC}"
         echo "Config Dosyası: ${config_file}"
@@ -14450,7 +14450,7 @@ mysql_server_configuration_menu() {
                 nano "$config_file"
                 ;;
             8)
-                local backup_file="${config_file}.backup.$ - date +%Y%m%d_%H%M%S"
+                local backup_file="${config_file}.backup.$date +%Y%m%d_%H%M%S"
                 cp "$config_file" "$backup_file"
                 print_success "Yedek oluşturuldu: ${backup_file}"
                 ;;
@@ -14481,7 +14481,7 @@ mysql_server_configuration_menu() {
     done
 }
 
-# MySQL/MariaDB performans optimizasyonu
+ #MySQL/MariaDB performans optimizasyonu
 optimize_mysql_performance() {
     print_header "MySQL/MariaDB Performans Optimizasyonu"
     
@@ -14490,8 +14490,8 @@ optimize_mysql_performance() {
     fi
     
     # Sistem belleğini tespit et
-    local total_mem=$ - free -m | grep Mem: | awk '{print $2}'
-    local recommended_buffer=$ - ($total_mem / 2)
+    local total_mem=$free -m | grep Mem: | awk '{print $2}'
+    local recommended_buffer=$(($total_mem / 2)
     
     echo -e "${CYAN}Sistem Bilgileri:${NC}"
     echo -e "Toplam RAM: ${total_mem} MB"
@@ -14532,7 +14532,7 @@ optimize_mysql_performance() {
             print_success "Max connections değiştirildi: $max_conn"
             ;;
         3)
-            local slow_log=$ - mysql_cmd -N -e "SELECT @@slow_query_log;" 2>/dev/null
+            local slow_log=$mysql_cmd -N -e "SELECT @@slow_query_log;" 2>/dev/null
             if [ "$slow_log" = "1" ]; then
                 mysql_cmd -e "SET GLOBAL slow_query_log = 0;" 2>/dev/null
                 print_success "Slow query log devre dışı bırakıldı."
@@ -14559,10 +14559,10 @@ optimize_mysql_performance() {
 }
 
 # ==========================================
-# MYSQL REPLICATION  - MASTER-SLAVE YÖNETİMİ
+ #MYSQL REPLICATION  - MASTER-SLAVE YÖNETİMİ
 # ==========================================
 
-# Replication durumunu kontrol et
+ #Replication durumunu kontrol et
 check_replication_status() {
     print_header "MySQL Replication Durumu"
     
@@ -14582,11 +14582,11 @@ check_replication_status() {
     echo -e "${CYAN}Özet Bilgi:${NC}"
     
     # Master kontrolü
-    local is_master=$ - mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null
+    local is_master=$mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null
     if [ "$is_master" = "1" ]; then
         print_success "Bu sunucu MASTER olarak yapılandırılmış - Binary log aktif"
-        local master_file=$ - mysql_cmd -N -e "SHOW MASTER STATUS" 2>/dev/null | awk '{print $1}'
-        local master_pos=$ - mysql_cmd -N -e "SHOW MASTER STATUS" 2>/dev/null | awk '{print $2}'
+        local master_file=$mysql_cmd -N -e "SHOW MASTER STATUS" 2>/dev/null | awk '{print $1}'
+        local master_pos=$mysql_cmd -N -e "SHOW MASTER STATUS" 2>/dev/null | awk '{print $2}'
         echo -e "  Binary Log File: ${master_file}"
         echo -e "  Position: ${master_pos}"
     else
@@ -14596,8 +14596,8 @@ check_replication_status() {
     echo ""
     
     # Slave kontrolü
-    local slave_io=$ - mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}'
-    local slave_sql=$ - mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | awk '{print $2}'
+    local slave_io=$mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}'
+    local slave_sql=$mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | awk '{print $2}'
     
     if [ -n "$slave_io" ]; then
         if [ "$slave_io" = "Yes" ] && [ "$slave_sql" = "Yes" ]; then
@@ -14608,7 +14608,7 @@ check_replication_status() {
             echo -e "  Slave_SQL_Running: ${slave_sql}"
             
             # Hata mesajı varsa göster
-            local error=$ - mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Last_Error:" | cut -d':' -f2-
+            local error=$mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Last_Error:" | cut -d':' -f2-
             if [ -n "$error" ]; then
                 echo -e "${RED}  Son Hata: ${error}${NC}"
             fi
@@ -14618,7 +14618,7 @@ check_replication_status() {
     fi
 }
 
-# Master sunucu yapılandırması
+ #Master sunucu yapılandırması
 configure_master_server() {
     print_header "Master Sunucu Yapılandırması"
     
@@ -14626,7 +14626,7 @@ configure_master_server() {
         return 1
     fi
     
-    local config_file=$ - get_mysql_config_file
+    local config_file=$get_mysql_config_file
     
     echo -e "${CYAN}Master sunucu yapılandırılıyor...${NC}"
     echo ""
@@ -14667,7 +14667,7 @@ configure_master_server() {
     print_info "Master yapılandırması uygulanıyor..."
     
     # Config dosyasını yedekle
-    cp "$config_file" "${config_file}.backup.master.$ - date +%Y%m%d_%H%M%S"
+    cp "$config_file" "${config_file}.backup.master.$date +%Y%m%d_%H%M%S"
     
     # Gerekli parametreleri ayarla
     set_mysql_config_value "server-id" "$server_id"
@@ -14680,12 +14680,12 @@ configure_master_server() {
     if [ "$db_choice" = "2" ] && [ -n "$include_dbs" ]; then
         IFS=',' read -ra DBS <<< "$include_dbs"
         for db in "${DBS[@]}"; do
-            echo "binlog-do-db = $ - echo $db | xargs" >> "$config_file"
+            echo "binlog-do-db = $echo $db | xargs" >> "$config_file"
         done
     elif [ "$db_choice" = "3" ] && [ -n "$exclude_dbs" ]; then
         IFS=',' read -ra DBS <<< "$exclude_dbs"
         for db in "${DBS[@]}"; do
-            echo "binlog-ignore-db = $ - echo $db | xargs" >> "$config_file"
+            echo "binlog-ignore-db = $echo $db | xargs" >> "$config_file"
         done
     fi
     
@@ -14711,7 +14711,7 @@ configure_master_server() {
     fi
 }
 
-# Replication kullanıcısı oluştur
+ #Replication kullanıcısı oluştur
 create_replication_user() {
     print_header "Replication Kullanıcısı Oluştur"
     
@@ -14751,7 +14751,7 @@ create_replication_user() {
     fi
 }
 
-# Slave sunucu yapılandırması
+ #Slave sunucu yapılandırması
 configure_slave_server() {
     print_header "Slave Sunucu Yapılandırması"
     
@@ -14759,7 +14759,7 @@ configure_slave_server() {
         return 1
     fi
     
-    local config_file=$ - get_mysql_config_file
+    local config_file=$get_mysql_config_file
     
     echo -e "${CYAN}Slave sunucu yapılandırılıyor...${NC}"
     echo ""
@@ -14783,7 +14783,7 @@ configure_slave_server() {
     print_info "Slave yapılandırması uygulanıyor..."
     
     # Config dosyasını yedekle
-    cp "$config_file" "${config_file}.backup.slave.$ - date +%Y%m%d_%H%M%S"
+    cp "$config_file" "${config_file}.backup.slave.$date +%Y%m%d_%H%M%S"
     
     # Gerekli parametreleri ayarla
     set_mysql_config_value "server-id" "$server_id"
@@ -14807,7 +14807,7 @@ configure_slave_server() {
     fi
 }
 
-# Slave'i Master'a bağla
+ #Slave'i Master'a bağla
 setup_slave_connection() {
     print_header "Slave - Master Bağlantısı"
     
@@ -14875,8 +14875,8 @@ setup_slave_connection() {
         mysql_cmd -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep -E "Slave_IO_Running|Slave_SQL_Running|Master_Host|Master_Log_File|Read_Master_Log_Pos|Seconds_Behind_Master|Last_Error"
         
         # Durum kontrolü
-        local io_running=$ - mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}'
-        local sql_running=$ - mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | awk '{print $2}'
+        local io_running=$mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}'
+        local sql_running=$mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | awk '{print $2}'
         
         echo ""
         if [ "$io_running" = "Yes" ] && [ "$sql_running" = "Yes" ]; then
@@ -14891,7 +14891,7 @@ setup_slave_connection() {
     fi
 }
 
-# Replication'ı yönet  - başlat/durdur
+ #Replication'ı yönet  - başlat/durdur
 manage_replication() {
     print_header "Replication Yönetimi"
     
@@ -14900,8 +14900,8 @@ manage_replication() {
     fi
     
     # Mevcut durum
-    local io_running=$ - mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}'
-    local sql_running=$ - mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | awk '{print $2}'
+    local io_running=$mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}'
+    local sql_running=$mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | awk '{print $2}'
     
     if [ -z "$io_running" ]; then
         print_warning "Bu sunucu Slave olarak yapılandırılmamış!"
@@ -14959,15 +14959,15 @@ manage_replication() {
     esac
 }
 
-# Replication yönetim menüsü
+ #Replication yönetim menüsü
 mysql_replication_menu() {
     while true; do
         clear
         print_header "MYSQL REPLICATION  - MASTER-SLAVE YÖNETİMİ"
         
         # Hızlı durum özeti
-        local is_master=$ - mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null
-        local slave_status=$ - mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}'
+        local is_master=$mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null
+        local slave_status=$mysql_cmd -N -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}'
         
         echo -e "${CYAN}Mevcut Durum:${NC}"
         if [ "$is_master" = "1" ]; then
@@ -15047,7 +15047,7 @@ mysql_replication_menu() {
     done
 }
 
-# MySQL/MariaDB yönetim menüsü
+ #MySQL/MariaDB yönetim menüsü
 mysql_management_menu() {
     while true; do
         clear
@@ -15181,16 +15181,16 @@ mysql_management_menu() {
 }
 
 # ==========================================
-# REDİS YÖNETİM FONKSİYONLARI
+ #REDİS YÖNETİM FONKSİYONLARI
 # ==========================================
 
-# Redis kimlik bilgileri  - oturum bazlı
+ #Redis kimlik bilgileri  - oturum bazlı
 REDIS_HOST="127.0.0.1"
 REDIS_PORT="6379"
 REDIS_PASS=""
 REDIS_AUTH_REQUIRED=false
 
-# Redis komut oluşturucu  - kimlik bilgileriyle
+ #Redis komut oluşturucu  - kimlik bilgileriyle
 redis_cmd() {
     if [ "$REDIS_AUTH_REQUIRED" = true ] && [ -n "$REDIS_PASS" ]; then
         redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" "$@" 2>/dev/null
@@ -15199,7 +15199,7 @@ redis_cmd() {
     fi
 }
 
-# Redis kimlik bilgilerini iste
+ #Redis kimlik bilgilerini iste
 request_redis_credentials() {
     print_header "Redis Kimlik Bilgileri"
     
@@ -15244,7 +15244,7 @@ request_redis_credentials() {
     fi
 }
 
-# Redis bağlantı kontrolü
+ #Redis bağlantı kontrolü
 check_redis_connection() {
     if ! command -v redis-cli &>/dev/null; then
         print_error "redis-cli bulunamadı!"
@@ -15286,7 +15286,7 @@ check_redis_connection() {
     return 0
 }
 
-# Redis konfigürasyon dosyasını bul
+ #Redis konfigürasyon dosyasını bul
 get_redis_config_file() {
     if [ -f "/etc/redis/redis.conf" ]; then
         echo "/etc/redis/redis.conf"
@@ -15299,10 +15299,10 @@ get_redis_config_file() {
     fi
 }
 
-# Redis config değeri oku
+ #Redis config değeri oku
 get_redis_config_value() {
     local param=$1
-    local config_file=$ - get_redis_config_file
+    local config_file=$get_redis_config_file
     
     # Config dosyasından oku
     if [ -f "$config_file" ]; then
@@ -15310,14 +15310,14 @@ get_redis_config_value() {
     fi
 }
 
-# Redis config değeri ayarla
+ #Redis config değeri ayarla
 set_redis_config_value() {
     local param=$1
     local value=$2
-    local config_file=$ - get_redis_config_file
+    local config_file=$get_redis_config_file
     
     # Config dosyasını yedekle
-    cp "$config_file" "${config_file}.backup.$ - date +%Y%m%d_%H%M%S"
+    cp "$config_file" "${config_file}.backup.$date +%Y%m%d_%H%M%S"
     
     # Parametreyi güncellemek veya eklemek
     if grep -q "^${param} " "$config_file" 2>/dev/null; then
@@ -15332,7 +15332,7 @@ set_redis_config_value() {
     fi
 }
 
-# Redis bilgilerini göster
+ #Redis bilgilerini göster
 show_redis_info() {
     print_header "Redis Bilgileri"
     
@@ -15368,7 +15368,7 @@ show_redis_info() {
     redis_cmd INFO keyspace
 }
 
-# Redis key yönetimi
+ #Redis key yönetimi
 manage_redis_keys() {
     print_header "Redis Key Yönetimi"
     
@@ -15400,14 +15400,14 @@ manage_redis_keys() {
             echo -e "\n${CYAN}Eşleşen Key'ler:${NC}"
             redis_cmd KEYS "$pattern" | head -100
             
-            local count=$ - redis_cmd KEYS "$pattern" | wc -l
+            local count=$redis_cmd KEYS "$pattern" | wc -l
             echo ""
             print_info "Toplam ${count} key bulundu  - ilk 100 gösteriliyor"
             ;;
         2)
             read -p "Key adı: " key_name
             if [ -n "$key_name" ]; then
-                local value=$ - redis_cmd GET "$key_name"
+                local value=$redis_cmd GET "$key_name"
                 if [ -n "$value" ]; then
                     echo -e "\n${CYAN}Key:${NC} ${key_name}"
                     echo -e "${CYAN}Değer:${NC} ${value}"
@@ -15435,8 +15435,8 @@ manage_redis_keys() {
         5)
             read -p "Key adı: " key_name
             if [ -n "$key_name" ]; then
-                local key_type=$ - redis_cmd TYPE "$key_name"
-                local key_ttl=$ - redis_cmd TTL "$key_name"
+                local key_type=$redis_cmd TYPE "$key_name"
+                local key_ttl=$redis_cmd TTL "$key_name"
                 
                 echo -e "\n${CYAN}Key:${NC} ${key_name}"
                 echo -e "${CYAN}Type:${NC} ${key_type}"
@@ -15467,7 +15467,7 @@ manage_redis_keys() {
             print_success "Veritabanı ${db_num} seçildi."
             ;;
         8)
-            local total_keys=$ - redis_cmd DBSIZE
+            local total_keys=$redis_cmd DBSIZE
             print_info "Toplam key sayısı: ${total_keys}"
             ;;
         9)
@@ -15487,7 +15487,7 @@ manage_redis_keys() {
     esac
 }
 
-# Redis sunucu yapılandırması
+ #Redis sunucu yapılandırması
 configure_redis_server() {
     print_header "Redis Sunucu Yapılandırması"
     
@@ -15495,16 +15495,16 @@ configure_redis_server() {
         return 1
     fi
     
-    local config_file=$ - get_redis_config_file
-    local bind_addr=$ - get_redis_config_value "bind"
-    local port=$ - get_redis_config_value "port"
-    local requirepass=$ - get_redis_config_value "requirepass"
+    local config_file=$get_redis_config_file
+    local bind_addr=$get_redis_config_value "bind"
+    local port=$get_redis_config_value "port"
+    local requirepass=$get_redis_config_value "requirepass"
     
     echo -e "${CYAN}Mevcut Ayarlar:${NC}"
     echo "Config Dosyası: ${config_file}"
     echo "Bind Address: ${bind_addr:-127.0.0.1}"
     echo "Port: ${port:-6379}"
-    echo "Şifre: $ - [ -n "$requirepass" ] && echo "Ayarlı" || echo "Yok""
+    echo "Şifre: $[ -n "$requirepass" ] && echo "Ayarlı" || echo "Yok""
     echo ""
     
     echo -e "${CYAN}Yapılandırma Seçenekleri:${NC}"
@@ -15555,7 +15555,7 @@ configure_redis_server() {
             esac
             ;;
         2)
-            local current_port=$ - get_redis_config_value "port"
+            local current_port=$get_redis_config_value "port"
             current_port=${current_port:-6379}
             
             read -p "Yeni port [${current_port}]: " new_port
@@ -15588,7 +15588,7 @@ configure_redis_server() {
             fi
             ;;
         4)
-            local current_maxmem=$ - redis_cmd CONFIG GET maxmemory | tail -1
+            local current_maxmem=$redis_cmd CONFIG GET maxmemory | tail -1
             echo "Mevcut max memory: ${current_maxmem} bytes"
             
             read -p "Yeni max memory - örn 256mb veya 1gb: " new_maxmem
@@ -15636,7 +15636,7 @@ configure_redis_server() {
             print_success "Timeout ayarlandı: ${timeout}"
             ;;
         8)
-            local protected=$ - get_redis_config_value "protected-mode"
+            local protected=$get_redis_config_value "protected-mode"
             if [ "$protected" = "yes" ]; then
                 set_redis_config_value "protected-mode" "no"
                 print_success "Protected mode kapatıldı."
@@ -15670,7 +15670,7 @@ configure_redis_server() {
     fi
 }
 
-# Redis persistence ayarları
+ #Redis persistence ayarları
 configure_redis_persistence() {
     print_header "Redis Persistence Ayarları"
     
@@ -15700,19 +15700,19 @@ configure_redis_persistence() {
     case $persist_choice in
         1)
             echo "RDB snapshot ayarları:"
-            echo "Mevcut: $ - get_redis_config_value 'save'"
+            echo "Mevcut: $get_redis_config_value 'save'"
             echo ""
             echo "Örnek: save 900 1  - 900 saniyede en az 1 değişiklik"
             read -p "RDB save kuralı ekle - örn 900 1: " save_rule
             
             if [ -n "$save_rule" ]; then
                 redis_cmd CONFIG SET save "$save_rule"
-                echo "save $save_rule" >> "$ - get_redis_config_file"
+                echo "save $save_rule" >> "$get_redis_config_file"
                 print_success "RDB kuralı eklendi."
             fi
             ;;
         2)
-            local aof_enabled=$ - redis_cmd CONFIG GET appendonly | tail -1
+            local aof_enabled=$redis_cmd CONFIG GET appendonly | tail -1
             if [ "$aof_enabled" = "yes" ]; then
                 redis_cmd CONFIG SET appendonly no
                 set_redis_config_value "appendonly" "no"
@@ -15744,7 +15744,7 @@ configure_redis_persistence() {
     esac
 }
 
-# Redis replication yönetimi
+ #Redis replication yönetimi
 configure_redis_replication() {
     print_header "Redis Replication  - Master-Slave"
     
@@ -15753,13 +15753,13 @@ configure_redis_replication() {
     fi
     
     # Mevcut durum
-    local role=$ - redis_cmd INFO replication | grep "^role:" | cut -d':' -f2 | tr -d '\r'
+    local role=$redis_cmd INFO replication | grep "^role:" | cut -d':' -f2 | tr -d '\r'
     
     echo -e "${CYAN}Mevcut Rol:${NC} ${role}"
     echo ""
     
     if [ "$role" = "master" ]; then
-        local slaves=$ - redis_cmd INFO replication | grep "connected_slaves:" | cut -d':' -f2 | tr -d '\r'
+        local slaves=$redis_cmd INFO replication | grep "connected_slaves:" | cut -d':' -f2 | tr -d '\r'
         echo -e "${GREEN}Bu sunucu MASTER${NC}"
         echo -e "Bağlı slave sayısı: ${slaves}"
         echo ""
@@ -15819,7 +15819,7 @@ configure_redis_replication() {
     esac
 }
 
-# Redis yönetim menüsü
+ #Redis yönetim menüsü
 redis_management_menu() {
     while true; do
         clear
@@ -15922,44 +15922,44 @@ redis_management_menu() {
 }
 
 # ==========================================
-# SERVİS SAĞLIK KONTROLÜ FONKSİYONLARI
+ #SERVİS SAĞLIK KONTROLÜ FONKSİYONLARI
 # ==========================================
 
-# Global servis kontrol değişkenleri
+ #Global servis kontrol değişkenleri
 TOTAL_SERVICES=0
 RUNNING_SERVICES=0
 STOPPED_SERVICES=0
 ERROR_SERVICES=0
 NOT_INSTALLED_SERVICES=0
 
-# Servis durumu kontrolü
+ #Servis durumu kontrolü
 check_service_status() {
     local service_name=$1
     local display_name=$2
     
-    TOTAL_SERVICES=$ - (TOTAL_SERVICES + 1)
+    TOTAL_SERVICES=$((TOTAL_SERVICES + 1)
     
     # Servis yüklü mü kontrol et
     if ! systemctl list-unit-files | grep -q "^${service_name}"; then
         print_warning "${display_name}: ${YELLOW}Yüklü Değil${NC}"
-        NOT_INSTALLED_SERVICES=$ - (NOT_INSTALLED_SERVICES + 1)
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1)
         return 2
     fi
     
     # Servis durumunu kontrol et
     if systemctl is-active --quiet "${service_name}"; then
         print_success "${display_name}: ${GREEN}Çalışıyor${NC}"
-        RUNNING_SERVICES=$ - (RUNNING_SERVICES + 1)
+        RUNNING_SERVICES=$((RUNNING_SERVICES + 1)
         
         # Servis detayları
-        echo -e "   ${CYAN}PID:${NC} $ - systemctl show -p MainPID --value "${service_name}""
-        echo -e "   ${CYAN}Uptime:${NC} $ - systemctl show -p ActiveEnterTimestamp --value "${service_name}" | cut -d' ' -f2-4"
-        echo -e "   ${CYAN}Memory:${NC} $ - systemctl show -p MemoryCurrent --value "${service_name}" | awk '{if($1>0 printf "%.2f MB", $1/1024/1024; else print "N/A"}')"
+        echo -e "   ${CYAN}PID:${NC} $systemctl show -p MainPID --value "${service_name}""
+        echo -e "   ${CYAN}Uptime:${NC} $systemctl show -p ActiveEnterTimestamp --value "${service_name}" | cut -d' ' -f2-4"
+        echo -e "   ${CYAN}Memory:${NC} $systemctl show -p MemoryCurrent --value "${service_name}" | awk '{if($1>0 printf "%.2f MB", $1/1024/1024; else print "N/A"}')"
         
         return 0
     elif systemctl is-enabled --quiet "${service_name}" 2>/dev/null; then
         print_error "${display_name}: ${RED}Durmuş  - Enabled ama çalışmıyor${NC}"
-        STOPPED_SERVICES=$ - (STOPPED_SERVICES + 1)
+        STOPPED_SERVICES=$((STOPPED_SERVICES + 1)
         
         # Son 5 log satırını göster
         echo -e "   ${YELLOW}Son loglar:${NC}"
@@ -15968,12 +15968,12 @@ check_service_status() {
         return 1
     else
         print_warning "${display_name}: ${YELLOW}Devre Dışı${NC}"
-        STOPPED_SERVICES=$ - (STOPPED_SERVICES + 1)
+        STOPPED_SERVICES=$((STOPPED_SERVICES + 1)
         return 1
     fi
 }
 
-# Port kontrolü
+ #Port kontrolü
 check_port() {
     local port=$1
     local service_name=$2
@@ -15982,7 +15982,7 @@ check_port() {
         print_success "${service_name} portu  - ${port}: ${GREEN}Dinliyor${NC}"
         
         # Port detayları
-        local process=$ - lsof -i ":${port}" -P -n 2>/dev/null | grep LISTEN | awk '{print $1}' | head -1
+        local process=$lsof -i ":${port}" -P -n 2>/dev/null | grep LISTEN | awk '{print $1}' | head -1
         if [ -n "$process" ]; then
             echo -e "   ${CYAN}Process:${NC} ${process}"
         fi
@@ -15993,7 +15993,7 @@ check_port() {
     fi
 }
 
-# Nginx kontrolü
+ #Nginx kontrolü
 check_nginx_health() {
     echo -e "\n${BLUE}━━━ Nginx Web Sunucusu ━━━${NC}"
     
@@ -16012,26 +16012,26 @@ check_nginx_health() {
         fi
         
         # Site sayısı
-        local enabled_sites=$ - ls -1 /etc/nginx/sites-enabled/ 2>/dev/null | wc -l
+        local enabled_sites=$ls -1 /etc/nginx/sites-enabled/ 2>/dev/null | wc -l
         echo -e "   ${CYAN}Aktif siteler:${NC} ${enabled_sites}"
         
         # SSL sertifikaları
-        local ssl_certs=$ - find /etc/letsencrypt/live/ -maxdepth 1 -type d 2>/dev/null | wc -l
+        local ssl_certs=$find /etc/letsencrypt/live/ -maxdepth 1 -type d 2>/dev/null | wc -l
         if [ $ssl_certs -gt 1 ]; then
-            echo -e "   ${CYAN}SSL Sertifikaları:${NC} $ - (ssl_certs - 1) domain"
+            echo -e "   ${CYAN}SSL Sertifikaları:${NC} $((ssl_certs - 1) domain"
         fi
     fi
 }
 
-# PHP-FPM kontrolü
+ #PHP-FPM kontrolü
 check_php_fpm_health() {
     echo -e "\n${BLUE}━━━ PHP-FPM ━━━${NC}"
     
-    local php_versions=$ - ls -1 /etc/php/ 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$'
+    local php_versions=$ls -1 /etc/php/ 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$'
     
     if [ -z "$php_versions" ]; then
         print_warning "PHP-FPM: ${YELLOW}Yüklü Değil${NC}"
-        NOT_INSTALLED_SERVICES=$ - (NOT_INSTALLED_SERVICES + 1)
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1)
         return
     fi
     
@@ -16040,7 +16040,7 @@ check_php_fpm_health() {
         
         if check_service_status "$service_name" "PHP ${version} FPM"; then
             # Pool sayısı
-            local pools=$ - ls -1 /etc/php/${version}/fpm/pool.d/*.conf 2>/dev/null | wc -l
+            local pools=$ls -1 /etc/php/${version}/fpm/pool.d/*.conf 2>/dev/null | wc -l
             echo -e "   ${CYAN}Pool sayısı:${NC} ${pools}"
             
             # Socket kontrolü
@@ -16049,14 +16049,14 @@ check_php_fpm_health() {
             fi
             
             # Eklentiler
-            local extensions=$ - php${version} -m 2>/dev/null | wc -l
+            local extensions=$php${version} -m 2>/dev/null | wc -l
             echo -e "   ${CYAN}Yüklü eklentiler:${NC} ${extensions}"
         fi
         echo ""
     done
 }
 
-# MariaDB/MySQL kontrolü
+ #MariaDB/MySQL kontrolü
 check_mariadb_health() {
     echo -e "\n${BLUE}━━━ MariaDB/MySQL Veritabanı ━━━${NC}"
     
@@ -16079,15 +16079,15 @@ check_mariadb_health() {
             print_success "Veritabanı bağlantısı: ${GREEN}Başarılı${NC}"
             
             # Veritabanı sayısı
-            local db_count=$ - mysql -e "SHOW DATABASES;" 2>/dev/null | wc -l
-            echo -e "   ${CYAN}Veritabanı sayısı:${NC} $ - (db_count - 1)"
+            local db_count=$mysql -e "SHOW DATABASES;" 2>/dev/null | wc -l
+            echo -e "   ${CYAN}Veritabanı sayısı:${NC} $((db_count - 1)"
             
             # Versiyon
-            local db_version=$ - mysql -V 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1
+            local db_version=$mysql -V 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1
             echo -e "   ${CYAN}Versiyon:${NC} ${db_version}"
             
             # Kullanıcı sayısı
-            local user_count=$ - mysql -e "SELECT COUNT(* FROM mysql.user;" 2>/dev/null | tail -1)
+            local user_count=$mysql -e "SELECT COUNT(* FROM mysql.user;" 2>/dev/null | tail -1)
             echo -e "   ${CYAN}Kullanıcı sayısı:${NC} ${user_count}"
         else
             print_error "Veritabanı bağlantısı: ${RED}Başarısız${NC}"
@@ -16095,17 +16095,17 @@ check_mariadb_health() {
         fi
         
         # Replication durumu
-        local replication=$ - mysql -e "SHOW SLAVE STATUS\G" 2>/dev/null
+        local replication=$mysql -e "SHOW SLAVE STATUS\G" 2>/dev/null
         if [ -n "$replication" ]; then
             print_info "Replication: ${CYAN}Aktif  - Slave${NC}"
         fi
     else
         print_warning "MariaDB/MySQL: ${YELLOW}Yüklü Değil${NC}"
-        NOT_INSTALLED_SERVICES=$ - (NOT_INSTALLED_SERVICES + 1)
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1)
     fi
 }
 
-# Redis kontrolü
+ #Redis kontrolü
 check_redis_health() {
     echo -e "\n${BLUE}━━━ Redis Cache Sunucusu ━━━${NC}"
     
@@ -16129,21 +16129,21 @@ check_redis_health() {
                 print_success "Redis bağlantısı: ${GREEN}Başarılı${NC}"
                 
                 # Redis bilgileri
-                local redis_version=$ - redis-cli INFO server 2>/dev/null | grep "redis_version" | cut -d':' -f2 | tr -d '\r'
+                local redis_version=$redis-cli INFO server 2>/dev/null | grep "redis_version" | cut -d':' -f2 | tr -d '\r'
                 echo -e "   ${CYAN}Versiyon:${NC} ${redis_version}"
                 
-                local redis_keys=$ - redis-cli DBSIZE 2>/dev/null | grep -oP '\d+'
+                local redis_keys=$redis-cli DBSIZE 2>/dev/null | grep -oP '\d+'
                 echo -e "   ${CYAN}Key sayısı:${NC} ${redis_keys}"
                 
-                local redis_memory=$ - redis-cli INFO memory 2>/dev/null | grep "used_memory_human" | cut -d':' -f2 | tr -d '\r'
+                local redis_memory=$redis-cli INFO memory 2>/dev/null | grep "used_memory_human" | cut -d':' -f2 | tr -d '\r'
                 echo -e "   ${CYAN}Bellek kullanımı:${NC} ${redis_memory}"
                 
                 # Replication durumu
-                local role=$ - redis-cli INFO replication 2>/dev/null | grep "role:" | cut -d':' -f2 | tr -d '\r'
+                local role=$redis-cli INFO replication 2>/dev/null | grep "role:" | cut -d':' -f2 | tr -d '\r'
                 if [ "$role" = "slave" ]; then
                     print_info "Replication: ${CYAN}Aktif  - Slave${NC}"
                 elif [ "$role" = "master" ]; then
-                    local slaves=$ - redis-cli INFO replication 2>/dev/null | grep "connected_slaves:" | cut -d':' -f2 | tr -d '\r'
+                    local slaves=$redis-cli INFO replication 2>/dev/null | grep "connected_slaves:" | cut -d':' -f2 | tr -d '\r'
                     if [ "$slaves" != "0" ]; then
                         print_info "Replication: ${CYAN}Aktif  - Master - ${slaves} slave${NC}"
                     fi
@@ -16154,11 +16154,11 @@ check_redis_health() {
         fi
     else
         print_warning "Redis: ${YELLOW}Yüklü Değil${NC}"
-        NOT_INSTALLED_SERVICES=$ - (NOT_INSTALLED_SERVICES + 1)
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1)
     fi
 }
 
-# MongoDB kontrolü
+ #MongoDB kontrolü
 check_mongodb_health() {
     echo -e "\n${BLUE}━━━ MongoDB NoSQL Veritabanı ━━━${NC}"
     
@@ -16185,11 +16185,11 @@ check_mongodb_health() {
                 print_success "MongoDB bağlantısı: ${GREEN}Başarılı${NC}"
                 
                 # Veritabanı sayısı
-                local db_count=$ - $mongo_cmd --quiet --eval "db.adminCommand('listDatabases'.databases.length" 2>/dev/null)
+                local db_count=$$mongo_cmd --quiet --eval "db.adminCommand('listDatabases'.databases.length" 2>/dev/null)
                 echo -e "   ${CYAN}Veritabanı sayısı:${NC} ${db_count}"
                 
                 # Versiyon
-                local mongo_version=$ - $mongo_cmd --quiet --eval "db.version(" 2>/dev/null | tr -d '"')
+                local mongo_version=$$mongo_cmd --quiet --eval "db.version(" 2>/dev/null | tr -d '"')
                 echo -e "   ${CYAN}Versiyon:${NC} ${mongo_version}"
             else
                 print_error "MongoDB bağlantısı: ${RED}Başarısız${NC}"
@@ -16197,37 +16197,37 @@ check_mongodb_health() {
         fi
     else
         print_warning "MongoDB: ${YELLOW}Yüklü Değil${NC}"
-        NOT_INSTALLED_SERVICES=$ - (NOT_INSTALLED_SERVICES + 1)
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1)
     fi
 }
 
-# Docker kontrolü
+ #Docker kontrolü
 check_docker_health() {
     echo -e "\n${BLUE}━━━ Docker Container Platformu ━━━${NC}"
     
     if check_service_status "docker" "Docker"; then
         # Docker version
-        local docker_version=$ - docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ','
+        local docker_version=$docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ','
         echo -e "   ${CYAN}Versiyon:${NC} ${docker_version}"
         
         # Container sayısı
-        local running_containers=$ - docker ps -q 2>/dev/null | wc -l
-        local all_containers=$ - docker ps -aq 2>/dev/null | wc -l
+        local running_containers=$docker ps -q 2>/dev/null | wc -l
+        local all_containers=$docker ps -aq 2>/dev/null | wc -l
         echo -e "   ${CYAN}Çalışan konteynerler:${NC} ${running_containers}/${all_containers}"
         
         # Image sayısı
-        local images=$ - docker images -q 2>/dev/null | wc -l
+        local images=$docker images -q 2>/dev/null | wc -l
         echo -e "   ${CYAN}Image sayısı:${NC} ${images}"
         
         # Docker Compose
         if command -v docker-compose &>/dev/null; then
-            local compose_version=$ - docker-compose --version 2>/dev/null | cut -d' ' -f4 | tr -d ','
+            local compose_version=$docker-compose --version 2>/dev/null | cut -d' ' -f4 | tr -d ','
             print_success "   Docker Compose: ${GREEN}Yüklü${NC}  - ${compose_version}"
         fi
     fi
 }
 
-# DNS kontrolü
+ #DNS kontrolü
 check_dns_health() {
     echo -e "\n${BLUE}━━━ DNS Sunucusu ━━━${NC}"
     
@@ -16238,7 +16238,7 @@ check_dns_health() {
         service_found=true
         
         # Zone sayısı
-        local zones=$ - grep -c "^zone" /etc/bind/named.conf.local 2>/dev/null || echo "0"
+        local zones=$grep -c "^zone" /etc/bind/named.conf.local 2>/dev/null || echo "0"
         echo -e "   ${CYAN}Zone sayısı:${NC} ${zones}"
         
         # Config test
@@ -16265,11 +16265,11 @@ check_dns_health() {
     
     if [ "$service_found" = false ]; then
         print_warning "DNS Sunucusu: ${YELLOW}Yüklü Değil${NC}"
-        NOT_INSTALLED_SERVICES=$ - (NOT_INSTALLED_SERVICES + 1)
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1)
     fi
 }
 
-# VPN kontrolü
+ #VPN kontrolü
 check_vpn_health() {
     echo -e "\n${BLUE}━━━ VPN Servisleri ━━━${NC}"
     
@@ -16294,7 +16294,7 @@ check_vpn_health() {
         
         if ip link show wg0 &>/dev/null; then
             print_success "WireGuard interface  - wg0: ${GREEN}Aktif${NC}"
-            local peers=$ - wg show wg0 peers 2>/dev/null | wc -l
+            local peers=$wg show wg0 peers 2>/dev/null | wc -l
             echo -e "   ${CYAN}Peer sayısı:${NC} ${peers}"
         fi
         check_port 51820 "WireGuard"
@@ -16309,20 +16309,20 @@ check_vpn_health() {
     
     if [ "$vpn_found" = false ]; then
         print_warning "VPN Servisleri: ${YELLOW}Yüklü Değil${NC}"
-        NOT_INSTALLED_SERVICES=$ - (NOT_INSTALLED_SERVICES + 1)
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1)
     fi
 }
 
-# Firewall kontrolü
+ #Firewall kontrolü
 check_firewall_health() {
     echo -e "\n${BLUE}━━━ Güvenlik Servisleri ━━━${NC}"
     
     # UFW
     if command -v ufw &>/dev/null; then
-        local ufw_status=$ - ufw status | head -1
+        local ufw_status=$ufw status | head -1
         if echo "$ufw_status" | grep -q "active"; then
             print_success "UFW Firewall: ${GREEN}Aktif${NC}"
-            local rules=$ - ufw status numbered 2>/dev/null | grep -c "ALLOW"
+            local rules=$ufw status numbered 2>/dev/null | grep -c "ALLOW"
             echo -e "   ${CYAN}İzin verilen kurallar:${NC} ${rules}"
         else
             print_warning "UFW Firewall: ${YELLOW}Devre Dışı${NC}"
@@ -16335,13 +16335,13 @@ check_firewall_health() {
     if systemctl list-unit-files | grep -q "^fail2ban.service"; then
         if check_service_status "fail2ban" "Fail2ban"; then
             if command -v fail2ban-client &>/dev/null; then
-                local jails=$ - fail2ban-client status 2>/dev/null | grep "Jail list:" | cut -d':' -f2 | tr ',' '\n' | wc -l
+                local jails=$fail2ban-client status 2>/dev/null | grep "Jail list:" | cut -d':' -f2 | tr ',' '\n' | wc -l
                 echo -e "   ${CYAN}Aktif jail sayısı:${NC} ${jails}"
                 
                 local total_banned=0
-                for jail in $ - fail2ban-client status 2>/dev/null | grep "Jail list:" | cut -d':' -f2 | tr ',' ' '; do
-                    local banned=$ - fail2ban-client status "$jail" 2>/dev/null | grep "Currently banned:" | grep -oP '\d+'
-                    total_banned=$ - (total_banned + banned)
+                for jail in $fail2ban-client status 2>/dev/null | grep "Jail list:" | cut -d':' -f2 | tr ',' ' '; do
+                    local banned=$fail2ban-client status "$jail" 2>/dev/null | grep "Currently banned:" | grep -oP '\d+'
+                    total_banned=$((total_banned + banned)
                 done
                 echo -e "   ${CYAN}Toplam banlanan IP:${NC} ${total_banned}"
             fi
@@ -16351,17 +16351,17 @@ check_firewall_health() {
     fi
 }
 
-# SSL/Certbot kontrolü
+ #SSL/Certbot kontrolü
 check_ssl_health() {
     echo -e "\n${BLUE}━━━ SSL Sertifika Yönetimi ━━━${NC}"
     
     if command -v certbot &>/dev/null; then
         print_success "Certbot: ${GREEN}Yüklü${NC}"
         
-        local certbot_version=$ - certbot --version 2>&1 | grep -oP '\d+\.\d+\.\d+' | head -1
+        local certbot_version=$certbot --version 2>&1 | grep -oP '\d+\.\d+\.\d+' | head -1
         echo -e "   ${CYAN}Versiyon:${NC} ${certbot_version}"
         
-        local certs=$ - certbot certificates 2>/dev/null | grep "Certificate Name:" | wc -l
+        local certs=$certbot certificates 2>/dev/null | grep "Certificate Name:" | wc -l
         echo -e "   ${CYAN}Yüklü sertifikalar:${NC} ${certs}"
         
         if [ $certs -gt 0 ]; then
@@ -16379,18 +16379,18 @@ check_ssl_health() {
     fi
 }
 
-# Sistem kaynakları kontrolü
+ #Sistem kaynakları kontrolü
 check_system_resources() {
     echo -e "\n${BLUE}━━━ Sistem Kaynakları ━━━${NC}"
     
     # CPU kullanımı
-    local cpu_usage=$ - top -bn1 | grep "Cpu(s" | awk '{print $2}' | cut -d'%' -f1)
+    local cpu_usage=$top -bn1 | grep "Cpu(s" | awk '{print $2}' | cut -d'%' -f1)
     echo -e "${CYAN}CPU Kullanımı:${NC} ${cpu_usage}%"
     
     # Memory kullanımı
-    local mem_total=$ - free -h | grep "Mem:" | awk '{print $2}'
-    local mem_used=$ - free -h | grep "Mem:" | awk '{print $3}'
-    local mem_percent=$ - free | grep Mem | awk '{printf "%.1f", ($3/$2 * 100}')
+    local mem_total=$free -h | grep "Mem:" | awk '{print $2}'
+    local mem_used=$free -h | grep "Mem:" | awk '{print $3}'
+    local mem_percent=$free | grep Mem | awk '{printf "%.1f", ($3/$2 * 100}')
     echo -e "${CYAN}Memory:${NC} ${mem_used}/${mem_total}  - ${mem_percent}%"
     
     # Disk kullanımı
@@ -16398,15 +16398,15 @@ check_system_resources() {
     df -h / /var /home 2>/dev/null | tail -n +2 | awk '{printf "  %s: %s/%s  - %s\n", $6, $3, $2, $5}'
     
     # Load average
-    local load=$ - uptime | grep -oP 'load average: \K.*'
+    local load=$uptime | grep -oP 'load average: \K.*'
     echo -e "${CYAN}Load Average:${NC} ${load}"
     
     # Uptime
-    local uptime_str=$ - uptime -p | sed 's/up //'
+    local uptime_str=$uptime -p | sed 's/up //'
     echo -e "${CYAN}Sistem Uptime:${NC} ${uptime_str}"
 }
 
-# Network kontrolü
+ #Network kontrolü
 check_network_health() {
     echo -e "\n${BLUE}━━━ Network Bağlantıları ━━━${NC}"
     
@@ -16416,7 +16416,7 @@ check_network_health() {
     echo ""
     
     # Aktif bağlantılar
-    local connections=$ - netstat -an 2>/dev/null | grep ESTABLISHED | wc -l
+    local connections=$netstat -an 2>/dev/null | grep ESTABLISHED | wc -l
     echo -e "${CYAN}Aktif Bağlantılar:${NC} ${connections}"
 }
 
@@ -16432,15 +16432,15 @@ show_service_summary() {
     
     # Başarı oranı hesapla
     if [ $TOTAL_SERVICES -gt 0 ]; then
-        local success_rate=$ - awk "BEGIN {printf \"%.1f\", ($RUNNING_SERVICES/$TOTAL_SERVICES*100}")
+        local success_rate=$awk "BEGIN {printf \"%.1f\", ($RUNNING_SERVICES/$TOTAL_SERVICES*100}")
         echo ""
         echo -e "${CYAN}Sistem Sağlığı:${NC} ${success_rate}%"
         
-        if  - ( $(echo "$success_rate >= 90" | bc -l 2>/dev/null || echo "0" )); then
+        if (( $(echo "$success_rate >= 90" | bc -l 2>/dev/null || echo "0" )); then
             echo -e "${GREEN}█████████░ Mükemmel${NC}"
-        elif  - ( $(echo "$success_rate >= 70" | bc -l 2>/dev/null || echo "0" )); then
+        elif (( $(echo "$success_rate >= 70" | bc -l 2>/dev/null || echo "0" )); then
             echo -e "${YELLOW}███████░░░ İyi${NC}"
-        elif  - ( $(echo "$success_rate >= 50" | bc -l 2>/dev/null || echo "0" )); then
+        elif (( $(echo "$success_rate >= 50" | bc -l 2>/dev/null || echo "0" )); then
             echo -e "${YELLOW}█████░░░░░ Orta${NC}"
         else
             echo -e "${RED}███░░░░░░░ Zayıf${NC}"
@@ -16448,10 +16448,10 @@ show_service_summary() {
     fi
     
     echo ""
-    echo -e "${CYAN}Rapor Tarihi:${NC} $ - date '+%d-%m-%Y %H:%M:%S'"
+    echo -e "${CYAN}Rapor Tarihi:${NC} $date '+%d-%m-%Y %H:%M:%S'"
 }
 
-# Ana servis kontrol menüsü
+ #Ana servis kontrol menüsü
 service_health_check_menu() {
     while true; do
         clear
@@ -16564,7 +16564,7 @@ service_health_check_menu() {
 }
 
 # ==========================================
-# ANA MENÜ
+ #ANA MENÜ
 # ==========================================
 
 main_menu() {
@@ -16610,7 +16610,7 @@ main_menu() {
         
         # Multi-server modu göstergesi
         if [ "$MULTI_SERVER_MODE" = true ]; then
-            local current_role=$ - get_server_role
+            local current_role=$get_server_role
             echo -e "${GREEN}✓ Multi-Server Modu Aktif${NC} - Rol: $current_role"
             echo ""
         fi
@@ -16716,12 +16716,12 @@ main_menu() {
                 # PHP versiyonunu tespit et
                 local menu_php_version=""
                 if command -v php &> /dev/null; then
-                    menu_php_version=$ - php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
+                    menu_php_version=$php -v 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1
                 fi
                 
                 if [ -z "$menu_php_version" ]; then
                     # PHP-FPM'den tespit et
-                    menu_php_version=$ - systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
+                    menu_php_version=$systemctl list-units --type=service --all 2>/dev/null | grep "php.*-fpm" | head -1 | sed 's/.*php\([0-9.]*\-fpm.*/\1/' | grep -E "^[0-9]+\.[0-9]+" || echo "")
                 fi
                 
                 fix_php_duplicate_modules "$menu_php_version"
@@ -16935,9 +16935,9 @@ run_new_installation() {
     [ "$INSTALL_NGINX" = true ] && echo "✓ Nginx - http://$ALAN_ADI"
     [ "$INSTALL_PHP" = true ] && echo "✓ PHP $PHP_VERSION - http://$ALAN_ADI/info.php"
     [ "$INSTALL_MYSQL" = true ] && echo "✓ MySQL - Port: 3306"
-    [ "$INSTALL_NODEJS" = true ] && echo "✓ Node.js - $ - node --version"
+    [ "$INSTALL_NODEJS" = true ] && echo "✓ Node.js - $node --version"
     [ "$INSTALL_REDIS" = true ] && echo "✓ Redis - Port: 6379"
-    [ "$INSTALL_COMPOSER" = true ] && echo "✓ Composer - $ - composer --version 2>/dev/null | head -1"
+    [ "$INSTALL_COMPOSER" = true ] && echo "✓ Composer - $composer --version 2>/dev/null | head -1"
     [ "$INSTALL_PHPMYADMIN" = true ] && echo "✓ phpMyAdmin - http://$ALAN_ADI/phpmyadmin"
     [ "$INSTALL_SSL" = true ] && echo "✓ SSL - https://$ALAN_ADI"
     
@@ -16950,9 +16950,9 @@ run_new_installation() {
     print_success "Modüler kurulum başarıyla tamamlandı!"
 }
 
-# Ana program başlangıcı
-# Multi-server yapılandırmasını yükle  - varsa
+ #Ana program başlangıcı
+ #Multi-server yapılandırmasını yükle  - varsa
 load_multi_server_config
 
-# Ana menüyü başlat
+ #Ana menüyü başlat
 main_menu
