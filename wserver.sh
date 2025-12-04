@@ -14584,7 +14584,7 @@ check_replication_status() {
     # Master kontrolü
     local is_master=$(mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null)
     if [ "$is_master" = "1" ]; then
-        print_success "Bu sunucu MASTER olarak yapılandırılmış (Binary log aktif)"
+        print_success "Bu sunucu MASTER olarak yapılandırılmış - Binary log aktif"
         local master_file=$(mysql_cmd -N -e "SHOW MASTER STATUS" 2>/dev/null | awk '{print $1}')
         local master_pos=$(mysql_cmd -N -e "SHOW MASTER STATUS" 2>/dev/null | awk '{print $2}')
         echo -e "  Binary Log File: ${master_file}"
@@ -14601,7 +14601,7 @@ check_replication_status() {
     
     if [ -n "$slave_io" ]; then
         if [ "$slave_io" = "Yes" ] && [ "$slave_sql" = "Yes" ]; then
-            print_success "Bu sunucu SLAVE olarak çalışıyor (Replication aktif)"
+            print_success "Bu sunucu SLAVE olarak çalışıyor - Replication aktif"
         else
             print_error "Bu sunucu SLAVE olarak yapılandırılmış ama çalışmıyor!"
             echo -e "  Slave_IO_Running: ${slave_io}"
