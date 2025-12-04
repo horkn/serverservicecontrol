@@ -13415,6 +13415,1289 @@ EOF
     echo "   Veya 'Nginx Domain'lerini DNS'e Ekle' seçeneğini kullanabilirsiniz."
 }
 
+# ==========================================
+# MYSQL/MARIADB YÖNETİM FONKSİYONLARI
+# ==========================================
+
+# MySQL bağlantı kontrolü
+check_mysql_connection() {
+    if ! command -v mysql &>/dev/null; then
+        print_error "MySQL/MariaDB istemcisi bulunamadı!"
+        return 1
+    fi
+    
+    if ! systemctl is-active --quiet mariadb 2>/dev/null && ! systemctl is-active --quiet mysql 2>/dev/null; then
+        print_error "MySQL/MariaDB servisi çalışmıyor!"
+        echo -e "${YELLOW}Servisi başlatmak ister misiniz? (e/h):${NC} "
+        read -r start_mysql
+        if [[ $start_mysql =~ ^[Ee]$ ]]; then
+            systemctl start mariadb 2>/dev/null || systemctl start mysql 2>/dev/null
+            sleep 2
+        else
+            return 1
+        fi
+    fi
+    
+    if ! mysql -e "SELECT 1;" &>/dev/null; then
+        print_warning "Root şifresi gerekli. Şifresiz bağlantı deneyin veya şifre girin."
+        return 2
+    fi
+    
+    return 0
+}
+
+# Veritabanı listesi göster
+list_databases() {
+    print_header "Veritabanı Listesi"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    echo -e "${CYAN}Mevcut Veritabanları:${NC}"
+    echo ""
+    
+    mysql -e "SELECT 
+        SCHEMA_NAME as 'Veritabanı',
+        DEFAULT_CHARACTER_SET_NAME as 'Karakter Seti',
+        DEFAULT_COLLATION_NAME as 'Collation',
+        ROUND(SUM(DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) as 'Boyut (MB)'
+    FROM information_schema.SCHEMATA
+    LEFT JOIN information_schema.TABLES ON SCHEMATA.SCHEMA_NAME = TABLES.TABLE_SCHEMA
+    WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+    GROUP BY SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME
+    ORDER BY SCHEMA_NAME;" 2>/dev/null || mysql -e "SHOW DATABASES;"
+    
+    echo ""
+    
+    # Toplam istatistikler
+    local db_count=$(mysql -N -e "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null)
+    local total_size=$(mysql -N -e "SELECT ROUND(SUM(DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null)
+    
+    echo -e "${GREEN}Toplam Veritabanı:${NC} ${db_count}"
+    echo -e "${GREEN}Toplam Boyut:${NC} ${total_size} MB"
+}
+
+# Yeni veritabanı oluştur
+create_database() {
+    print_header "Yeni Veritabanı Oluştur"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    local db_name=""
+    local charset="utf8mb4"
+    local collation="utf8mb4_unicode_ci"
+    
+    read -p "Veritabanı adı: " db_name
+    
+    if [ -z "$db_name" ]; then
+        print_error "Veritabanı adı boş olamaz!"
+        return 1
+    fi
+    
+    # Veritabanı zaten var mı kontrol et
+    if mysql -e "USE $db_name;" 2>/dev/null; then
+        print_error "Bu veritabanı zaten mevcut!"
+        return 1
+    fi
+    
+    echo ""
+    echo "Karakter seti seçin:"
+    echo "1) utf8mb4 (Önerilen - Emoji desteği)"
+    echo "2) utf8"
+    echo "3) latin1"
+    read -p "Seçim [1]: " charset_choice
+    
+    case $charset_choice in
+        2) charset="utf8"; collation="utf8_unicode_ci";;
+        3) charset="latin1"; collation="latin1_swedish_ci";;
+        *) charset="utf8mb4"; collation="utf8mb4_unicode_ci";;
+    esac
+    
+    print_info "Veritabanı oluşturuluyor: $db_name"
+    
+    if mysql -e "CREATE DATABASE \`$db_name\` CHARACTER SET $charset COLLATE $collation;" 2>/dev/null; then
+        print_success "✓ Veritabanı başarıyla oluşturuldu!"
+        echo -e "${GREEN}Adı:${NC} $db_name"
+        echo -e "${GREEN}Karakter Seti:${NC} $charset"
+        echo -e "${GREEN}Collation:${NC} $collation"
+        
+        # Kullanıcı oluşturmak ister mi?
+        echo ""
+        if ask_yes_no "Bu veritabanı için yeni kullanıcı oluşturmak ister misiniz?"; then
+            create_database_user "$db_name"
+        fi
+    else
+        print_error "Veritabanı oluşturulurken hata oluştu!"
+        return 1
+    fi
+}
+
+# Veritabanı sil
+delete_database() {
+    print_header "Veritabanı Sil"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    # Veritabanı listesini göster
+    echo -e "${CYAN}Mevcut Veritabanları:${NC}"
+    mysql -N -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys') ORDER BY SCHEMA_NAME;" 2>/dev/null | nl
+    
+    echo ""
+    read -p "Silinecek veritabanı adı: " db_name
+    
+    if [ -z "$db_name" ]; then
+        print_error "Veritabanı adı boş olamaz!"
+        return 1
+    fi
+    
+    # Veritabanı var mı kontrol et
+    if ! mysql -e "USE $db_name;" 2>/dev/null; then
+        print_error "Bu veritabanı mevcut değil!"
+        return 1
+    fi
+    
+    # Sistem veritabanlarını koruma
+    if [[ "$db_name" =~ ^(information_schema|mysql|performance_schema|sys)$ ]]; then
+        print_error "Sistem veritabanları silinemez!"
+        return 1
+    fi
+    
+    # Onay al
+    print_warning "⚠️  DİKKAT: Bu işlem geri alınamaz!"
+    echo -e "${RED}Veritabanı: ${db_name}${NC}"
+    echo ""
+    
+    if ! ask_yes_no "Bu veritabanını silmek istediğinizden emin misiniz?"; then
+        print_info "İşlem iptal edildi."
+        return 0
+    fi
+    
+    # Ekstra güvenlik onayı
+    echo -e "${YELLOW}Onaylamak için veritabanı adını tekrar yazın:${NC} "
+    read -p "> " confirm_name
+    
+    if [ "$confirm_name" != "$db_name" ]; then
+        print_error "Veritabanı adı eşleşmiyor. İşlem iptal edildi."
+        return 1
+    fi
+    
+    print_info "Veritabanı siliniyor..."
+    
+    if mysql -e "DROP DATABASE \`$db_name\`;" 2>/dev/null; then
+        print_success "✓ Veritabanı başarıyla silindi: $db_name"
+    else
+        print_error "Veritabanı silinirken hata oluştu!"
+        return 1
+    fi
+}
+
+# Kullanıcı listesi göster
+list_mysql_users() {
+    print_header "MySQL Kullanıcı Listesi"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    echo -e "${CYAN}Mevcut Kullanıcılar:${NC}"
+    echo ""
+    
+    mysql -e "SELECT 
+        User as 'Kullanıcı',
+        Host as 'Host',
+        plugin as 'Auth Plugin',
+        password_expired as 'Şifre Süresi Dolmuş'
+    FROM mysql.user
+    WHERE User != ''
+    ORDER BY User, Host;" 2>/dev/null
+    
+    echo ""
+    
+    # Toplam kullanıcı sayısı
+    local user_count=$(mysql -N -e "SELECT COUNT(*) FROM mysql.user WHERE User != '';" 2>/dev/null)
+    echo -e "${GREEN}Toplam Kullanıcı:${NC} ${user_count}"
+}
+
+# Kullanıcı yetkilerini göster
+show_user_grants() {
+    print_header "Kullanıcı Yetkileri"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    read -p "Kullanıcı adı: " username
+    read -p "Host [localhost]: " user_host
+    user_host=${user_host:-localhost}
+    
+    echo ""
+    echo -e "${CYAN}Kullanıcı: ${username}@${user_host}${NC}"
+    echo ""
+    
+    if mysql -e "SHOW GRANTS FOR '${username}'@'${user_host}';" 2>/dev/null; then
+        echo ""
+        print_success "Yetkiler başarıyla gösterildi."
+    else
+        print_error "Kullanıcı bulunamadı veya yetki sorgulanamadı!"
+        return 1
+    fi
+}
+
+# Yeni kullanıcı oluştur
+create_database_user() {
+    local target_db=$1
+    
+    if [ -z "$target_db" ]; then
+        print_header "Yeni Kullanıcı Oluştur"
+        
+        if ! check_mysql_connection; then
+            return 1
+        fi
+        
+        # Veritabanı seçimi
+        echo -e "${CYAN}Mevcut Veritabanları:${NC}"
+        mysql -N -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys') ORDER BY SCHEMA_NAME;" 2>/dev/null | nl
+        
+        echo ""
+        read -p "Veritabanı adı (boş bırakırsanız tüm veritabanlarına erişim): " target_db
+    fi
+    
+    local username=""
+    local password=""
+    local user_host="localhost"
+    
+    read -p "Kullanıcı adı: " username
+    
+    if [ -z "$username" ]; then
+        print_error "Kullanıcı adı boş olamaz!"
+        return 1
+    fi
+    
+    read -sp "Şifre: " password
+    echo ""
+    
+    if [ -z "$password" ]; then
+        print_error "Şifre boş olamaz!"
+        return 1
+    fi
+    
+    echo ""
+    echo "Erişim kaynağı:"
+    echo "1) localhost (Sadece yerel sunucu)"
+    echo "2) % (Tüm IP'ler - Güvensiz)"
+    echo "3) Belirli IP/subnet"
+    read -p "Seçim [1]: " host_choice
+    
+    case $host_choice in
+        2) user_host="%";;
+        3) 
+            read -p "IP veya subnet (örn: 192.168.1.% veya 10.0.0.5): " user_host
+            if [ -z "$user_host" ]; then
+                user_host="localhost"
+            fi
+            ;;
+        *) user_host="localhost";;
+    esac
+    
+    print_info "Kullanıcı oluşturuluyor: ${username}@${user_host}"
+    
+    # Kullanıcı oluştur
+    if mysql -e "CREATE USER '${username}'@'${user_host}' IDENTIFIED BY '${password}';" 2>/dev/null; then
+        print_success "✓ Kullanıcı başarıyla oluşturuldu!"
+        
+        # Yetkilendirme
+        if [ -n "$target_db" ]; then
+            # Belirli veritabanına yetki ver
+            if mysql -e "GRANT ALL PRIVILEGES ON \`${target_db}\`.* TO '${username}'@'${user_host}';" 2>/dev/null; then
+                print_success "✓ Veritabanı yetkisi verildi: $target_db"
+            fi
+        else
+            # Yetki seçimi sun
+            echo ""
+            echo "Yetki seviyesi:"
+            echo "1) Tüm yetkiler (ALL PRIVILEGES)"
+            echo "2) Sadece okuma (SELECT)"
+            echo "3) Okuma ve yazma (SELECT, INSERT, UPDATE, DELETE)"
+            echo "4) Özel yetki tanımlama"
+            read -p "Seçim [3]: " priv_choice
+            
+            local privileges=""
+            case $priv_choice in
+                1) privileges="ALL PRIVILEGES";;
+                2) privileges="SELECT";;
+                4) 
+                    read -p "Yetkileri virgülle ayırarak girin (örn: SELECT,INSERT,UPDATE): " privileges
+                    ;;
+                *) privileges="SELECT, INSERT, UPDATE, DELETE";;
+            esac
+            
+            read -p "Veritabanı (* = tümü) [*]: " grant_db
+            grant_db=${grant_db:-*}
+            
+            if mysql -e "GRANT ${privileges} ON \`${grant_db}\`.* TO '${username}'@'${user_host}';" 2>/dev/null; then
+                print_success "✓ Yetkiler başarıyla verildi!"
+            fi
+        fi
+        
+        # Yetkileri uygula
+        mysql -e "FLUSH PRIVILEGES;" 2>/dev/null
+        
+        echo ""
+        echo -e "${GREEN}Kullanıcı Bilgileri:${NC}"
+        echo -e "${CYAN}Kullanıcı:${NC} ${username}"
+        echo -e "${CYAN}Host:${NC} ${user_host}"
+        [ -n "$target_db" ] && echo -e "${CYAN}Veritabanı:${NC} ${target_db}"
+        
+    else
+        print_error "Kullanıcı oluşturulurken hata oluştu!"
+        print_info "Kullanıcı zaten mevcut olabilir."
+        return 1
+    fi
+}
+
+# Kullanıcı sil
+delete_mysql_user() {
+    print_header "Kullanıcı Sil"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    # Kullanıcı listesini göster
+    echo -e "${CYAN}Mevcut Kullanıcılar:${NC}"
+    mysql -e "SELECT User, Host FROM mysql.user WHERE User != '' ORDER BY User;" 2>/dev/null
+    
+    echo ""
+    read -p "Silinecek kullanıcı adı: " username
+    read -p "Host [localhost]: " user_host
+    user_host=${user_host:-localhost}
+    
+    if [ -z "$username" ]; then
+        print_error "Kullanıcı adı boş olamaz!"
+        return 1
+    fi
+    
+    # Root kullanıcısını koruma
+    if [ "$username" = "root" ]; then
+        print_error "Root kullanıcısı silinemez!"
+        return 1
+    fi
+    
+    # Onay al
+    print_warning "⚠️  Kullanıcı silinecek: ${username}@${user_host}"
+    
+    if ! ask_yes_no "Silmek istediğinizden emin misiniz?"; then
+        print_info "İşlem iptal edildi."
+        return 0
+    fi
+    
+    print_info "Kullanıcı siliniyor..."
+    
+    if mysql -e "DROP USER '${username}'@'${user_host}';" 2>/dev/null; then
+        mysql -e "FLUSH PRIVILEGES;" 2>/dev/null
+        print_success "✓ Kullanıcı başarıyla silindi: ${username}@${user_host}"
+    else
+        print_error "Kullanıcı silinirken hata oluştu!"
+        return 1
+    fi
+}
+
+# Kullanıcı şifresini değiştir
+change_mysql_password() {
+    print_header "Kullanıcı Şifresi Değiştir"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    read -p "Kullanıcı adı: " username
+    read -p "Host [localhost]: " user_host
+    user_host=${user_host:-localhost}
+    
+    if [ -z "$username" ]; then
+        print_error "Kullanıcı adı boş olamaz!"
+        return 1
+    fi
+    
+    read -sp "Yeni şifre: " new_password
+    echo ""
+    
+    if [ -z "$new_password" ]; then
+        print_error "Şifre boş olamaz!"
+        return 1
+    fi
+    
+    read -sp "Şifre tekrar: " new_password_confirm
+    echo ""
+    
+    if [ "$new_password" != "$new_password_confirm" ]; then
+        print_error "Şifreler eşleşmiyor!"
+        return 1
+    fi
+    
+    print_info "Şifre değiştiriliyor..."
+    
+    if mysql -e "ALTER USER '${username}'@'${user_host}' IDENTIFIED BY '${new_password}';" 2>/dev/null; then
+        mysql -e "FLUSH PRIVILEGES;" 2>/dev/null
+        print_success "✓ Şifre başarıyla değiştirildi: ${username}@${user_host}"
+    else
+        print_error "Şifre değiştirilirken hata oluştu!"
+        return 1
+    fi
+}
+
+# MySQL/MariaDB ayarlarını göster
+show_mysql_settings() {
+    print_header "MySQL/MariaDB Ayarları"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    echo -e "${CYAN}Sistem Bilgileri:${NC}"
+    mysql -e "SELECT 
+        @@version as 'Versiyon',
+        @@version_comment as 'Dağıtım',
+        @@datadir as 'Veri Dizini',
+        @@socket as 'Socket',
+        @@port as 'Port';" 2>/dev/null
+    
+    echo ""
+    echo -e "${CYAN}Bellek ve Performans:${NC}"
+    mysql -e "SELECT 
+        @@max_connections as 'Max Bağlantı',
+        @@innodb_buffer_pool_size / 1024 / 1024 / 1024 as 'InnoDB Buffer (GB)',
+        @@query_cache_size / 1024 / 1024 as 'Query Cache (MB)',
+        @@tmp_table_size / 1024 / 1024 as 'Tmp Table Size (MB)',
+        @@max_allowed_packet / 1024 / 1024 as 'Max Packet (MB)';" 2>/dev/null
+    
+    echo ""
+    echo -e "${CYAN}Aktif Bağlantılar:${NC}"
+    mysql -e "SHOW PROCESSLIST;" 2>/dev/null | head -20
+    
+    echo ""
+    echo -e "${CYAN}Durum İstatistikleri:${NC}"
+    mysql -e "SHOW STATUS LIKE 'Threads%'; SHOW STATUS LIKE 'Questions'; SHOW STATUS LIKE 'Uptime';" 2>/dev/null
+}
+
+# MySQL/MariaDB performans optimizasyonu
+optimize_mysql_performance() {
+    print_header "MySQL/MariaDB Performans Optimizasyonu"
+    
+    if ! check_mysql_connection; then
+        return 1
+    fi
+    
+    # Sistem belleğini tespit et
+    local total_mem=$(free -m | grep Mem: | awk '{print $2}')
+    local recommended_buffer=$(($total_mem / 2))
+    
+    echo -e "${CYAN}Sistem Bilgileri:${NC}"
+    echo -e "Toplam RAM: ${total_mem} MB"
+    echo -e "Önerilen InnoDB Buffer: ${recommended_buffer} MB"
+    echo ""
+    
+    echo -e "${CYAN}Optimizasyon Seçenekleri:${NC}"
+    echo "1) InnoDB Buffer Pool Size Ayarla"
+    echo "2) Max Connections Ayarla"
+    echo "3) Slow Query Log Etkinleştir/Kapat"
+    echo "4) Tüm Tabloları Optimize Et"
+    echo "5) Tüm Tabloları Analyze Et"
+    echo "0) Geri Dön"
+    echo ""
+    
+    read -p "Seçiminiz: " opt_choice
+    
+    case $opt_choice in
+        1)
+            read -p "InnoDB Buffer Pool Size (MB) [${recommended_buffer}]: " buffer_size
+            buffer_size=${buffer_size:-$recommended_buffer}
+            
+            print_info "Buffer pool size değiştiriliyor..."
+            echo "innodb_buffer_pool_size = ${buffer_size}M" >> /etc/mysql/mariadb.conf.d/50-server.cnf 2>/dev/null || \
+            echo "innodb_buffer_pool_size = ${buffer_size}M" >> /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null
+            
+            print_warning "Değişikliğin etkili olması için MySQL'i yeniden başlatmanız gerekir."
+            if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+                systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
+                print_success "MySQL yeniden başlatıldı."
+            fi
+            ;;
+        2)
+            read -p "Max Connections [151]: " max_conn
+            max_conn=${max_conn:-151}
+            
+            mysql -e "SET GLOBAL max_connections = $max_conn;" 2>/dev/null
+            print_success "Max connections değiştirildi: $max_conn"
+            ;;
+        3)
+            local slow_log=$(mysql -N -e "SELECT @@slow_query_log;" 2>/dev/null)
+            if [ "$slow_log" = "1" ]; then
+                mysql -e "SET GLOBAL slow_query_log = 0;" 2>/dev/null
+                print_success "Slow query log devre dışı bırakıldı."
+            else
+                mysql -e "SET GLOBAL slow_query_log = 1; SET GLOBAL long_query_time = 2;" 2>/dev/null
+                print_success "Slow query log etkinleştirildi (2 saniyeden uzun sorgular)."
+            fi
+            ;;
+        4)
+            print_info "Tüm tablolar optimize ediliyor... (Bu işlem uzun sürebilir)"
+            mysql -N -e "SELECT CONCAT('OPTIMIZE TABLE \`', table_schema, '\`.\`', table_name, '\`;') 
+            FROM information_schema.tables 
+            WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null | mysql 2>/dev/null
+            print_success "Tüm tablolar optimize edildi."
+            ;;
+        5)
+            print_info "Tüm tablolar analyze ediliyor..."
+            mysql -N -e "SELECT CONCAT('ANALYZE TABLE \`', table_schema, '\`.\`', table_name, '\`;') 
+            FROM information_schema.tables 
+            WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" 2>/dev/null | mysql 2>/dev/null
+            print_success "Tüm tablolar analyze edildi."
+            ;;
+    esac
+}
+
+# MySQL/MariaDB yönetim menüsü
+mysql_management_menu() {
+    while true; do
+        clear
+        print_header "MYSQL/MARIADB YÖNETİM PANELİ"
+        
+        # MySQL durumunu kontrol et
+        if systemctl is-active --quiet mariadb 2>/dev/null || systemctl is-active --quiet mysql 2>/dev/null; then
+            echo -e "${GREEN}✓ MySQL/MariaDB Durumu: Çalışıyor${NC}"
+        else
+            echo -e "${RED}✗ MySQL/MariaDB Durumu: Durmuş${NC}"
+        fi
+        
+        echo ""
+        echo -e "${CYAN}Veritabanı Yönetimi:${NC}"
+        echo "  1) Veritabanı Listesi"
+        echo "  2) Yeni Veritabanı Oluştur"
+        echo "  3) Veritabanı Sil"
+        echo ""
+        echo -e "${CYAN}Kullanıcı Yönetimi:${NC}"
+        echo "  4) Kullanıcı Listesi"
+        echo "  5) Yeni Kullanıcı Oluştur"
+        echo "  6) Kullanıcı Sil"
+        echo "  7) Kullanıcı Şifresi Değiştir"
+        echo "  8) Kullanıcı Yetkilerini Göster"
+        echo ""
+        echo -e "${CYAN}Sistem ve Performans:${NC}"
+        echo "  9) MySQL Ayarlarını Göster"
+        echo " 10) Performans Optimizasyonu"
+        echo " 11) Yedekleme (Backup) - Tüm Veritabanları"
+        echo " 12) Geri Yükleme (Restore)"
+        echo ""
+        echo "  0) Ana Menüye Dön"
+        echo ""
+        
+        read -p "Seçiminiz [0-12]: " mysql_choice
+        
+        case $mysql_choice in
+            1)
+                list_databases
+                ;;
+            2)
+                create_database
+                ;;
+            3)
+                delete_database
+                ;;
+            4)
+                list_mysql_users
+                ;;
+            5)
+                create_database_user
+                ;;
+            6)
+                delete_mysql_user
+                ;;
+            7)
+                change_mysql_password
+                ;;
+            8)
+                show_user_grants
+                ;;
+            9)
+                show_mysql_settings
+                ;;
+            10)
+                optimize_mysql_performance
+                ;;
+            11)
+                backup_database
+                ;;
+            12)
+                restore_database
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "Geçersiz seçim!"
+                sleep 2
+                continue
+                ;;
+        esac
+        
+        echo ""
+        echo -ne "${CYAN}Devam etmek için Enter'a basın...${NC}"
+        read -r
+    done
+}
+
+# ==========================================
+# SERVİS SAĞLIK KONTROLÜ FONKSİYONLARI
+# ==========================================
+
+# Global servis kontrol değişkenleri
+TOTAL_SERVICES=0
+RUNNING_SERVICES=0
+STOPPED_SERVICES=0
+ERROR_SERVICES=0
+NOT_INSTALLED_SERVICES=0
+
+# Servis durumu kontrolü
+check_service_status() {
+    local service_name=$1
+    local display_name=$2
+    
+    TOTAL_SERVICES=$((TOTAL_SERVICES + 1))
+    
+    # Servis yüklü mü kontrol et
+    if ! systemctl list-unit-files | grep -q "^${service_name}"; then
+        print_warning "${display_name}: ${YELLOW}Yüklü Değil${NC}"
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1))
+        return 2
+    fi
+    
+    # Servis durumunu kontrol et
+    if systemctl is-active --quiet "${service_name}"; then
+        print_success "${display_name}: ${GREEN}Çalışıyor${NC}"
+        RUNNING_SERVICES=$((RUNNING_SERVICES + 1))
+        
+        # Servis detayları
+        echo -e "   ${CYAN}PID:${NC} $(systemctl show -p MainPID --value "${service_name}")"
+        echo -e "   ${CYAN}Uptime:${NC} $(systemctl show -p ActiveEnterTimestamp --value "${service_name}" | cut -d' ' -f2-4)"
+        echo -e "   ${CYAN}Memory:${NC} $(systemctl show -p MemoryCurrent --value "${service_name}" | awk '{if($1>0) printf "%.2f MB", $1/1024/1024; else print "N/A"}')"
+        
+        return 0
+    elif systemctl is-enabled --quiet "${service_name}" 2>/dev/null; then
+        print_error "${display_name}: ${RED}Durmuş (Enabled ama çalışmıyor)${NC}"
+        STOPPED_SERVICES=$((STOPPED_SERVICES + 1))
+        
+        # Son 5 log satırını göster
+        echo -e "   ${YELLOW}Son loglar:${NC}"
+        journalctl -u "${service_name}" -n 5 --no-pager 2>/dev/null | tail -n 5 | sed 's/^/   /'
+        
+        return 1
+    else
+        print_warning "${display_name}: ${YELLOW}Devre Dışı${NC}"
+        STOPPED_SERVICES=$((STOPPED_SERVICES + 1))
+        return 1
+    fi
+}
+
+# Port kontrolü
+check_port() {
+    local port=$1
+    local service_name=$2
+    
+    if netstat -tuln 2>/dev/null | grep -q ":${port} " || ss -tuln 2>/dev/null | grep -q ":${port} "; then
+        print_success "${service_name} portu (${port}): ${GREEN}Dinliyor${NC}"
+        
+        # Port detayları
+        local process=$(lsof -i ":${port}" -P -n 2>/dev/null | grep LISTEN | awk '{print $1}' | head -1)
+        if [ -n "$process" ]; then
+            echo -e "   ${CYAN}Process:${NC} ${process}"
+        fi
+        return 0
+    else
+        print_error "${service_name} portu (${port}): ${RED}Dinlemiyor${NC}"
+        return 1
+    fi
+}
+
+# Nginx kontrolü
+check_nginx_health() {
+    echo -e "\n${BLUE}━━━ Nginx Web Sunucusu ━━━${NC}"
+    
+    if check_service_status "nginx" "Nginx Service"; then
+        # Port kontrolü
+        check_port 80 "HTTP"
+        check_port 443 "HTTPS"
+        
+        # Konfigürasyon kontrolü
+        if nginx -t &>/dev/null; then
+            print_success "Nginx konfigürasyonu: ${GREEN}Geçerli${NC}"
+        else
+            print_error "Nginx konfigürasyonu: ${RED}Hatalı${NC}"
+            echo -e "   ${YELLOW}Test çıktısı:${NC}"
+            nginx -t 2>&1 | sed 's/^/   /'
+        fi
+        
+        # Site sayısı
+        local enabled_sites=$(ls -1 /etc/nginx/sites-enabled/ 2>/dev/null | wc -l)
+        echo -e "   ${CYAN}Aktif siteler:${NC} ${enabled_sites}"
+        
+        # SSL sertifikaları
+        local ssl_certs=$(find /etc/letsencrypt/live/ -maxdepth 1 -type d 2>/dev/null | wc -l)
+        if [ $ssl_certs -gt 1 ]; then
+            echo -e "   ${CYAN}SSL Sertifikaları:${NC} $((ssl_certs - 1)) domain"
+        fi
+    fi
+}
+
+# PHP-FPM kontrolü
+check_php_fpm_health() {
+    echo -e "\n${BLUE}━━━ PHP-FPM ━━━${NC}"
+    
+    local php_versions=$(ls -1 /etc/php/ 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$')
+    
+    if [ -z "$php_versions" ]; then
+        print_warning "PHP-FPM: ${YELLOW}Yüklü Değil${NC}"
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1))
+        return
+    fi
+    
+    for version in $php_versions; do
+        local service_name="php${version}-fpm"
+        
+        if check_service_status "$service_name" "PHP ${version} FPM"; then
+            # Pool sayısı
+            local pools=$(ls -1 /etc/php/${version}/fpm/pool.d/*.conf 2>/dev/null | wc -l)
+            echo -e "   ${CYAN}Pool sayısı:${NC} ${pools}"
+            
+            # Socket kontrolü
+            if [ -S "/run/php/php${version}-fpm.sock" ]; then
+                print_success "   Socket: ${GREEN}Mevcut${NC} (/run/php/php${version}-fpm.sock)"
+            fi
+            
+            # Eklentiler
+            local extensions=$(php${version} -m 2>/dev/null | wc -l)
+            echo -e "   ${CYAN}Yüklü eklentiler:${NC} ${extensions}"
+        fi
+        echo ""
+    done
+}
+
+# MariaDB/MySQL kontrolü
+check_mariadb_health() {
+    echo -e "\n${BLUE}━━━ MariaDB/MySQL Veritabanı ━━━${NC}"
+    
+    local service_found=false
+    
+    if systemctl list-unit-files | grep -q "^mariadb.service"; then
+        check_service_status "mariadb" "MariaDB"
+        service_found=true
+    elif systemctl list-unit-files | grep -q "^mysql.service"; then
+        check_service_status "mysql" "MySQL"
+        service_found=true
+    fi
+    
+    if [ "$service_found" = true ]; then
+        # Port kontrolü
+        check_port 3306 "MySQL/MariaDB"
+        
+        # Veritabanı bağlantı testi
+        if mysql -e "SELECT 1;" &>/dev/null; then
+            print_success "Veritabanı bağlantısı: ${GREEN}Başarılı${NC}"
+            
+            # Veritabanı sayısı
+            local db_count=$(mysql -e "SHOW DATABASES;" 2>/dev/null | wc -l)
+            echo -e "   ${CYAN}Veritabanı sayısı:${NC} $((db_count - 1))"
+            
+            # Versiyon
+            local db_version=$(mysql -V 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+            echo -e "   ${CYAN}Versiyon:${NC} ${db_version}"
+            
+            # Kullanıcı sayısı
+            local user_count=$(mysql -e "SELECT COUNT(*) FROM mysql.user;" 2>/dev/null | tail -1)
+            echo -e "   ${CYAN}Kullanıcı sayısı:${NC} ${user_count}"
+        else
+            print_error "Veritabanı bağlantısı: ${RED}Başarısız${NC}"
+            echo -e "   ${YELLOW}Root şifresi gerekiyor olabilir${NC}"
+        fi
+        
+        # Replication durumu
+        local replication=$(mysql -e "SHOW SLAVE STATUS\G" 2>/dev/null)
+        if [ -n "$replication" ]; then
+            print_info "Replication: ${CYAN}Aktif (Slave)${NC}"
+        fi
+    else
+        print_warning "MariaDB/MySQL: ${YELLOW}Yüklü Değil${NC}"
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1))
+    fi
+}
+
+# Redis kontrolü
+check_redis_health() {
+    echo -e "\n${BLUE}━━━ Redis Cache Sunucusu ━━━${NC}"
+    
+    local service_found=false
+    
+    if systemctl list-unit-files | grep -q "^redis-server.service"; then
+        check_service_status "redis-server" "Redis"
+        service_found=true
+    elif systemctl list-unit-files | grep -q "^redis.service"; then
+        check_service_status "redis" "Redis"
+        service_found=true
+    fi
+    
+    if [ "$service_found" = true ]; then
+        # Port kontrolü
+        check_port 6379 "Redis"
+        
+        # Redis bağlantı testi
+        if command -v redis-cli &>/dev/null; then
+            if redis-cli ping &>/dev/null | grep -q "PONG"; then
+                print_success "Redis bağlantısı: ${GREEN}Başarılı${NC}"
+                
+                # Redis bilgileri
+                local redis_version=$(redis-cli INFO server 2>/dev/null | grep "redis_version" | cut -d':' -f2 | tr -d '\r')
+                echo -e "   ${CYAN}Versiyon:${NC} ${redis_version}"
+                
+                local redis_keys=$(redis-cli DBSIZE 2>/dev/null | grep -oP '\d+')
+                echo -e "   ${CYAN}Key sayısı:${NC} ${redis_keys}"
+                
+                local redis_memory=$(redis-cli INFO memory 2>/dev/null | grep "used_memory_human" | cut -d':' -f2 | tr -d '\r')
+                echo -e "   ${CYAN}Bellek kullanımı:${NC} ${redis_memory}"
+                
+                # Replication durumu
+                local role=$(redis-cli INFO replication 2>/dev/null | grep "role:" | cut -d':' -f2 | tr -d '\r')
+                if [ "$role" = "slave" ]; then
+                    print_info "Replication: ${CYAN}Aktif (Slave)${NC}"
+                elif [ "$role" = "master" ]; then
+                    local slaves=$(redis-cli INFO replication 2>/dev/null | grep "connected_slaves:" | cut -d':' -f2 | tr -d '\r')
+                    if [ "$slaves" != "0" ]; then
+                        print_info "Replication: ${CYAN}Aktif (Master - ${slaves} slave)${NC}"
+                    fi
+                fi
+            else
+                print_error "Redis bağlantısı: ${RED}Başarısız${NC}"
+            fi
+        fi
+    else
+        print_warning "Redis: ${YELLOW}Yüklü Değil${NC}"
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1))
+    fi
+}
+
+# MongoDB kontrolü
+check_mongodb_health() {
+    echo -e "\n${BLUE}━━━ MongoDB NoSQL Veritabanı ━━━${NC}"
+    
+    local service_found=false
+    
+    if systemctl list-unit-files | grep -q "^mongod.service"; then
+        check_service_status "mongod" "MongoDB"
+        service_found=true
+    elif systemctl list-unit-files | grep -q "^mongodb.service"; then
+        check_service_status "mongodb" "MongoDB"
+        service_found=true
+    fi
+    
+    if [ "$service_found" = true ]; then
+        # Port kontrolü
+        check_port 27017 "MongoDB"
+        
+        # MongoDB bağlantı testi
+        if command -v mongosh &>/dev/null || command -v mongo &>/dev/null; then
+            local mongo_cmd="mongosh"
+            command -v mongosh &>/dev/null || mongo_cmd="mongo"
+            
+            if timeout 5 $mongo_cmd --eval "db.adminCommand('ping')" &>/dev/null; then
+                print_success "MongoDB bağlantısı: ${GREEN}Başarılı${NC}"
+                
+                # Veritabanı sayısı
+                local db_count=$($mongo_cmd --quiet --eval "db.adminCommand('listDatabases').databases.length" 2>/dev/null)
+                echo -e "   ${CYAN}Veritabanı sayısı:${NC} ${db_count}"
+                
+                # Versiyon
+                local mongo_version=$($mongo_cmd --quiet --eval "db.version()" 2>/dev/null | tr -d '"')
+                echo -e "   ${CYAN}Versiyon:${NC} ${mongo_version}"
+            else
+                print_error "MongoDB bağlantısı: ${RED}Başarısız${NC}"
+            fi
+        fi
+    else
+        print_warning "MongoDB: ${YELLOW}Yüklü Değil${NC}"
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1))
+    fi
+}
+
+# Docker kontrolü
+check_docker_health() {
+    echo -e "\n${BLUE}━━━ Docker Container Platformu ━━━${NC}"
+    
+    if check_service_status "docker" "Docker"; then
+        # Docker version
+        local docker_version=$(docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ',')
+        echo -e "   ${CYAN}Versiyon:${NC} ${docker_version}"
+        
+        # Container sayısı
+        local running_containers=$(docker ps -q 2>/dev/null | wc -l)
+        local all_containers=$(docker ps -aq 2>/dev/null | wc -l)
+        echo -e "   ${CYAN}Çalışan konteynerler:${NC} ${running_containers}/${all_containers}"
+        
+        # Image sayısı
+        local images=$(docker images -q 2>/dev/null | wc -l)
+        echo -e "   ${CYAN}Image sayısı:${NC} ${images}"
+        
+        # Docker Compose
+        if command -v docker-compose &>/dev/null; then
+            local compose_version=$(docker-compose --version 2>/dev/null | cut -d' ' -f4 | tr -d ',')
+            print_success "   Docker Compose: ${GREEN}Yüklü${NC} (${compose_version})"
+        fi
+    fi
+}
+
+# DNS kontrolü
+check_dns_health() {
+    echo -e "\n${BLUE}━━━ DNS Sunucusu ━━━${NC}"
+    
+    local service_found=false
+    
+    if systemctl list-unit-files | grep -q "^bind9.service"; then
+        check_service_status "bind9" "BIND9"
+        service_found=true
+        
+        # Zone sayısı
+        local zones=$(grep -c "^zone" /etc/bind/named.conf.local 2>/dev/null || echo "0")
+        echo -e "   ${CYAN}Zone sayısı:${NC} ${zones}"
+        
+        # Config test
+        if named-checkconf &>/dev/null; then
+            print_success "BIND9 konfigürasyonu: ${GREEN}Geçerli${NC}"
+        else
+            print_error "BIND9 konfigürasyonu: ${RED}Hatalı${NC}"
+        fi
+        
+    elif systemctl list-unit-files | grep -q "^named.service"; then
+        check_service_status "named" "Named (BIND)"
+        service_found=true
+    fi
+    
+    if [ "$service_found" = true ]; then
+        check_port 53 "DNS"
+    fi
+    
+    # DNSMasq kontrolü
+    if systemctl list-unit-files | grep -q "^dnsmasq.service"; then
+        check_service_status "dnsmasq" "DNSMasq"
+        service_found=true
+    fi
+    
+    if [ "$service_found" = false ]; then
+        print_warning "DNS Sunucusu: ${YELLOW}Yüklü Değil${NC}"
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1))
+    fi
+}
+
+# VPN kontrolü
+check_vpn_health() {
+    echo -e "\n${BLUE}━━━ VPN Servisleri ━━━${NC}"
+    
+    local vpn_found=false
+    
+    # OpenVPN
+    if systemctl list-unit-files | grep -q "openvpn"; then
+        if systemctl list-unit-files | grep -q "^openvpn@server.service"; then
+            check_service_status "openvpn@server" "OpenVPN Server"
+            vpn_found=true
+        elif systemctl list-unit-files | grep -q "^openvpn.service"; then
+            check_service_status "openvpn" "OpenVPN"
+            vpn_found=true
+        fi
+        check_port 1194 "OpenVPN"
+    fi
+    
+    # WireGuard
+    if systemctl list-unit-files | grep -q "wg-quick@"; then
+        check_service_status "wg-quick@wg0" "WireGuard"
+        vpn_found=true
+        
+        if ip link show wg0 &>/dev/null; then
+            print_success "WireGuard interface (wg0): ${GREEN}Aktif${NC}"
+            local peers=$(wg show wg0 peers 2>/dev/null | wc -l)
+            echo -e "   ${CYAN}Peer sayısı:${NC} ${peers}"
+        fi
+        check_port 51820 "WireGuard"
+    fi
+    
+    # Pritunl
+    if systemctl list-unit-files | grep -q "^pritunl.service"; then
+        check_service_status "pritunl" "Pritunl VPN"
+        vpn_found=true
+        check_port 9700 "Pritunl API"
+    fi
+    
+    if [ "$vpn_found" = false ]; then
+        print_warning "VPN Servisleri: ${YELLOW}Yüklü Değil${NC}"
+        NOT_INSTALLED_SERVICES=$((NOT_INSTALLED_SERVICES + 1))
+    fi
+}
+
+# Firewall kontrolü
+check_firewall_health() {
+    echo -e "\n${BLUE}━━━ Güvenlik Servisleri ━━━${NC}"
+    
+    # UFW
+    if command -v ufw &>/dev/null; then
+        local ufw_status=$(ufw status | head -1)
+        if echo "$ufw_status" | grep -q "active"; then
+            print_success "UFW Firewall: ${GREEN}Aktif${NC}"
+            local rules=$(ufw status numbered 2>/dev/null | grep -c "ALLOW")
+            echo -e "   ${CYAN}İzin verilen kurallar:${NC} ${rules}"
+        else
+            print_warning "UFW Firewall: ${YELLOW}Devre Dışı${NC}"
+        fi
+    else
+        print_warning "UFW: ${YELLOW}Yüklü Değil${NC}"
+    fi
+    
+    # Fail2ban
+    if systemctl list-unit-files | grep -q "^fail2ban.service"; then
+        if check_service_status "fail2ban" "Fail2ban"; then
+            if command -v fail2ban-client &>/dev/null; then
+                local jails=$(fail2ban-client status 2>/dev/null | grep "Jail list:" | cut -d':' -f2 | tr ',' '\n' | wc -l)
+                echo -e "   ${CYAN}Aktif jail sayısı:${NC} ${jails}"
+                
+                local total_banned=0
+                for jail in $(fail2ban-client status 2>/dev/null | grep "Jail list:" | cut -d':' -f2 | tr ',' ' '); do
+                    local banned=$(fail2ban-client status "$jail" 2>/dev/null | grep "Currently banned:" | grep -oP '\d+')
+                    total_banned=$((total_banned + banned))
+                done
+                echo -e "   ${CYAN}Toplam banlanan IP:${NC} ${total_banned}"
+            fi
+        fi
+    else
+        print_warning "Fail2ban: ${YELLOW}Yüklü Değil${NC}"
+    fi
+}
+
+# SSL/Certbot kontrolü
+check_ssl_health() {
+    echo -e "\n${BLUE}━━━ SSL Sertifika Yönetimi ━━━${NC}"
+    
+    if command -v certbot &>/dev/null; then
+        print_success "Certbot: ${GREEN}Yüklü${NC}"
+        
+        local certbot_version=$(certbot --version 2>&1 | grep -oP '\d+\.\d+\.\d+' | head -1)
+        echo -e "   ${CYAN}Versiyon:${NC} ${certbot_version}"
+        
+        local certs=$(certbot certificates 2>/dev/null | grep "Certificate Name:" | wc -l)
+        echo -e "   ${CYAN}Yüklü sertifikalar:${NC} ${certs}"
+        
+        if [ $certs -gt 0 ]; then
+            echo -e "   ${CYAN}Sertifika listesi:${NC}"
+            certbot certificates 2>/dev/null | grep -E "(Certificate Name:|Expiry Date:)" | sed 's/^/     /'
+        fi
+        
+        if systemctl list-timers | grep -q "certbot"; then
+            print_success "   Otomatik yenileme: ${GREEN}Aktif${NC}"
+        else
+            print_warning "   Otomatik yenileme: ${YELLOW}Ayarlanmamış${NC}"
+        fi
+    else
+        print_warning "Certbot: ${YELLOW}Yüklü Değil${NC}"
+    fi
+}
+
+# Sistem kaynakları kontrolü
+check_system_resources() {
+    echo -e "\n${BLUE}━━━ Sistem Kaynakları ━━━${NC}"
+    
+    # CPU kullanımı
+    local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
+    echo -e "${CYAN}CPU Kullanımı:${NC} ${cpu_usage}%"
+    
+    # Memory kullanımı
+    local mem_total=$(free -h | grep "Mem:" | awk '{print $2}')
+    local mem_used=$(free -h | grep "Mem:" | awk '{print $3}')
+    local mem_percent=$(free | grep Mem | awk '{printf "%.1f", ($3/$2) * 100}')
+    echo -e "${CYAN}Memory:${NC} ${mem_used}/${mem_total} (${mem_percent}%)"
+    
+    # Disk kullanımı
+    echo -e "${CYAN}Disk Kullanımı:${NC}"
+    df -h / /var /home 2>/dev/null | tail -n +2 | awk '{printf "  %s: %s/%s (%s)\n", $6, $3, $2, $5}'
+    
+    # Load average
+    local load=$(uptime | grep -oP 'load average: \K.*')
+    echo -e "${CYAN}Load Average:${NC} ${load}"
+    
+    # Uptime
+    local uptime_str=$(uptime -p | sed 's/up //')
+    echo -e "${CYAN}Sistem Uptime:${NC} ${uptime_str}"
+}
+
+# Network kontrolü
+check_network_health() {
+    echo -e "\n${BLUE}━━━ Network Bağlantıları ━━━${NC}"
+    
+    # Listening portlar (sadece ilk 20)
+    echo -e "${CYAN}Dinlenen Portlar (ilk 20):${NC}"
+    netstat -tuln 2>/dev/null | grep LISTEN | awk '{print $4}' | sed 's/.*://' | sort -n | uniq | head -20 | tr '\n' ' ' | fold -w 60 -s | sed 's/^/  /'
+    echo ""
+    
+    # Aktif bağlantılar
+    local connections=$(netstat -an 2>/dev/null | grep ESTABLISHED | wc -l)
+    echo -e "${CYAN}Aktif Bağlantılar:${NC} ${connections}"
+}
+
+# Özet rapor
+show_service_summary() {
+    echo ""
+    print_header "ÖZET RAPOR"
+    
+    echo -e "${CYAN}Toplam Kontrol Edilen Servisler:${NC} ${TOTAL_SERVICES}"
+    echo -e "${GREEN}✓ Çalışan Servisler:${NC} ${RUNNING_SERVICES}"
+    echo -e "${RED}✗ Durmuş/Hatalı Servisler:${NC} ${STOPPED_SERVICES}"
+    echo -e "${YELLOW}⚠ Yüklü Olmayan Servisler:${NC} ${NOT_INSTALLED_SERVICES}"
+    
+    # Başarı oranı hesapla
+    if [ $TOTAL_SERVICES -gt 0 ]; then
+        local success_rate=$(awk "BEGIN {printf \"%.1f\", ($RUNNING_SERVICES/$TOTAL_SERVICES)*100}")
+        echo ""
+        echo -e "${CYAN}Sistem Sağlığı:${NC} ${success_rate}%"
+        
+        if (( $(echo "$success_rate >= 90" | bc -l 2>/dev/null || echo "0") )); then
+            echo -e "${GREEN}█████████░ Mükemmel${NC}"
+        elif (( $(echo "$success_rate >= 70" | bc -l 2>/dev/null || echo "0") )); then
+            echo -e "${YELLOW}███████░░░ İyi${NC}"
+        elif (( $(echo "$success_rate >= 50" | bc -l 2>/dev/null || echo "0") )); then
+            echo -e "${YELLOW}█████░░░░░ Orta${NC}"
+        else
+            echo -e "${RED}███░░░░░░░ Zayıf${NC}"
+        fi
+    fi
+    
+    echo ""
+    echo -e "${CYAN}Rapor Tarihi:${NC} $(date '+%d-%m-%Y %H:%M:%S')"
+}
+
+# Ana servis kontrol menüsü
+service_health_check_menu() {
+    while true; do
+        clear
+        print_header "SERVİS SAĞLIK KONTROL PANELİ"
+        
+        echo -e "${CYAN}Kontrol edilecek servisleri seçin:${NC}"
+        echo ""
+        echo "  1) Tüm Servisleri Kontrol Et (Önerilen)"
+        echo "  2) Web Servisleri (Nginx, PHP-FPM)"
+        echo "  3) Veritabanı Servisleri (MySQL, MongoDB, Redis)"
+        echo "  4) VPN Servisleri (OpenVPN, WireGuard, Pritunl)"
+        echo "  5) DNS Servisleri (BIND9, DNSMasq)"
+        echo "  6) Güvenlik Servisleri (UFW, Fail2ban)"
+        echo "  7) Docker"
+        echo "  8) SSL/Certbot"
+        echo "  9) Sistem Kaynakları"
+        echo " 10) Network Durumu"
+        echo ""
+        echo "  0) Ana Menüye Dön"
+        echo ""
+        echo -ne "${GREEN}Seçiminiz [0-10]:${NC} "
+        read -r health_choice
+        
+        # İstatistikleri sıfırla
+        TOTAL_SERVICES=0
+        RUNNING_SERVICES=0
+        STOPPED_SERVICES=0
+        ERROR_SERVICES=0
+        NOT_INSTALLED_SERVICES=0
+        
+        clear
+        
+        case $health_choice in
+            1)
+                print_header "TÜM SERVİSLER KONTROL EDİLİYOR"
+                check_nginx_health
+                check_php_fpm_health
+                check_mariadb_health
+                check_redis_health
+                check_mongodb_health
+                check_docker_health
+                check_dns_health
+                check_vpn_health
+                check_firewall_health
+                check_ssl_health
+                check_system_resources
+                check_network_health
+                show_service_summary
+                ;;
+            2)
+                print_header "WEB SERVİSLERİ KONTROL EDİLİYOR"
+                check_nginx_health
+                check_php_fpm_health
+                show_service_summary
+                ;;
+            3)
+                print_header "VERİTABANI SERVİSLERİ KONTROL EDİLİYOR"
+                check_mariadb_health
+                check_mongodb_health
+                check_redis_health
+                show_service_summary
+                ;;
+            4)
+                print_header "VPN SERVİSLERİ KONTROL EDİLİYOR"
+                check_vpn_health
+                show_service_summary
+                ;;
+            5)
+                print_header "DNS SERVİSLERİ KONTROL EDİLİYOR"
+                check_dns_health
+                show_service_summary
+                ;;
+            6)
+                print_header "GÜVENLİK SERVİSLERİ KONTROL EDİLİYOR"
+                check_firewall_health
+                show_service_summary
+                ;;
+            7)
+                print_header "DOCKER KONTROL EDİLİYOR"
+                check_docker_health
+                show_service_summary
+                ;;
+            8)
+                print_header "SSL/CERTBOT KONTROL EDİLİYOR"
+                check_ssl_health
+                show_service_summary
+                ;;
+            9)
+                print_header "SİSTEM KAYNAKLARI KONTROL EDİLİYOR"
+                check_system_resources
+                ;;
+            10)
+                print_header "NETWORK DURUMU KONTROL EDİLİYOR"
+                check_network_health
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "Geçersiz seçim!"
+                sleep 2
+                continue
+                ;;
+        esac
+        
+        echo ""
+        echo -ne "${CYAN}Devam etmek için Enter'a basın...${NC}"
+        read -r
+    done
+}
+
+# ==========================================
+# ANA MENÜ
+# ==========================================
+
 main_menu() {
     while true; do
         clear
@@ -13450,6 +14733,8 @@ main_menu() {
         echo "27) SSH Bağlantı Testi (Sunucular Arası)"
         echo "28) DNS Hook Test (SSL Challenge Debug)"
         echo "29) Multi-Server (Dağıtık Sistem) Yapılandırması"
+        echo "31) Servis Sağlık Kontrolü (Health Check)"
+        echo "32) MySQL/MariaDB Yönetim Paneli"
         echo "30) Çıkış"
         echo ""
         
@@ -13460,7 +14745,7 @@ main_menu() {
             echo ""
         fi
         
-        read -p "Seçiminizi yapın (1-30): " choice
+        read -p "Seçiminizi yapın (1-32): " choice
         
         case $choice in
             1)
@@ -13587,12 +14872,18 @@ main_menu() {
             29)
                 multi_server_menu
                 ;;
+            31)
+                service_health_check_menu
+                ;;
+            32)
+                mysql_management_menu
+                ;;
             30)
                 print_success "Çıkılıyor..."
                 exit 0
                 ;;
             *)
-                print_error "Geçersiz seçim. Lütfen 1-30 arasında bir sayı girin."
+                print_error "Geçersiz seçim. Lütfen 1-32 arasında bir sayı girin."
                 sleep 2
                 ;;
         esac
