@@ -14913,12 +14913,12 @@ manage_replication() {
     echo "Slave_SQL_Running: ${sql_running}"
     echo ""
     
-    echo "1) Replicationı Başlat (START SLAVE)"
-    echo "2) Replicationı Durdur (STOP SLAVE)"
-    echo "3) Replicationı Sıfırla (RESET SLAVE)"
-    echo "4) Slave konumunu atla (Hata varsa)"
-    echo "5) Detaylı durum göster"
-    echo "0) Geri Dön"
+    echo "1- Replication'ı Başlat (START SLAVE)"
+    echo "2- Replicationı Durdur (STOP SLAVE)"
+    echo "3- Replicationı Sıfırla (RESET SLAVE)"
+    echo "4- Slave konumunu atla (Hata varsa)"
+    echo "5- Detaylı durum göster"
+    echo "0- Geri Dön"
     echo ""
     
     read -p "Seçiminiz: " repl_choice
