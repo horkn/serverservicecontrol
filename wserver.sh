@@ -191,10 +191,10 @@ configure_multi_server() {
     print_header "Multi-Server (Dağıtık) Yapılandırma - Master/Slave Destekli"
     
     echo -e "${CYAN}Bu yapılandırma ile:${NC}"
-    echo "â€¢ Farklı sunucularda farklı servisler"
-    echo "â€¢ MySQL Master-Slave Replication"
-    echo "â€¢ Redis Master-Slave Replication"
-    echo "â€¢ Local ağ + Public IP erişim yönetimi"
+    echo "* Farklı sunucularda farklı servisler"
+    echo "* MySQL Master-Slave Replication"
+    echo "* Redis Master-Slave Replication"
+    echo "* Local ağ + Public IP erişim yönetimi"
     echo ""
     
     if ! ask_yes_no "Multi-server yapılandırmasını etkinleştirmek istiyor musunuz?"; then
@@ -219,19 +219,19 @@ configure_multi_server() {
     echo ""
     
     # DNS + Ana Site Sunucusu
-    echo -e "${CYAN}â•â•â• DNS + Ana Site Sunucusu â•â•â•${NC}"
+    echo -e "${CYAN}=== DNS + Ana Site Sunucusu ===${NC}"
     read -p "DNS/Ana Site Public IP [Bu sunucu: $current_public_ip]: " dns_ip
     DNS_SERVER_IP=${dns_ip:-$current_public_ip}
     
     # Web/Laravel Sunucusu
     echo ""
-    echo -e "${CYAN}â•â•â• Laravel Framework Sistem â•â•â•${NC}"
+    echo -e "${CYAN}=== Laravel Framework Sistem ===${NC}"
     read -p "Laravel sistem Public IP [Bu sunucu: $current_public_ip]: " web_ip
     WEB_SERVER_IP=${web_ip:-$current_public_ip}
     
     # Database Master
     echo ""
-    echo -e "${CYAN}â•â•â• MySQL Database Master â•â•â•${NC}"
+    echo -e "${CYAN}=== MySQL Database Master ===${NC}"
     read -p "MySQL Master Public IP [Bu sunucu: $current_public_ip]: " db_ip
     DATABASE_SERVER_IP=${db_ip:-$current_public_ip}
     
@@ -248,7 +248,7 @@ configure_multi_server() {
     
     # Redis Master
     echo ""
-    echo -e "${CYAN}â•â•â• Redis Master â•â•â•${NC}"
+    echo -e "${CYAN}=== Redis Master ===${NC}"
     read -p "Redis Master Public IP [Bu sunucu: $current_public_ip]: " redis_ip
     REDIS_SERVER_IP=${redis_ip:-$current_public_ip}
     
@@ -265,7 +265,7 @@ configure_multi_server() {
     
     # Storage Sunucusu
     echo ""
-    echo -e "${CYAN}â•â•â• Dosya/Storage Sunucusu (Opsiyonel) â•â•â•${NC}"
+    echo -e "${CYAN}=== Dosya/Storage Sunucusu (Opsiyonel) ===${NC}"
     if ask_yes_no "Ayrı storage sunucusu var mı?"; then
         read -p "Storage sunucusu IP: " storage_ip
         STORAGE_SERVER_IP="$storage_ip"
@@ -282,33 +282,33 @@ configure_multi_server() {
     [ -n "$current_private_ip" ] && echo -e "${GREEN}Local IP:${NC} $current_private_ip"
     echo ""
     
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo -e "${CYAN}  CLUSTER YAPISI${NC}"
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo ""
     
-    echo -e "${YELLOW}â–º DNS + Ana Site:${NC}"
+    echo -e "${YELLOW}> DNS + Ana Site:${NC}"
     echo -e "   Public IP: ${GREEN}$DNS_SERVER_IP${NC} $([ "$DNS_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]")"
     echo ""
     
-    echo -e "${YELLOW}â–º Laravel Sistem:${NC}"
+    echo -e "${YELLOW}> Laravel Sistem:${NC}"
     echo -e "   Public IP: ${GREEN}$WEB_SERVER_IP${NC} $([ "$WEB_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]")"
     echo ""
     
-    echo -e "${YELLOW}â–º MySQL Database:${NC}"
+    echo -e "${YELLOW}> MySQL Database:${NC}"
     echo -e "   Master Public:  ${GREEN}$DATABASE_SERVER_IP${NC} $([ "$DATABASE_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]")"
     [ -n "$DATABASE_LOCAL_IP" ] && echo -e "   Master Local:   ${GREEN}$DATABASE_LOCAL_IP${NC} ${CYAN}(Laravel buradan bağlanacak)${NC}"
     [ -n "$DATABASE_SLAVE_IP" ] && echo -e "   Slave Public:   ${GREEN}$DATABASE_SLAVE_IP${NC}"
     echo ""
     
-    echo -e "${YELLOW}â–º Redis Cache:${NC}"
+    echo -e "${YELLOW}> Redis Cache:${NC}"
     echo -e "   Master Public:  ${GREEN}$REDIS_SERVER_IP${NC} $([ "$REDIS_SERVER_IP" = "$current_public_ip" ] && echo "[BU SUNUCU]")"
     [ -n "$REDIS_LOCAL_IP" ] && echo -e "   Master Local:   ${GREEN}$REDIS_LOCAL_IP${NC} ${CYAN}(Laravel buradan bağlanacak)${NC}"
     [ -n "$REDIS_SLAVE_IP" ] && echo -e "   Slave Public:   ${GREEN}$REDIS_SLAVE_IP${NC}"
     echo ""
     
     [ -n "$STORAGE_SERVER_IP" ] && [ "$STORAGE_SERVER_IP" != "$WEB_SERVER_IP" ] && \
-        echo -e "${YELLOW}â–º Storage:${NC} ${GREEN}$STORAGE_SERVER_IP${NC}"
+        echo -e "${YELLOW}> Storage:${NC} ${GREEN}$STORAGE_SERVER_IP${NC}"
     
     echo ""
     print_success "Multi-server yapılandırması kaydedildi: $MULTI_SERVER_CONFIG"
@@ -325,7 +325,7 @@ configure_multi_server() {
         cat <<EOF
 ${CYAN}# Database Bağlantısı${NC}
 DB_CONNECTION=mysql
-DB_HOST=${GREEN}$db_host${NC}  ${YELLOW}â† Local IP kullanılıyor${NC}
+DB_HOST=${GREEN}$db_host${NC}  ${YELLOW}<- Local IP kullanılıyor${NC}
 DB_PORT=3306
 DB_DATABASE=your_database
 DB_USERNAME=your_user
@@ -340,7 +340,7 @@ EOF
         cat <<EOF
 
 ${CYAN}# Redis Bağlantısı${NC}
-REDIS_HOST=${GREEN}$redis_host${NC}  ${YELLOW}â† Local IP kullanılıyor${NC}
+REDIS_HOST=${GREEN}$redis_host${NC}  ${YELLOW}<- Local IP kullanılıyor${NC}
 REDIS_PASSWORD=null
 REDIS_PORT=6379
 REDIS_CLIENT=phpredis
@@ -429,7 +429,7 @@ show_cluster_status() {
     echo ""
     
     # DNS Sunucusu
-    echo -e "${YELLOW}â–º DNS Sunucusu:${NC} $DNS_SERVER_IP"
+    echo -e "${YELLOW}> DNS Sunucusu:${NC} $DNS_SERVER_IP"
     if [ "$DNS_SERVER_IP" = "$current_ip" ]; then
         echo "   [BU SUNUCU]"
         if systemctl is-active --quiet named 2>/dev/null; then
@@ -454,7 +454,7 @@ show_cluster_status() {
     echo ""
     
     # Web Sunucusu
-    echo -e "${YELLOW}â–º Web Sunucusu:${NC} $WEB_SERVER_IP"
+    echo -e "${YELLOW}> Web Sunucusu:${NC} $WEB_SERVER_IP"
     if [ "$WEB_SERVER_IP" = "$current_ip" ]; then
         echo "   [BU SUNUCU]"
         if systemctl is-active --quiet nginx 2>/dev/null; then
@@ -476,12 +476,12 @@ show_cluster_status() {
     echo ""
     
     # Database Sunucuları (Master/Slave)
-    echo -e "${YELLOW}â–º MySQL Database (Master/Slave):${NC}"
+    echo -e "${YELLOW}> MySQL Database (Master/Slave):${NC}"
     echo ""
     
     # Master
     echo -e "   ${CYAN}Master:${NC} $DATABASE_SERVER_IP"
-    [ -n "$DATABASE_LOCAL_IP" ] && echo -e "   ${CYAN}Master Local:${NC} $DATABASE_LOCAL_IP ${YELLOW}â† Laravel buradan bağlanır${NC}"
+    [ -n "$DATABASE_LOCAL_IP" ] && echo -e "   ${CYAN}Master Local:${NC} $DATABASE_LOCAL_IP ${YELLOW}<- Laravel buradan bağlanır${NC}"
     
     if [ "$DATABASE_SERVER_IP" = "$current_ip" ]; then
         echo "   [BU SUNUCU - MASTER]"
@@ -529,12 +529,12 @@ show_cluster_status() {
     echo ""
     
     # Redis Sunucuları (Master/Slave)
-    echo -e "${YELLOW}â–º Redis Cache (Master/Slave):${NC}"
+    echo -e "${YELLOW}> Redis Cache (Master/Slave):${NC}"
     echo ""
     
     # Master
     echo -e "   ${CYAN}Master:${NC} $REDIS_SERVER_IP"
-    [ -n "$REDIS_LOCAL_IP" ] && echo -e "   ${CYAN}Master Local:${NC} $REDIS_LOCAL_IP ${YELLOW}â† Laravel buradan bağlanır${NC}"
+    [ -n "$REDIS_LOCAL_IP" ] && echo -e "   ${CYAN}Master Local:${NC} $REDIS_LOCAL_IP ${YELLOW}<- Laravel buradan bağlanır${NC}"
     
     if [ "$REDIS_SERVER_IP" = "$current_ip" ]; then
         echo "   [BU SUNUCU - MASTER]"
@@ -578,7 +578,7 @@ show_cluster_status() {
     echo ""
     
     # Dosya Sunucusu
-    echo -e "${YELLOW}â–º Dosya Sunucusu:${NC} $STORAGE_SERVER_IP"
+    echo -e "${YELLOW}> Dosya Sunucusu:${NC} $STORAGE_SERVER_IP"
     if [ "$STORAGE_SERVER_IP" = "$current_ip" ]; then
         echo "   [BU SUNUCU]"
     else
@@ -726,19 +726,19 @@ multi_server_menu() {
             if echo "$current_role" | grep -q "WEB"; then
                 echo -e "${GREEN}[OK] Bu sunucuda SSL oluşturabilirsiniz (Nginx var)${NC}"
             elif echo "$current_role" | grep -q "DNS"; then
-                echo -e "${YELLOW}âš  SSL için WEB sunucusuna gidin!${NC}"
+                echo -e "${YELLOW}[!]  SSL için WEB sunucusuna gidin!${NC}"
                 echo "  Bu sunucuda sadece DNS servisi var"
             fi
         else
-            echo -e "${YELLOW}âš  Multi-Server Modu: Pasif${NC}"
+            echo -e "${YELLOW}[!]  Multi-Server Modu: Pasif${NC}"
             echo ""
             echo -e "${CYAN}Örnek Senaryo:${NC}"
-            echo "  A Server (185.255.4.193) â†’ DNS + Firma sitesi"
-            echo "  B Server (185.255.4.197) â†’ Laravel + Nginx + SSL â† Ana sistem"
-            echo "  C Server (46.37.115.20)  â†’ MySQL Master"
-            echo "  D Server (46.37.115.208) â†’ MySQL Slave"
-            echo "  E Server (46.37.115.31)  â†’ Redis Master"
-            echo "  F Server (46.37.115.137) â†’ Redis Slave"
+            echo "  A Server (185.255.4.193) -> DNS + Firma sitesi"
+            echo "  B Server (185.255.4.197) -> Laravel + Nginx + SSL <- Ana sistem"
+            echo "  C Server (46.37.115.20)  -> MySQL Master"
+            echo "  D Server (46.37.115.208) -> MySQL Slave"
+            echo "  E Server (46.37.115.31)  -> Redis Master"
+            echo "  F Server (46.37.115.137) -> Redis Slave"
         fi
         
         echo ""
@@ -787,7 +787,7 @@ multi_server_menu() {
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             6)
-                configure_mysql_remote_access
+                configure_mysql_remote_access_cluster
                 read -p "Devam etmek için Enter'a basın..."
                 ;;
             7)
@@ -850,8 +850,8 @@ install_by_server_role() {
     # DNS Server rolü
     if echo "$roles" | grep -q "DNS"; then
         echo -e "${CYAN}[DNS SERVER] Kurulacak servisler:${NC}"
-        echo "  â€¢ BIND9 veya dnsmasq"
-        echo "  â€¢ UFW Firewall (DNS portları)"
+        echo "  * BIND9 veya dnsmasq"
+        echo "  * UFW Firewall (DNS portları)"
         if ask_yes_no "DNS Server kurulumunu başlatmak istiyor musunuz?"; then
             install_dns_server
         fi
@@ -861,10 +861,10 @@ install_by_server_role() {
     if echo "$roles" | grep -q "WEB"; then
         echo ""
         echo -e "${CYAN}[WEB SERVER] Kurulacak servisler:${NC}"
-        echo "  â€¢ Nginx"
-        echo "  â€¢ PHP 8.3 (FPM)"
-        echo "  â€¢ Composer"
-        echo "  â€¢ Node.js (opsiyonel)"
+        echo "  * Nginx"
+        echo "  * PHP 8.3 (FPM)"
+        echo "  * Composer"
+        echo "  * Node.js (opsiyonel)"
         if ask_yes_no "Web Server kurulumunu başlatmak istiyor musunuz?"; then
             # Nginx kurulumu
             if ! command -v nginx &>/dev/null; then
@@ -903,8 +903,8 @@ install_by_server_role() {
     if echo "$roles" | grep -q "DATABASE"; then
         echo ""
         echo -e "${CYAN}[DATABASE SERVER] Kurulacak servisler:${NC}"
-        echo "  â€¢ MySQL/MariaDB"
-        echo "  â€¢ Uzak erişim yapılandırması"
+        echo "  * MySQL/MariaDB"
+        echo "  * Uzak erişim yapılandırması"
         if ask_yes_no "Database Server kurulumunu başlatmak istiyor musunuz?"; then
             if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
                 ask_password "MySQL root şifresini belirleyin" MYSQL_ROOT_PASSWORD
@@ -913,7 +913,7 @@ install_by_server_role() {
             
             # Uzak erişim yapılandırması
             if ask_yes_no "MySQL'i uzak erişim için yapılandırmak istiyor musunuz?"; then
-                configure_mysql_remote_access
+                configure_mysql_remote_access_cluster
             fi
         fi
     fi
@@ -922,8 +922,8 @@ install_by_server_role() {
     if echo "$roles" | grep -q "REDIS"; then
         echo ""
         echo -e "${CYAN}[REDIS SERVER] Kurulacak servisler:${NC}"
-        echo "  â€¢ Redis Server"
-        echo "  â€¢ Uzak erişim yapılandırması"
+        echo "  * Redis Server"
+        echo "  * Uzak erişim yapılandırması"
         if ask_yes_no "Redis Server kurulumunu başlatmak istiyor musunuz?"; then
             install_redis
             
@@ -938,8 +938,8 @@ install_by_server_role() {
     if echo "$roles" | grep -q "STORAGE"; then
         echo ""
         echo -e "${CYAN}[STORAGE SERVER] Kurulacak servisler:${NC}"
-        echo "  â€¢ NFS Server (dosya paylaşımı)"
-        echo "  â€¢ Samba (Windows uyumlu)"
+        echo "  * NFS Server (dosya paylaşımı)"
+        echo "  * Samba (Windows uyumlu)"
         if ask_yes_no "Storage Server kurulumunu başlatmak istiyor musunuz?"; then
             install_nfs_server
         fi
@@ -948,7 +948,7 @@ install_by_server_role() {
     print_success "Sunucu rolüne göre kurulum tamamlandı!"
 }
 
-configure_mysql_remote_access() {
+configure_mysql_remote_access_cluster() {
     print_header "MySQL Uzak Erişim Yapılandırması - Master/Slave"
     
     local current_ip=$(hostname -I | awk '{print $1}')
@@ -1128,9 +1128,9 @@ EOF
         print_success "MySQL uzak erişim yapılandırması tamamlandı!"
         
         echo ""
-        echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+        echo -e "${CYAN}===========================================${NC}"
         echo -e "${CYAN}  Laravel .env Yapılandırması${NC}"
-        echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+        echo -e "${CYAN}===========================================${NC}"
         echo ""
         
         local db_host="${DATABASE_LOCAL_IP:-$DATABASE_SERVER_IP}"
@@ -1249,7 +1249,7 @@ configure_redis_remote_access() {
         echo "protected-mode no" >> "$redis_conf"
     fi
     
-    # 3. Şifre ayarla (ZORUNLU - güvenlik için)
+    # 3. Şifre ayarla (ZORUNLU - güvenlik için)
     local redis_password=""
     ask_password "Redis şifresi belirleyin (boş bırakmayın!)" redis_password
     
@@ -1307,15 +1307,15 @@ EOF
     
     # Laravel .env bilgileri
     echo ""
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo -e "${CYAN}  Laravel .env Yapılandırması${NC}"
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo ""
     
     local redis_host="${REDIS_LOCAL_IP:-$REDIS_SERVER_IP}"
     
     cat <<EOF
-REDIS_HOST=${GREEN}$redis_host${NC}  ${YELLOW}â† $([ -n "$REDIS_LOCAL_IP" ] && echo "Local IP (hızlı)" || echo "Public IP")${NC}
+REDIS_HOST=${GREEN}$redis_host${NC}  ${YELLOW}<- $([ -n "$REDIS_LOCAL_IP" ] && echo "Local IP (hızlı)" || echo "Public IP")${NC}
 REDIS_PASSWORD=${GREEN}$redis_password${NC}
 REDIS_PORT=6379
 REDIS_CLIENT=phpredis
@@ -1334,27 +1334,27 @@ EOF
     
     # Firewall
     echo ""
-    print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    print_warning "==========================================="
     print_warning "  FIREWALL KURALLARI (ÖNEMLİ!)"
-    print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    print_warning "==========================================="
     
     if command -v ufw &>/dev/null; then
         if ask_yes_no "UFW firewall kurallarını şimdi eklemek ister misiniz?"; then
             # Laravel sistem için
             ufw allow from $WEB_SERVER_IP to any port 6379 comment 'Redis - Laravel'
-            print_success "[OK] $WEB_SERVER_IP â†’ Redis"
+            print_success "[OK] $WEB_SERVER_IP -> Redis"
             
             # Local network için (varsa)
             if [ -n "$REDIS_LOCAL_IP" ]; then
                 local subnet=$(echo "$REDIS_LOCAL_IP" | cut -d'.' -f1-3)
                 ufw allow from ${subnet}.0/24 to any port 6379 comment 'Redis - Local Network'
-                print_success "[OK] ${subnet}.0/24 â†’ Redis (Local)"
+                print_success "[OK] ${subnet}.0/24 -> Redis (Local)"
             fi
             
             # Slave için (varsa)
             if [ -n "$REDIS_SLAVE_IP" ]; then
                 ufw allow from $REDIS_SLAVE_IP to any port 6379 comment 'Redis - Slave Replication'
-                print_success "[OK] $REDIS_SLAVE_IP â†’ Redis (Slave)"
+                print_success "[OK] $REDIS_SLAVE_IP -> Redis (Slave)"
             fi
             
             print_success "Tüm firewall kuralları eklendi!"
@@ -1622,8 +1622,8 @@ select_cluster_communication_mode() {
             ;;
         5)
             CLUSTER_COMMUNICATION_MODE="public"
-            print_warning "âš  Public IP seçildi (GÜVENSİZ!)"
-            print_warning "Firewall ile korunacak ama ÜRETİM için UYGUN DEĞİL!"
+            print_warning "[!]  Public IP seçildi (GÜVENSİZ!)"
+            print_warning "Firewall ile korunacak ama ÜRETİM için UYGUN DEĞİL!"
             ;;
     esac
     
@@ -1635,10 +1635,10 @@ configure_private_network() {
     print_header "Private Network Yapılandırması"
     
     echo -e "${CYAN}Private Network örnekleri:${NC}"
-    echo "â€¢ Hetzner Cloud: Private Network (10.0.0.0/16)"
-    echo "â€¢ DigitalOcean: VPC"
-    echo "â€¢ AWS EC2: VPC"
-    echo "â€¢ Veri merkezi: VLAN"
+    echo "* Hetzner Cloud: Private Network (10.0.0.0/16)"
+    echo "* DigitalOcean: VPC"
+    echo "* AWS EC2: VPC"
+    echo "* Veri merkezi: VLAN"
     echo ""
     
     print_info "Private IP'leri girin (sunucular aynı ağda):"
@@ -1661,15 +1661,15 @@ install_wireguard_cluster() {
     print_header "WireGuard VPN - Mesh Network (Tüm Sunucular Arası)"
     
     echo -e "${CYAN}WireGuard Nedir?${NC}"
-    echo "â€¢ Modern VPN protokolü (Linux kernel'de native)"
-    echo "â€¢ Çok hızlı (IPSec ve OpenVPN'den 4-5x hızlı)"
-    echo "â€¢ Düşük gecikme (~0.5ms overhead)"
-    echo "â€¢ Basit yapılandırma"
+    echo "* Modern VPN protokolü (Linux kernel'de native)"
+    echo "* Çok hızlı (IPSec ve OpenVPN'den 4-5x hızlı)"
+    echo "* Düşük gecikme (~0.5ms overhead)"
+    echo "* Basit yapılandırma"
     echo ""
     echo -e "${YELLOW}Mesh Network:${NC}"
-    echo "â€¢ Her sunucu birbirine direkt bağlanır"
-    echo "â€¢ Tek bir merkez sunucu yok"
-    echo "â€¢ Bir sunucu çökerse diğerleri etkilenmez"
+    echo "* Her sunucu birbirine direkt bağlanır"
+    echo "* Tek bir merkez sunucu yok"
+    echo "* Bir sunucu çökerse diğerleri etkilenmez"
     echo ""
     
     if ! ask_yes_no "WireGuard kurmak istiyor musunuz?"; then
@@ -1749,12 +1749,12 @@ install_wireguard_cluster() {
         print_warning "Otomatik tespit başarısız!"
         echo ""
         print_info "Bu sunucunun rolünü manuel seçin:"
-        echo "1) DNS + Ana Site â†’ VPN: 10.9.0.1"
-        echo "2) Web/Laravel Sistem â†’ VPN: 10.9.0.2"
-        echo "3) MySQL Master â†’ VPN: 10.9.0.10"
-        echo "4) MySQL Slave â†’ VPN: 10.9.0.11"
-        echo "5) Redis Master â†’ VPN: 10.9.0.20"
-        echo "6) Redis Slave â†’ VPN: 10.9.0.21"
+        echo "1) DNS + Ana Site -> VPN: 10.9.0.1"
+        echo "2) Web/Laravel Sistem -> VPN: 10.9.0.2"
+        echo "3) MySQL Master -> VPN: 10.9.0.10"
+        echo "4) MySQL Slave -> VPN: 10.9.0.11"
+        echo "5) Redis Master -> VPN: 10.9.0.20"
+        echo "6) Redis Slave -> VPN: 10.9.0.21"
         echo ""
         
         read -p "Seçiminiz (1-6): " server_num
@@ -1780,16 +1780,16 @@ install_wireguard_cluster() {
     local public_key=$(echo "$private_key" | wg pubkey)
     
     echo ""
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo -e "${CYAN}  BU SUNUCUNUN BİLGİLERİ (Diğerlerinde Kullanın!)${NC}"
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo -e "${GREEN}Sunucu:${NC} $server_name"
     echo -e "${GREEN}Rol:${NC} $server_role"
     echo -e "${GREEN}Public IP:${NC} $current_public_ip"
     echo -e "${GREEN}VPN IP:${NC} $vpn_ip"
     echo -e "${GREEN}Public Key:${NC}"
     echo "$public_key"
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo ""
     echo -e "${RED}ÖNEMLİ: Bu bilgileri not alın!${NC}"
     echo "Diğer sunucularda [Peer] olarak ekleyeceksiniz"
@@ -1945,7 +1945,7 @@ AllowedIPs = 10.9.0.1/32
 PersistentKeepalive = 25
 
 EOF
-        echo "  â€¢ DNS + Ana Site ($DNS_SERVER_IP â†’ 10.9.0.1)"
+        echo "  * DNS + Ana Site ($DNS_SERVER_IP -> 10.9.0.1)"
     fi
     
     # Laravel Sistem
@@ -1959,7 +1959,7 @@ AllowedIPs = 10.9.0.2/32
 PersistentKeepalive = 25
 
 EOF
-        echo "  â€¢ Web/Laravel Sistem ($WEB_SERVER_IP â†’ 10.9.0.2)"
+        echo "  * Web/Laravel Sistem ($WEB_SERVER_IP -> 10.9.0.2)"
     fi
     
     # MySQL Master
@@ -1973,7 +1973,7 @@ AllowedIPs = 10.9.0.10/32
 PersistentKeepalive = 25
 
 EOF
-        echo "  â€¢ MySQL Master ($DATABASE_SERVER_IP â†’ 10.9.0.10)"
+        echo "  * MySQL Master ($DATABASE_SERVER_IP -> 10.9.0.10)"
     fi
     
     # MySQL Slave
@@ -1987,7 +1987,7 @@ AllowedIPs = 10.9.0.11/32
 PersistentKeepalive = 25
 
 EOF
-        echo "  â€¢ MySQL Slave ($DATABASE_SLAVE_IP â†’ 10.9.0.11)"
+        echo "  * MySQL Slave ($DATABASE_SLAVE_IP -> 10.9.0.11)"
     fi
     
     # Redis Master
@@ -2001,7 +2001,7 @@ AllowedIPs = 10.9.0.20/32
 PersistentKeepalive = 25
 
 EOF
-        echo "  â€¢ Redis Master ($REDIS_SERVER_IP â†’ 10.9.0.20)"
+        echo "  * Redis Master ($REDIS_SERVER_IP -> 10.9.0.20)"
     fi
     
     # Redis Slave
@@ -2015,7 +2015,7 @@ AllowedIPs = 10.9.0.21/32
 PersistentKeepalive = 25
 
 EOF
-        echo "  â€¢ Redis Slave ($REDIS_SLAVE_IP â†’ 10.9.0.21)"
+        echo "  * Redis Slave ($REDIS_SLAVE_IP -> 10.9.0.21)"
     fi
     
     echo ""
@@ -2097,7 +2097,7 @@ AllowedIPs = $peer_vpn_ip/32
 PersistentKeepalive = 25
 
 EOF
-            print_success "[OK] $peer_name eklendi ($peer_endpoint â†’ $peer_vpn_ip)"
+            print_success "[OK] $peer_name eklendi ($peer_endpoint -> $peer_vpn_ip)"
         done
     fi
     
@@ -2144,17 +2144,17 @@ EOF
     # Özet dosya oluştur
     local summary_file="/root/cluster-wireguard-setup.txt"
     cat > "$summary_file" <<EOF
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+===================================================================
   WireGuard VPN Kurulum Özeti
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+===================================================================
 
 Bu Sunucu: $server_name ($current_public_ip)
 VPN IP: $vpn_ip
 Public Key: $public_key
 
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+===================================================================
   CLUSTER SUNUCULARI VE VPN IP'LERİ
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+===================================================================
 
 EOF
     
@@ -2209,9 +2209,9 @@ ${server_count}. Redis Slave
 EOF
     
     cat >> "$summary_file" <<EOF
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  DİĞER SUNUCULARDA YAPILACAKLAR
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+===================================================================
+  DİĞER SUNUCULARDA YAPILACAKLAR
+===================================================================
 
 1. Her sunucuda WireGuard kurun:
    sudo bash deepseek_bash_20251127_badcb6.sh
@@ -2235,9 +2235,9 @@ EOF
 5. Ping testi:
    ping $vpn_ip
 
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+===================================================================
   TÜM SUNUCULAR HAZIR OLUNCA - YAPILANDIRMA ADIMLARI
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+===================================================================
 
 EOF
     
@@ -2282,9 +2282,9 @@ WEBSRV
     cat >> "$summary_file" <<'FINALSECTION'
 
 
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+===================================================================
   FIREWALL KURALLARI
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+===================================================================
 
 HER SUNUCUDA:
   ufw allow 51820/udp comment 'WireGuard'
@@ -2293,7 +2293,7 @@ MySQL/Redis sunucularında:
   MySQL: 3306 portu KAPALI (sadece VPN'den erişilir)
   Redis: 6379 portu KAPALI (sadece VPN'den erişilir)
 
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+===================================================================
 FINALSECTION
     
     chmod 600 "$summary_file"
@@ -2309,9 +2309,9 @@ FINALSECTION
     fi
     
     echo ""
-    print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    print_warning "==========================================="
     print_warning "  SONRAKİ ADIMLAR"
-    print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    print_warning "==========================================="
     echo ""
     echo "1. ${GREEN}/tmp/wireguard-peer-${server_role}.txt${NC} dosyasını diğer sunuculara gönderin"
     echo "2. Diğer sunucularda WireGuard kurun ve peer ekleyin"
@@ -2324,10 +2324,10 @@ FINALSECTION
 setup_ssh_tunnel_cluster() {
     print_header "SSH Tunnel - Sunucular Arası"
     
-    echo -e "${RED}UYARI: SSH Tunnel üretim için UYGUN DEĞİL!${NC}"
-    echo "â€¢ Her yeniden başlatmada kaybolur"
-    echo "â€¢ Bağlantı kopabilir"
-    echo "â€¢ Sadece test ve geçici kullanım için"
+    echo -e "${RED}UYARI: SSH Tunnel üretim için UYGUN DEĞİL!${NC}"
+    echo "* Her yeniden başlatmada kaybolur"
+    echo "* Bağlantı kopabilir"
+    echo "* Sadece test ve geçici kullanım için"
     echo ""
     echo -e "${GREEN}Önerilen: WireGuard VPN${NC}"
     echo ""
@@ -2338,8 +2338,8 @@ setup_ssh_tunnel_cluster() {
     
     echo ""
     print_info "SSH Tunnel Senaryoları:"
-    echo "1) MySQL Master â†’ Laravel (port 3306)"
-    echo "2) Redis Master â†’ Laravel (port 6379)"
+    echo "1) MySQL Master -> Laravel (port 3306)"
+    echo "2) Redis Master -> Laravel (port 6379)"
     echo "3) İkisi birden"
     echo ""
     
@@ -2350,7 +2350,7 @@ setup_ssh_tunnel_cluster() {
     # Laravel sunucusunda mıyız?
     if [ "$WEB_SERVER_IP" != "$current_ip" ]; then
         print_warning "Bu script Laravel sunucusunda ($WEB_SERVER_IP) çalıştırılmalı!"
-        print_info "Şu anki sunucu: $current_ip"
+        print_info "Şu anki sunucu: $current_ip"
         return 1
     fi
     
@@ -2482,11 +2482,11 @@ quick_setup_predefined_cluster() {
     
     echo -e "${CYAN}Sunucular farklı IP'lerde, nasıl haberleşecekler?${NC}"
     echo ""
-    echo "1) ${GREEN}WireGuard VPN${NC} (Önerilen - Hızlı, Güvenli, Şifreli)"
-    echo "   â””â”€ 10.9.0.x ağı üzerinden mesh network"
+    echo "1) ${GREEN}WireGuard VPN${NC} (Önerilen - Hızlı, Güvenli, Şifreli)"
+    echo "   +- 10.9.0.x ağı üzerinden mesh network"
     echo ""
     echo "2) ${YELLOW}Private Network/VLAN${NC} (Varsa - En Hızlı)"
-    echo "   â””â”€ Hetzner/DO private network"
+    echo "   +- Hetzner/DO private network"
     echo ""
     echo "3) ${YELLOW}SSH Tunnel${NC} (Geçici test)"
     echo ""
@@ -2559,17 +2559,17 @@ quick_setup_predefined_cluster() {
     print_header "$cluster_name - Cluster Yapılandırması"
     
     cat <<EOF
-${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}
+${CYAN}===========================================${NC}
 ${CYAN}  CLUSTER YAPISI - $cluster_name${NC}
-${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}
+${CYAN}===========================================${NC}
 
-${YELLOW}â–º DNS + Ana Site:${NC}
+${YELLOW}> DNS + Ana Site:${NC}
    Public IP: ${GREEN}$dns_ip${NC}
 
-${YELLOW}â–º Web/Laravel Sistem:${NC}
+${YELLOW}> Web/Laravel Sistem:${NC}
    Public IP: ${GREEN}$web_ip${NC}
 
-${YELLOW}â–º MySQL Database:${NC}
+${YELLOW}> MySQL Database:${NC}
    Master Public:  ${GREEN}$db_master_ip${NC}
 EOF
     
@@ -2578,7 +2578,7 @@ EOF
     
     cat <<EOF
 
-${YELLOW}â–º Redis Cache:${NC}
+${YELLOW}> Redis Cache:${NC}
    Master Public:  ${GREEN}$redis_master_ip${NC}
 EOF
     
@@ -2587,7 +2587,7 @@ EOF
     
     cat <<EOF
 
-${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}
+${CYAN}===========================================${NC}
 EOF
     
     print_success "Yapılandırma kaydedildi!"
@@ -2619,9 +2619,9 @@ EOF
         echo "  5. Redis Client (uzak Redis için)"
         echo ""
         print_info "Ardından:"
-        echo "  â€¢ Multi-Server > MySQL Master Yapılandır"
-        echo "  â€¢ Multi-Server > Redis Master Yapılandır"
-        echo "  â€¢ Multi-Server > Laravel .env Oluştur"
+        echo "  * Multi-Server > MySQL Master Yapılandır"
+        echo "  * Multi-Server > Redis Master Yapılandır"
+        echo "  * Multi-Server > Laravel .env Oluştur"
     elif [ "$current_ip" = "$db_master_ip" ]; then
         detected_role="MySQL Master"
         echo -e "${GREEN}Rol: MySQL Master${NC}"
@@ -2705,9 +2705,9 @@ LOG_CHANNEL=stack
 LOG_DEPRECATIONS_CHANNEL=null
 LOG_LEVEL=debug
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================
 # DATABASE - Master/Slave Yapılandırması
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================
 
 # Master Database (Okuma/Yazma)
 DB_CONNECTION=mysql
@@ -2731,9 +2731,9 @@ EOF
     
     # Redis yapılandırması
     cat >> "$env_file" <<EOF
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================
 # REDIS - Master/Slave Yapılandırması
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================
 
 # Redis Master (Okuma/Yazma)
 REDIS_HOST=$redis_host
@@ -2761,14 +2761,14 @@ QUEUE_CONNECTION=redis
 SESSION_DRIVER=redis
 SESSION_LIFETIME=120
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================
 # BROADCAST (Socket.io, Pusher vb.)
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================
 BROADCAST_DRIVER=log
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================
 # MAIL (SMTP)
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================
 MAIL_MAILER=smtp
 MAIL_HOST=mailpit
 MAIL_PORT=1025
@@ -2778,9 +2778,9 @@ MAIL_ENCRYPTION=null
 MAIL_FROM_ADDRESS="hello@example.com"
 MAIL_FROM_NAME="\${APP_NAME}"
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================
 # CLUSTER SUNUCU BİLGİLERİ
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================
 
 # DNS + Ana Site
 DNS_SERVER=$DNS_SERVER_IP
@@ -2807,9 +2807,9 @@ EOF
     print_success ".env dosyası oluşturuldu: $env_file"
     
     echo ""
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo -e "${CYAN}  .env Dosyası Hazır!${NC}"
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo ""
     echo -e "${GREEN}Dosya Konumu:${NC} $env_file"
     echo ""
@@ -2919,13 +2919,13 @@ ask_password() {
         read -s -p "$1: " password
         echo
         if [ -z "$password" ]; then
-            echo "Şifre boş olamaz. Lütfen tekrar deneyin."
+            echo "Şifre boş olamaz. Lütfen tekrar deneyin."
             continue
         fi
-        read -s -p "Şifreyi tekrar girin: " password_confirm
+        read -s -p "Şifreyi tekrar girin: " password_confirm
         echo
         if [ "$password" != "$password_confirm" ]; then
-            echo "Şifreler eşleşmiyor. Lütfen tekrar deneyin."
+            echo "Şifreler eşleşmiyor. Lütfen tekrar deneyin."
         else
             eval "$2='$password'"
             break
@@ -3765,7 +3765,7 @@ EOF
                     print_success "  [OK] $mod: ${priority}-${mod}.ini (YENİ)"
                 elif [ ! -L "$expected_link" ]; then
                     # Yanlış priority ile link var
-                    print_warning "  âš  $mod yanlış priority ile, düzeltiliyor..."
+                    print_warning "  [!]  $mod yanlış priority ile, düzeltiliyor..."
                     find "$conf_dir" -type l -name "*${mod}.ini" -delete 2>/dev/null || true
                     ln -sf "$mod_ini" "$expected_link"
                     print_success "  [OK] $mod: ${priority}-${mod}.ini (DÜZELTİLDİ)"
@@ -3795,7 +3795,7 @@ EOF
     if [ -z "$final_warnings" ]; then
         print_success "[OK] Çift yükleme uyarısı YOK!"
     else
-        print_warning "âš  Hala bazı uyarılar var:"
+        print_warning "[!]  Hala bazı uyarılar var:"
         echo "$final_warnings"
     fi
     
@@ -4422,7 +4422,7 @@ EOF
     
     while [ $attempt -lt $max_attempts ] && [ "$password_set" = false ]; do
         ((attempt++))
-        print_info "Şifre ayarlama denemesi $attempt/$max_attempts..."
+        print_info "Şifre ayarlama denemesi $attempt/$max_attempts..."
         
         # Yöntem 1: sudo mysql ile şifre ayarla (MariaDB 10.4+ için en güvenilir)
         local sql_result=0
@@ -4529,7 +4529,7 @@ EOF
         if mysql -u root -e "SELECT 1;" 2>/dev/null; then
             print_info "Güvenli modda bağlantı başarılı, şifre ayarlanıyor..."
             
-            # Şifreyi ayarla
+            # Şifreyi ayarla
             mysql -u root <<EOF 2>/dev/null
 USE mysql;
 UPDATE user SET authentication_string='', plugin='mysql_native_password' WHERE User='root' AND Host='localhost';
@@ -4554,7 +4554,7 @@ EOF
             systemctl start mariadb
             sleep 5
             
-            # Şifre ile test et
+            # Şifre ile test et
             if mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
                 password_set=true
                 print_success "Root şifresi güvenli mod yöntemi ile ayarlandı"
@@ -4612,7 +4612,7 @@ EOF
             systemctl start mariadb
             sleep 5
             
-            # Şifre ile test et
+            # Şifre ile test et
             if mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
                 password_set=true
                 print_success "Root şifresi direkt user tablosu güncelleme ile ayarlandı"
@@ -4628,8 +4628,8 @@ EOF
         return 1
     fi
     
-    # Şifre ile bağlantıyı test et
-    print_info "Şifre doğrulanıyor..."
+    # Şifre ile bağlantıyı test et
+    print_info "Şifre doğrulanıyor..."
     local verify_count=0
     local verify_success=false
     
@@ -4644,10 +4644,10 @@ EOF
     done
     
     if [ "$verify_success" = false ]; then
-        print_error "Şifre doğrulama başarısız!"
-        print_info "Şifre ayarlandı ancak doğrulama başarısız, tekrar ayarlanıyor..."
+        print_error "Şifre doğrulama başarısız!"
+        print_info "Şifre ayarlandı ancak doğrulama başarısız, tekrar ayarlanıyor..."
         
-        # Şifreyi tekrar ayarla
+        # Şifreyi tekrar ayarla
         if sudo mysql <<EOF 2>/dev/null; then
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
 FLUSH PRIVILEGES;
@@ -4658,11 +4658,11 @@ EOF
                 verify_success=true
                 print_success "MySQL root şifresi doğrulandı (ikinci deneme)"
             else
-                print_error "Şifre doğrulama başarısız!"
+                print_error "Şifre doğrulama başarısız!"
                 return 1
             fi
         else
-            print_error "Şifre tekrar ayarlanamadı!"
+            print_error "Şifre tekrar ayarlanamadı!"
             return 1
         fi
     fi
@@ -4703,7 +4703,7 @@ EOF
     else
         print_warning "MySQL güvenlik yapılandırması başarısız, tekrar deneniyor..."
         
-        # Şifre ile tekrar dene
+        # Şifre ile tekrar dene
         if mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOF 2>/dev/null; then
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
@@ -4724,7 +4724,7 @@ EOF
        pgrep -x mysqld > /dev/null 2>&1 || \
        pgrep -x mariadbd > /dev/null 2>&1; then
         print_success "MySQL/MariaDB kurulumu tamamlandı ve çalışıyor"
-        echo -e "${GREEN}MySQL Root Şifresi:${NC} Ayarlanmış ve doğrulandı"
+        echo -e "${GREEN}MySQL Root Şifresi:${NC} Ayarlanmış ve doğrulandı"
         
         if systemctl is-active --quiet mariadb 2>/dev/null; then
             echo -e "${GREEN}Servis Durumu:${NC} $(systemctl is-active mariadb)"
@@ -5005,7 +5005,7 @@ fix_php_duplicate_modules() {
             local pdo_links=($(find "$conf_dir" -type l -name "*pdo.ini" 2>/dev/null))
             local mysqlnd_links=($(find "$conf_dir" -type l -name "*mysqlnd*" 2>/dev/null))
             
-            print_info "Mevcut linkler â†’ dom: ${#dom_links[@]}, xml: ${#xml_links[@]}, pdo: ${#pdo_links[@]}, mysqlnd: ${#mysqlnd_links[@]}"
+            print_info "Mevcut linkler -> dom: ${#dom_links[@]}, xml: ${#xml_links[@]}, pdo: ${#pdo_links[@]}, mysqlnd: ${#mysqlnd_links[@]}"
             
             # Temizlenecek modüller (çift yükleme önleme)
             local modules_to_clean=("dom" "xml" "pdo" "mysqlnd" "mysqli" "simplexml" "xmlreader" "xmlwriter" "xsl")
@@ -5107,10 +5107,10 @@ EOF
     echo ""
     print_info "Modül linkleri yeniden oluşturuluyor (çift linkleri önlemek için)..."
     
-    # Şimdi linkleri temizle ve YENİDEN oluştur
+    # Şimdi linkleri temizle ve YENİDEN oluştur
     for conf_dir in "/etc/php/$php_version/cli/conf.d" "/etc/php/$php_version/fpm/conf.d"; do
         if [ -d "$conf_dir" ]; then
-            print_info "  â†’ $conf_dir"
+            print_info "  -> $conf_dir"
             
             for module_def in "${modules_to_fix[@]}"; do
                 local mod=$(echo "$module_def" | cut -d':' -f1)
@@ -5137,7 +5137,7 @@ EOF
     sleep 3
     
     echo ""
-    print_header "SONUÇ DOĞRULAMA"
+    print_header "SONUÇ DOĞRULAMA"
     
     # Test et
     print_info "PHP modül yükleme testi yapılıyor..."
@@ -5188,17 +5188,17 @@ EOF
     
     # Sonuç özeti
     if [ -z "$cli_warnings" ] && [ -z "$fpm_warnings" ]; then
-        print_success "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+        print_success "========================================"
         print_success "  [OK] SORUN TAMAMEN DÜZELTİLDİ!"
-        print_success "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+        print_success "========================================"
         echo ""
         print_info "Composer artık hatasız çalışmalı:"
         echo "  composer install"
         echo "  composer update"
     else
-        print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
-        print_warning "  âš  SORUN KISMEN DÜZELDİ"
-        print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+        print_warning "========================================"
+        print_warning "  [!]  SORUN KISMEN DÜZELDİ"
+        print_warning "========================================"
         echo ""
         print_info "Link durumunu kontrol edin:"
         echo "  sudo ls -la /etc/php/$php_version/cli/conf.d/ | grep -E 'dom|xml'"
@@ -5364,7 +5364,7 @@ quick_fix_php_extensions() {
     
     echo ""
     
-    # Şimdi mevcut durumu göster
+    # Şimdi mevcut durumu göster
     print_info "Mevcut PHP eklentileri kontrol ediliyor..."
     echo "Kurulu eklentiler:"
     $php_binary -m 2>/dev/null | grep -v "^\[" | head -20
@@ -5558,9 +5558,9 @@ quick_fix_php_extensions() {
         if composer --version &>/dev/null 2>&1; then
             print_success "[OK] Composer çalışıyor: $(composer --version 2>/dev/null | head -1)"
             echo ""
-            print_info "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
-            print_info "  ğŸ‰ HER ŞEY HAZIR!"
-            print_info "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+            print_info "========================================"
+            print_info "  ğŸ‰ HER ŞEY HAZIR!"
+            print_info "========================================"
             echo ""
             print_info "Laravel projenizde çalıştırabilirsiniz:"
             echo "  ${GREEN}composer install${NC}"
@@ -5831,9 +5831,9 @@ install_php_extensions() {
         fi
         
         echo ""
-        print_success "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+        print_success "========================================"
         print_success "  PHP Eklentileri Kurulumu Tamamlandı!"
-        print_success "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+        print_success "========================================"
         echo ""
         print_info "Kurulu PHP eklentileri:"
         $php_binary -m 2>/dev/null | grep -v "^\[" | sort
@@ -6003,11 +6003,11 @@ EOF
         systemctl restart nginx
         print_success "Nginx optimizasyonu tamamlandı!"
         echo -e "${GREEN}Uygulanan Ayarlar:${NC}"
-        echo "  â€¢ worker_processes: $worker_processes"
-        echo "  â€¢ worker_connections: $worker_connections"
-        echo "  â€¢ max_connections: $max_connections"
-        echo "  â€¢ keepalive_timeout: $keepalive_timeout"
-        echo "  â€¢ Gzip compression: Aktif"
+        echo "  * worker_processes: $worker_processes"
+        echo "  * worker_connections: $worker_connections"
+        echo "  * max_connections: $max_connections"
+        echo "  * keepalive_timeout: $keepalive_timeout"
+        echo "  * Gzip compression: Aktif"
     else
         print_error "Nginx yapılandırma hatası! Yedek geri yükleniyor..."
         cp "$nginx_conf_backup" "$nginx_conf"
@@ -6125,11 +6125,11 @@ optimize_php_fpm() {
         if systemctl is-active --quiet php$php_version-fpm; then
             print_success "PHP-FPM optimizasyonu tamamlandı!"
             echo -e "${GREEN}Uygulanan Ayarlar:${NC}"
-            echo "  â€¢ pm.max_children: $max_children"
-            echo "  â€¢ pm.start_servers: $start_servers"
-            echo "  â€¢ pm.min_spare_servers: $min_spare_servers"
-            echo "  â€¢ pm.max_spare_servers: $max_spare_servers"
-            echo "  â€¢ pm.max_requests: $max_requests"
+            echo "  * pm.max_children: $max_children"
+            echo "  * pm.start_servers: $start_servers"
+            echo "  * pm.min_spare_servers: $min_spare_servers"
+            echo "  * pm.max_spare_servers: $max_spare_servers"
+            echo "  * pm.max_requests: $max_requests"
         else
             print_error "PHP-FPM başlatılamadı! Yedek geri yükleniyor..."
             cp "$php_fpm_backup" "$php_fpm_pool"
@@ -6246,8 +6246,8 @@ optimize_mysql() {
         if systemctl is-active --quiet mariadb || systemctl is-active --quiet mysql; then
             print_success "MySQL optimizasyonu tamamlandı!"
             echo -e "${GREEN}Uygulanan Ayarlar:${NC}"
-            echo "  â€¢ innodb_buffer_pool_size: ${buffer_pool_mb}M"
-            echo "  â€¢ max_connections: $max_connections"
+            echo "  * innodb_buffer_pool_size: ${buffer_pool_mb}M"
+            echo "  * max_connections: $max_connections"
         else
             print_error "MySQL başlatılamadı! Yedek geri yükleniyor..."
             cp "$mysql_backup" "$mysql_conf"
@@ -6335,9 +6335,9 @@ optimize_redis() {
         if systemctl is-active --quiet redis; then
             print_success "Redis optimizasyonu tamamlandı!"
             echo -e "${GREEN}Uygulanan Ayarlar:${NC}"
-            echo "  â€¢ maxmemory: ${max_memory_mb}mb"
-            echo "  â€¢ maxmemory-policy: allkeys-lru"
-            echo "  â€¢ maxclients: $maxclients"
+            echo "  * maxmemory: ${max_memory_mb}mb"
+            echo "  * maxmemory-policy: allkeys-lru"
+            echo "  * maxclients: $maxclients"
         else
             print_error "Redis başlatılamadı! Yedek geri yükleniyor..."
             cp "$redis_backup" "$redis_conf"
@@ -6423,9 +6423,9 @@ EOF
     
     print_success "Sistem limitleri optimizasyonu tamamlandı!"
     echo -e "${GREEN}Uygulanan Ayarlar:${NC}"
-    echo "  â€¢ open files limit: $open_files_limit"
-    echo "  â€¢ net.core.somaxconn: 65535"
-    echo "  â€¢ net.ipv4.tcp_max_syn_backlog: 65535"
+    echo "  * open files limit: $open_files_limit"
+    echo "  * net.core.somaxconn: 65535"
+    echo "  * net.ipv4.tcp_max_syn_backlog: 65535"
     echo ""
     print_warning "Değişikliklerin tam olarak etkili olması için oturum kapatıp açmanız gerekebilir"
 }
@@ -6571,9 +6571,9 @@ optimize_all_services() {
     print_success "Tüm servisler donanımınıza göre optimize edildi"
     echo ""
     echo -e "${YELLOW}ÖNEMLİ:${NC}"
-    echo "â€¢ Değişikliklerin tam etkili olması için servisler yeniden başlatıldı"
-    echo "â€¢ Sistem limitleri için oturum kapatıp açmanız gerekebilir"
-    echo "â€¢ Performansı izlemek için: htop, iotop, nginx -V"
+    echo "* Değişikliklerin tam etkili olması için servisler yeniden başlatıldı"
+    echo "* Sistem limitleri için oturum kapatıp açmanız gerekebilir"
+    echo "* Performansı izlemek için: htop, iotop, nginx -V"
 }
 
 install_openvpn() {
@@ -6970,7 +6970,7 @@ EOF
     print_success "OpenVPN-Admin kurulumu tamamlandı!"
     echo -e "${GREEN}Erişim:${NC} http://$admin_domain"
     echo -e "${GREEN}Varsayılan Kullanıcı:${NC} admin"
-    echo -e "${GREEN}Varsayılan Şifre:${NC} admin"
+    echo -e "${GREEN}Varsayılan Şifre:${NC} admin"
     echo -e "${YELLOW}UYARI:${NC} İlk girişte şifreyi değiştirin!"
 }
 
@@ -8566,32 +8566,32 @@ create_ssl() {
     print_header "SSL Sertifikası Oluşturma"
     
     echo ""
-    print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    print_warning "==========================================="
     print_warning "  ÖNEMLİ: SSL SUNUCU KONUMU"
-    print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    print_warning "==========================================="
     echo ""
-    echo -e "${YELLOW}SSL sertifikası NGINX'İN ÇALIŞTIĞI SUNUCUDA oluşturulmalıdır!${NC}"
+    echo -e "${YELLOW}SSL sertifikası NGINX'İN ÇALIŞTIĞI SUNUCUDA oluşturulmalıdır!${NC}"
     echo ""
     echo -e "${CYAN}Örnek Multi-Server Yapı:${NC}"
     echo "  A Server (DNS):     BIND9 çalışıyor"
-    echo "  B Server (Laravel): Nginx + PHP çalışıyor â† SSL BURDA OLUŞTURULMALI!"
+    echo "  B Server (Laravel): Nginx + PHP çalışıyor <- SSL BURDA OLUŞTURULMALI!"
     echo ""
-    echo -e "${YELLOW}Şu anda bu script hangi sunucuda çalışıyor?${NC}"
+    echo -e "${YELLOW}Şu anda bu script hangi sunucuda çalışıyor?${NC}"
     local current_ip=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
     echo "  Bu sunucu IP: ${GREEN}$current_ip${NC}"
     echo ""
     
     # Nginx kontrolü
     if ! command -v nginx &>/dev/null; then
-        print_error "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
-        print_error "  [X] BU SUNUCUDA NGINX KURULU DEĞİL!"
-        print_error "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+        print_error "==========================================="
+        print_error "  [X] BU SUNUCUDA NGINX KURULU DEĞİL!"
+        print_error "==========================================="
         echo ""
         echo -e "${RED}SSL sertifikası sadece Nginx'in çalıştığı sunucuda oluşturulabilir!${NC}"
         echo ""
         echo -e "${CYAN}Çözümler:${NC}"
         echo "  1. Nginx'in çalıştığı sunucuya gidin ve orada bu script'i çalıştırın"
-        echo "  2. Bu sunucuya Nginx kurun (Ana Menü â†’ Seçenek 1)"
+        echo "  2. Bu sunucuya Nginx kurun (Ana Menü -> Seçenek 1)"
         echo "  3. Manuel DNS challenge kullanın ve sertifikayı elle transfer edin"
         echo ""
         
@@ -8616,7 +8616,7 @@ create_ssl() {
     ask_input "SSL oluşturulacak domain/subdomain adını girin" domain
     
     # Türkçe karakter kontrolü ve Punycode dönüşümü
-    if echo "$domain" | grep -q '[şğüöçıİŞĞÜÖÇ]'; then
+    if echo "$domain" | grep -q '[şğüöçıİŞĞÜÖÇ]'; then
         print_warning "Domain adında Türkçe karakter tespit edildi!"
         echo "  Orijinal: $domain"
         
@@ -8642,7 +8642,7 @@ create_ssl() {
             echo ""
             print_info "Manuel Punycode dönüşümü:"
             echo "  Online: https://www.punycoder.com/"
-            echo "  Örnek: türkçe.com â†’ xn--trkce-3ya.com"
+            echo "  Örnek: türkçe.com -> xn--trkce-3ya.com"
             echo ""
             
             if ask_yes_no "idn2 paketini şimdi kurmak ister misiniz?"; then
@@ -8672,9 +8672,9 @@ create_ssl() {
         local current_ip=$(hostname -I | awk '{print $1}')
         
         if [ "$DNS_SERVER_IP" != "$current_ip" ] && [ -n "$DNS_SERVER_IP" ]; then
-            print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+            print_warning "==========================================="
             print_warning "  FARKLI SUNUCU TESPİT EDİLDİ"
-            print_warning "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+            print_warning "==========================================="
             echo ""
             echo -e "${CYAN}DNS Server:${NC}      $DNS_SERVER_IP (BIND9 çalışıyor)"
             echo -e "${CYAN}Bu Server (SSL):${NC} $current_ip (Nginx çalışıyor)"
@@ -8688,7 +8688,7 @@ create_ssl() {
             echo "  4. Let's Encrypt TXT kaydını doğrular"
             echo "  5. SSL sertifikası BU SUNUCUDA Nginx'e kurulur"
             echo ""
-            echo -e "${YELLOW}HTTP-01 challenge bu yapıda ÇALIŞMAZ!${NC}"
+            echo -e "${YELLOW}HTTP-01 challenge bu yapıda ÇALIŞMAZ!${NC}"
             echo "DNS-01 challenge kullanmalısınız"
             echo ""
             
@@ -8804,9 +8804,9 @@ create_ssl_dns_manual() {
     echo "4. Doğrulama başarılıysa sertifika verilir"
     echo ""
     echo -e "${YELLOW}Avantajları:${NC}"
-    echo "â€¢ DNS farklı sunucuda olsa bile çalışır"
-    echo "â€¢ Web sunucusu internete açık olmasa bile çalışır"
-    echo "â€¢ Wildcard sertifika (*.$domain) oluşturabilir"
+    echo "* DNS farklı sunucuda olsa bile çalışır"
+    echo "* Web sunucusu internete açık olmasa bile çalışır"
+    echo "* Wildcard sertifika (*.$domain) oluşturabilir"
     echo ""
     
     if ! ask_yes_no "Devam etmek istiyor musunuz?"; then
@@ -8947,7 +8947,7 @@ create_ssl_dns_auto() {
     
     echo -e "${CYAN}Web sunucusuna nasıl bağlanmak istersiniz?${NC}"
     echo "1) SSH Key (Önerilen)"
-    echo "2) Şifre ile (sshpass)"
+    echo "2) Şifre ile (sshpass)"
     echo ""
     
     read -p "Seçiminiz (1-2) [1]: " ssh_method
@@ -8987,9 +8987,9 @@ create_ssl_dns_auto() {
                 print_success "[OK] SSH key Web sunucusuna kopyalandı!"
             else
                 print_error "SSH key kopyalama başarısız!"
-                print_info "Şifre yanlış veya PasswordAuthentication kapalı olabilir"
+                print_info "Şifre yanlış veya PasswordAuthentication kapalı olabilir"
                 
-                if ask_yes_no "Şifre ile devam etmek ister misiniz?"; then
+                if ask_yes_no "Şifre ile devam etmek ister misiniz?"; then
                     ssh_method="2"
                 else
                     return 1
@@ -8999,8 +8999,8 @@ create_ssl_dns_auto() {
     fi
     
     if [ "$ssh_method" = "2" ]; then
-        # Şifre yöntemi
-        print_info "Şifre authentication kullanılıyor..."
+        # Şifre yöntemi
+        print_info "Şifre authentication kullanılıyor..."
         
         # sshpass kontrolü
         if ! command -v sshpass &>/dev/null; then
@@ -9013,13 +9013,13 @@ create_ssl_dns_auto() {
             fi
         fi
         
-        # Şifre al (henüz alınmadıysa)
+        # Şifre al (henüz alınmadıysa)
         if [ -z "$ssh_password" ]; then
             ask_password "Web sunucusu $web_server_user şifresi" ssh_password
         fi
         
-        # Şifre ile bağlantı testi (Web sunucusuna)
-        print_info "Şifre ile bağlantı testi..."
+        # Şifre ile bağlantı testi (Web sunucusuna)
+        print_info "Şifre ile bağlantı testi..."
         echo "  Hedef: $web_server_user@$web_server_ip"
         echo ""
         
@@ -9028,20 +9028,20 @@ create_ssl_dns_auto() {
         local ssh_result=$?
         
         if [ $ssh_result -eq 0 ]; then
-            print_success "[OK] Şifre ile SSH bağlantısı başarılı (Web sunucusuna)!"
+            print_success "[OK] Şifre ile SSH bağlantısı başarılı (Web sunucusuna)!"
             
             # Sertifika kurulumu için bilgileri sakla
             export WEB_SSH_PASSWORD="$ssh_password"
             export WEB_SSH_USER="$web_server_user"
             export WEB_SSH_HOST="$web_server_ip"
         else
-            print_error "Şifre ile SSH bağlantısı başarısız!"
+            print_error "Şifre ile SSH bağlantısı başarısız!"
             echo ""
             echo -e "${RED}DETAYLI HATA:${NC}"
             echo "$ssh_error" | grep -i "permission\|denied\|auth\|failed\|refused" | head -10
             echo ""
             print_info "Olası nedenler:"
-            echo "  1. Şifre yanlış"
+            echo "  1. Şifre yanlış"
             echo "  2. Kullanıcı yanlış (B sunucusunda 'cat /etc/passwd | grep $web_server_user')"
             echo "  3. PasswordAuthentication no (/etc/ssh/sshd_config)"
             echo "  4. Kullanıcı SSH erişimi yok (AllowUsers/DenyUsers)"
@@ -9053,9 +9053,9 @@ create_ssl_dns_auto() {
             echo "  sudo cat /etc/ssh/sshd_config | grep -i permitroot"
             echo ""
             
-            echo -e "${YELLOW}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+            echo -e "${YELLOW}===========================================${NC}"
             echo -e "${YELLOW}  ÖNERİ: ROOT KULLANICISI KULLANIN!${NC}"
-            echo -e "${YELLOW}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+            echo -e "${YELLOW}===========================================${NC}"
             echo ""
             echo "Root kullanıcısı ile:"
             echo "  [OK] Sudo gerektirmez"
@@ -9079,8 +9079,8 @@ create_ssl_dns_auto() {
                     echo ""
                     print_info "B sunucusunda manuel kontrol:"
                     echo "  sudo nano /etc/ssh/sshd_config"
-                    echo "  â†’ PasswordAuthentication yes"
-                    echo "  â†’ PermitRootLogin yes"
+                    echo "  -> PasswordAuthentication yes"
+                    echo "  -> PermitRootLogin yes"
                     echo "  sudo systemctl restart sshd"
                     return 1
                 fi
@@ -9123,24 +9123,24 @@ create_dns_challenge_hooks() {
     echo "  DNS Server: $dns_server"
     echo "  Web Server: $web_server_ip (zone dosyası için)"
     
-    # Şifre yöntemi için güvenli geçiş (dosya kullan)
+    # Şifre yöntemi için güvenli geçiş (dosya kullan)
     local password_file="/tmp/.dns_ssh_pass"
     
     if [ "$use_password" = true ] && [ -n "$password" ]; then
-        # Şifreyi güvenli dosyaya yaz
+        # Şifreyi güvenli dosyaya yaz
         echo "$password" > "$password_file"
         chmod 600 "$password_file"
-        print_info "[OK] Şifre authentication kullanılacak"
+        print_info "[OK] Şifre authentication kullanılacak"
     else
         print_info "[OK] Key authentication kullanılacak"
     fi
     
     # Auth hook (TXT kaydı ekle)
     if [ "$use_password" = true ]; then
-        # Şifre ile version
+        # Şifre ile version
         cat > /usr/local/bin/certbot-dns-add.sh <<HOOK_ADD
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydı Ekle (Şifre ile)
+# Certbot DNS-01 Challenge - TXT Kaydı Ekle (Şifre ile)
 
 DNS_SERVER="$dns_server"
 DNS_USER="$dns_user"
@@ -9412,10 +9412,10 @@ HOOK_ADD
     
     # Cleanup hook (TXT kaydını sil)
     if [ "$use_password" = true ]; then
-        # Şifre ile version
+        # Şifre ile version
         cat > /usr/local/bin/certbot-dns-cleanup.sh <<HOOK_CLEANUP
 #!/bin/bash
-# Certbot DNS-01 Challenge - TXT Kaydını Sil (Şifre ile)
+# Certbot DNS-01 Challenge - TXT Kaydını Sil (Şifre ile)
 
 DNS_SERVER="$dns_server"
 DNS_USER="$dns_user"
@@ -9516,12 +9516,12 @@ HOOK_CLEANUP
     chmod +x /usr/local/bin/certbot-dns-add.sh
     chmod +x /usr/local/bin/certbot-dns-cleanup.sh
     
-    # Şifre dosyası için cleanup da ekle
+    # Şifre dosyası için cleanup da ekle
     if [ "$use_password" = true ]; then
         # Cleanup hook sonuna şifre dosyası silme ekle
         cat >> /usr/local/bin/certbot-dns-cleanup.sh <<'CLEANUP_PASS'
 
-# Şifre dosyasını temizle
+# Şifre dosyasını temizle
 rm -f "$PASSWORD_FILE" 2>/dev/null
 CLEANUP_PASS
     fi
@@ -9534,7 +9534,7 @@ CLEANUP_PASS
     
     if [ "$use_password" = true ]; then
         echo ""
-        echo -e "${CYAN}Şifre dosyası:${NC} $password_file (geçici)"
+        echo -e "${CYAN}Şifre dosyası:${NC} $password_file (geçici)"
         echo -e "${YELLOW}Not: SSL işlemi bitince otomatik silinir${NC}"
     fi
 }
@@ -9564,38 +9564,38 @@ install_ssl_to_remote_nginx() {
     local scp_cmd="scp -o StrictHostKeyChecking=no"
     
     if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
-        # Şifre dosyası kullan (özel karakter güvenli)
+        # Şifre dosyası kullan (özel karakter güvenli)
         local pass_file="/tmp/.web_ssh_pass_$$"
         
-        # Şifreyi güvenli şekilde dosyaya yaz (özel karakterleri koru)
+        # Şifreyi güvenli şekilde dosyaya yaz (özel karakterleri koru)
         printf '%s\n' "$remote_pass" > "$pass_file"
         chmod 600 "$pass_file"
         
         ssh_cmd="sshpass -f $pass_file ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no"
         scp_cmd="sshpass -f $pass_file scp -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no"
         
-        print_info "[OK] Şifre geçici dosyaya yazıldı (özel karakter korumalı)"
+        print_info "[OK] Şifre geçici dosyaya yazıldı (özel karakter korumalı)"
         echo "  Dosya: $pass_file (chmod 600)"
     fi
     
     echo ""
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo -e "${CYAN}  MANUEL TEST KOMUTLARI${NC}"
-    echo -e "${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+    echo -e "${CYAN}===========================================${NC}"
     echo "A sunucusundan B'ye SSH testi:"
     echo ""
     if [ "$ssh_method" = "2" ]; then
-        echo "# Şifre dosyası ile (özel karakter güvenli):"
-        echo "  echo 'ŞİFRENİZ' > /tmp/test_pass"
+        echo "# Şifre dosyası ile (özel karakter güvenli):"
+        echo "  echo 'ŞİFRENİZ' > /tmp/test_pass"
         echo "  chmod 600 /tmp/test_pass"
         echo "  sshpass -f /tmp/test_pass ssh root@$remote_ip 'echo TEST'"
         echo ""
         echo "# Direkt şifre ile (basit şifreler için):"
-        echo "  sshpass -p 'ŞİFRENİZ' ssh root@$remote_ip 'echo TEST'"
+        echo "  sshpass -p 'ŞİFRENİZ' ssh root@$remote_ip 'echo TEST'"
     else
         echo "  ssh $remote_user@$remote_ip 'echo TEST'"
     fi
-    echo "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    echo "==========================================="
     echo ""
     
     # İsteğe bağlı manuel test
@@ -9616,8 +9616,8 @@ install_ssl_to_remote_nginx() {
             echo ""
             print_info "B sunucusunda SSH yapılandırmasını kontrol edin:"
             echo "  sudo nano /etc/ssh/sshd_config"
-            echo "  â†’ PasswordAuthentication yes"
-            echo "  â†’ PermitRootLogin yes"
+            echo "  -> PasswordAuthentication yes"
+            echo "  -> PermitRootLogin yes"
             echo "  sudo systemctl restart sshd"
             return 1
         fi
@@ -9698,9 +9698,9 @@ install_ssl_to_remote_nginx() {
     if [ $? -ne 0 ]; then
         print_error "Web sunucusunda dizin oluşturulamadı!"
         echo ""
-        echo -e "${YELLOW}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+        echo -e "${YELLOW}===========================================${NC}"
         echo -e "${YELLOW}  ÇÖZÜMLEr:${NC}"
-        echo -e "${YELLOW}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+        echo -e "${YELLOW}===========================================${NC}"
         echo "1. ROOT kullanıcısı kullanın (Önerilen)"
         echo "   Web kullanıcı: root"
         echo ""
@@ -9726,7 +9726,7 @@ install_ssl_to_remote_nginx() {
         $scp_cmd -r /etc/letsencrypt/live/$domain/* $remote_user@$remote_ip:/tmp/ssl-$domain/
         
         if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
-            # Şifre ile sudo
+            # Şifre ile sudo
             $ssh_cmd $remote_user@$remote_ip "
                 echo '$remote_pass' | sudo -S cp -r /tmp/ssl-$domain/* /etc/letsencrypt/live/$domain/
                 echo '$remote_pass' | sudo -S chmod 644 /etc/letsencrypt/live/$domain/*
@@ -9774,7 +9774,7 @@ install_ssl_to_remote_nginx() {
     else
         # Root değil - 2 seçenek
         if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
-            # Şifre ile sudo -S (HER sudo için şifre geç)
+            # Şifre ile sudo -S (HER sudo için şifre geç)
             print_info "sudo -S ile yetki alınıyor (şifre ile)..."
             
             $ssh_cmd $remote_user@$remote_ip "
@@ -9820,16 +9820,16 @@ install_ssl_to_remote_nginx() {
     
     local result=$?
     
-    # Şifre dosyasını temizle
+    # Şifre dosyasını temizle
     if [ "$ssh_method" = "2" ] && [ -f "$pass_file" ]; then
         rm -f "$pass_file" 2>/dev/null
         print_info "[OK] Geçici şifre dosyası temizlendi"
     fi
     
     if [ $result -eq 0 ]; then
-        print_success "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+        print_success "==========================================="
         print_success "  [OK] SSL WEB SUNUCUSUNA KURULDU!"
-        print_success "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+        print_success "==========================================="
         echo ""
         echo -e "${CYAN}Domain:${NC} https://$domain"
         echo -e "${CYAN}Web Server:${NC} $remote_ip"
@@ -9933,9 +9933,9 @@ fix_remote_ssh_config() {
     
     echo -e "${CYAN}Bu işlem uzak sunucuda SSH yapılandırmasını düzeltecek${NC}"
     echo "Değiştirilecek ayarlar:"
-    echo "  â€¢ PasswordAuthentication yes"
-    echo "  â€¢ PubkeyAuthentication yes"
-    echo "  â€¢ PermitRootLogin yes (root kullanıcısı için)"
+    echo "  * PasswordAuthentication yes"
+    echo "  * PubkeyAuthentication yes"
+    echo "  * PermitRootLogin yes (root kullanıcısı için)"
     echo ""
     
     print_warning "ÖNEMLİ: Uzak sunucuda root şifresini bilmeniz gerekiyor!"
@@ -9968,7 +9968,7 @@ cp $SSHD_CONFIG ${SSHD_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)
 # PasswordAuthentication etkinleştir
 if grep -q "^PasswordAuthentication no" $SSHD_CONFIG; then
     sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' $SSHD_CONFIG
-    echo "[DEĞIŞTI] PasswordAuthentication yes"
+    echo "[DEĞIŞTI] PasswordAuthentication yes"
 elif ! grep -q "^PasswordAuthentication" $SSHD_CONFIG; then
     echo "PasswordAuthentication yes" >> $SSHD_CONFIG
     echo "[EKLENDİ] PasswordAuthentication yes"
@@ -9983,14 +9983,14 @@ if ! grep -q "^PubkeyAuthentication yes" $SSHD_CONFIG; then
     else
         echo "PubkeyAuthentication yes" >> $SSHD_CONFIG
     fi
-    echo "[DEĞIŞTI] PubkeyAuthentication yes"
+    echo "[DEĞIŞTI] PubkeyAuthentication yes"
 fi
 
 # PermitRootLogin etkinleştir (root için)
 if [ "$USER" = "root" ]; then
     if grep -q "^PermitRootLogin no" $SSHD_CONFIG || grep -q "^PermitRootLogin prohibit-password" $SSHD_CONFIG; then
         sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' $SSHD_CONFIG
-        echo "[DEĞIŞTI] PermitRootLogin yes"
+        echo "[DEĞIŞTI] PermitRootLogin yes"
     elif ! grep -q "^PermitRootLogin" $SSHD_CONFIG; then
         echo "PermitRootLogin yes" >> $SSHD_CONFIG
         echo "[EKLENDİ] PermitRootLogin yes"
@@ -10013,7 +10013,7 @@ REMOTE_COMMANDS
         
         sleep 2
         
-        # Şimdi key kopyala (şifre authentication artık aktif)
+        # Şimdi key kopyala (şifre authentication artık aktif)
         if [ ! -f "/root/.ssh/id_rsa" ]; then
             ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q
         fi
@@ -10039,7 +10039,7 @@ REMOTE_COMMANDS
         fi
     else
         print_error "Uzak sunucuda işlem başarısız!"
-        print_info "Şifre yanlış olabilir veya SSH erişimi yok"
+        print_info "Şifre yanlış olabilir veya SSH erişimi yok"
     fi
 }
 
@@ -10072,13 +10072,13 @@ test_dns_hook_manually() {
     local record_name="_acme-challenge-test"
     
     echo ""
-    print_info "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    print_info "==========================================="
     print_info "Domain Analizi:"
     echo "  Test domain: $test_domain"
     echo "  Ana domain:  $main_domain"
     echo "  Zone file:   /etc/bind/db.$main_domain"
     echo "  Record:      $record_name"
-    print_info "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    print_info "==========================================="
     echo ""
     
     # Test 0: Zone dosyası var mı?
@@ -10179,9 +10179,9 @@ test_dns_hook_manually() {
     fi
     
     echo ""
-    print_success "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    print_success "==========================================="
     print_success "  TEST TAMAMLANDI"
-    print_success "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    print_success "==========================================="
     echo ""
     print_info "Tüm testler başarılıysa, SSL otomatik challenge çalışacaktır"
 }
@@ -10203,7 +10203,7 @@ test_ssh_connection() {
     echo -e "${CYAN}Test 1: SSH Key Authentication${NC}"
     if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes $remote_user@$remote_ip "echo test" &>/dev/null 2>&1; then
         print_success "[OK] SSH Key authentication çalışıyor!"
-        echo "  Durum: Şifresiz giriş aktif"
+        echo "  Durum: Şifresiz giriş aktif"
     else
         print_warning "[X] SSH Key authentication çalışmıyor"
         echo "  Durum: Key kurulumu gerekli"
@@ -10225,11 +10225,11 @@ test_ssh_connection() {
     
     if sshpass -p "$test_password" ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no $remote_user@$remote_ip "echo test" &>/dev/null 2>&1; then
         print_success "[OK] SSH Password authentication çalışıyor!"
-        echo "  Durum: Şifre doğru, bağlantı başarılı"
+        echo "  Durum: Şifre doğru, bağlantı başarılı"
         echo ""
         
         # Key kopyalama öner
-        if ask_yes_no "SSH key'i şimdi kopyalamak ister misiniz? (Şifresiz giriş için)"; then
+        if ask_yes_no "SSH key'i şimdi kopyalamak ister misiniz? (Şifresiz giriş için)"; then
             if [ ! -f "/root/.ssh/id_rsa" ]; then
                 ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q
             fi
@@ -10240,7 +10240,7 @@ test_ssh_connection() {
         fi
     else
         print_error "[X] SSH Password authentication çalışmıyor!"
-        echo "  Durum: Şifre yanlış veya password authentication kapalı"
+        echo "  Durum: Şifre yanlış veya password authentication kapalı"
         echo ""
         
         print_warning "Uzak sunucuda SSH yapılandırması düzeltilmeli!"
@@ -10427,7 +10427,7 @@ install_gitlab() {
         return 1
     fi
     
-    # KURULUM BAŞLANGICI
+    # KURULUM BAŞLANGICI
     print_header "GitLab Kurulumu Başlatılıyor..."
     
     # Sistem güncellemeleri
@@ -10563,26 +10563,26 @@ EOF
     echo -e "${YELLOW}ÖNEMLİ:${NC}"
     echo "GitLab ilk kurulumda otomatik bir root şifresi oluşturur."
     
-    # Şifre dosyasını kontrol et
+    # Şifre dosyasını kontrol et
     local password_file="/etc/gitlab/initial_root_password"
     if [ -f "$password_file" ]; then
         echo ""
         echo -e "${CYAN}İlk giriş bilgileri:${NC}"
         echo -e "${CYAN}Kullanıcı adı:${NC} root"
-        echo -e "${CYAN}Şifre:${NC} $(grep 'Password:' $password_file | cut -d' ' -f2)"
+        echo -e "${CYAN}Şifre:${NC} $(grep 'Password:' $password_file | cut -d' ' -f2)"
         echo ""
         echo -e "${YELLOW}UYARI:${NC} Bu şifre dosyası 24 saat sonra otomatik olarak silinir!"
-        echo "Şifreyi güvenli bir yere kaydedin ve ilk girişte değiştirin."
+        echo "Şifreyi güvenli bir yere kaydedin ve ilk girişte değiştirin."
     else
-        echo "Şifre dosyası henüz oluşturulmadı. Birkaç dakika bekleyip tekrar kontrol edin:"
+        echo "Şifre dosyası henüz oluşturulmadı. Birkaç dakika bekleyip tekrar kontrol edin:"
         echo -e "${CYAN}sudo cat /etc/gitlab/initial_root_password${NC}"
     fi
     echo ""
     echo -e "${CYAN}GitLab Yönetim Komutları:${NC}"
-    echo "â€¢ Durum kontrolü: ${GREEN}sudo gitlab-ctl status${NC}"
-    echo "â€¢ Yeniden başlatma: ${GREEN}sudo gitlab-ctl restart${NC}"
-    echo "â€¢ Yapılandırma uygulama: ${GREEN}sudo gitlab-ctl reconfigure${NC}"
-    echo "â€¢ Log görüntüleme: ${GREEN}sudo gitlab-ctl tail${NC}"
+    echo "* Durum kontrolü: ${GREEN}sudo gitlab-ctl status${NC}"
+    echo "* Yeniden başlatma: ${GREEN}sudo gitlab-ctl restart${NC}"
+    echo "* Yapılandırma uygulama: ${GREEN}sudo gitlab-ctl reconfigure${NC}"
+    echo "* Log görüntüleme: ${GREEN}sudo gitlab-ctl tail${NC}"
     echo ""
     print_success "GitLab kurulumu başarıyla tamamlandı!"
 }
@@ -10978,9 +10978,9 @@ install_docker() {
     echo -e "${GREEN}Docker Compose Version:${NC} $(docker compose version 2>/dev/null || docker-compose --version)"
     echo ""
     echo -e "${CYAN}Docker Yönetim Komutları:${NC}"
-    echo "â€¢ Durum: ${GREEN}sudo systemctl status docker${NC}"
-    echo "â€¢ Başlat: ${GREEN}sudo systemctl start docker${NC}"
-    echo "â€¢ Durdur: ${GREEN}sudo systemctl stop docker${NC}"
+    echo "* Durum: ${GREEN}sudo systemctl status docker${NC}"
+    echo "* Başlat: ${GREEN}sudo systemctl start docker${NC}"
+    echo "* Durdur: ${GREEN}sudo systemctl stop docker${NC}"
 }
 
 install_individual_service() {
@@ -11142,7 +11142,7 @@ install_individual_service() {
                 mysql_running=true
                 print_info "MySQL/MariaDB servisi çalışıyor"
                 
-                # Şifre ile bağlantı testi
+                # Şifre ile bağlantı testi
                 if [ -n "$MYSQL_ROOT_PASSWORD" ]; then
                     if ! mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" 2>/dev/null; then
                         mysql_error=true
@@ -11150,7 +11150,7 @@ install_individual_service() {
                         print_info "Hata: Access denied veya servis hatası tespit edildi"
                     fi
                 else
-                    # Şifresiz bağlantı testi
+                    # Şifresiz bağlantı testi
                     if ! mysql -u root -e "SELECT 1;" 2>/dev/null && ! sudo mysql -u root -e "SELECT 1;" 2>/dev/null; then
                         mysql_error=true
                         print_error "MySQL bağlantı hatası tespit edildi!"
@@ -11170,7 +11170,7 @@ install_individual_service() {
                 echo ""
                 echo "Seçenekler:"
                 echo "1) Mevcut kurulumu kaldırıp yeniden kur (Önerilen)"
-                echo "2) Şifreyi manuel olarak ayarla ve tekrar dene"
+                echo "2) Şifreyi manuel olarak ayarla ve tekrar dene"
                 echo "3) İptal et"
                 echo ""
                 read -p "Seçiminiz (1-3) [1]: " fix_choice
@@ -11196,14 +11196,14 @@ install_individual_service() {
                             ((retry_count++))
                         done
                         
-                        # Şifre ayarlamayı dene (birden fazla yöntem)
+                        # Şifre ayarlamayı dene (birden fazla yöntem)
                         local manual_password_set=false
                         local max_attempts=3
                         local attempt=0
                         
                         while [ $attempt -lt $max_attempts ] && [ "$manual_password_set" = false ]; do
                             ((attempt++))
-                            print_info "Şifre ayarlama denemesi $attempt/$max_attempts..."
+                            print_info "Şifre ayarlama denemesi $attempt/$max_attempts..."
                             
                             # Yöntem 1: sudo mysql (MariaDB 10.4+ için en güvenilir)
                             if sudo mysql <<EOF 2>/dev/null; then
@@ -11213,7 +11213,7 @@ ALTER USER 'root'@'::1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
 FLUSH PRIVILEGES;
 EOF
                                 manual_password_set=true
-                                print_success "Şifre sudo mysql ile ayarlandı"
+                                print_success "Şifre sudo mysql ile ayarlandı"
                                 break
                             # Yöntem 2: Normal mysql (eğer şifresiz erişim varsa)
                             elif mysql -u root <<EOF 2>/dev/null; then
@@ -11222,12 +11222,12 @@ ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
 FLUSH PRIVILEGES;
 EOF
                                 manual_password_set=true
-                                print_success "Şifre normal mysql ile ayarlandı"
+                                print_success "Şifre normal mysql ile ayarlandı"
                                 break
                             # Yöntem 3: mysqladmin
                             elif mysqladmin -u root password "$MYSQL_ROOT_PASSWORD" 2>/dev/null; then
                                 manual_password_set=true
-                                print_success "Şifre mysqladmin ile ayarlandı"
+                                print_success "Şifre mysqladmin ile ayarlandı"
                                 break
                             else
                                 sleep 2
@@ -11235,7 +11235,7 @@ EOF
                         done
                         
                         if [ "$manual_password_set" = true ]; then
-                            # Şifre ile bağlantı testi
+                            # Şifre ile bağlantı testi
                             sleep 2
                             local verify_count=0
                             local verify_success=false
@@ -11251,7 +11251,7 @@ EOF
                             done
                             
                             if [ "$verify_success" = false ]; then
-                                print_warning "Şifre ayarlandı ancak bağlantı testi başarısız"
+                                print_warning "Şifre ayarlandı ancak bağlantı testi başarısız"
                                 print_info "Manuel test için: mysql -u root -p"
                             fi
                         else
@@ -12146,13 +12146,13 @@ dns_management_menu() {
                 echo -e "  ${GREEN}[OK] BIND9 Çalışıyor${NC}"
                 ;;
             "bind9-stopped")
-                echo -e "  ${YELLOW}âš  BIND9 Kurulu ama Durdurulmuş${NC}"
+                echo -e "  ${YELLOW}[!]  BIND9 Kurulu ama Durdurulmuş${NC}"
                 ;;
             "dnsmasq")
                 echo -e "  ${GREEN}[OK] dnsmasq Çalışıyor${NC}"
                 ;;
             "dnsmasq-stopped")
-                echo -e "  ${YELLOW}âš  dnsmasq Kurulu ama Durdurulmuş${NC}"
+                echo -e "  ${YELLOW}[!]  dnsmasq Kurulu ama Durdurulmuş${NC}"
                 ;;
             "none")
                 echo -e "  ${RED}[X] DNS Servisi Kurulu Değil${NC}"
@@ -12503,7 +12503,7 @@ view_bind9_zone() {
     fi
     
     echo ""
-    echo -e "${CYAN}â•â•â• $domain_name Zone Dosyası â•â•â•${NC}"
+    echo -e "${CYAN}=== $domain_name Zone Dosyası ===${NC}"
     echo ""
     cat "$zone_file"
     echo ""
@@ -12538,7 +12538,7 @@ list_dnsmasq_records() {
         local ip=$(echo "$line" | awk '{print $1}')
         local hostname=$(echo "$line" | awk '{print $2}')
         
-        echo -e "${GREEN}$count)${NC} $hostname â†’ $ip"
+        echo -e "${GREEN}$count)${NC} $hostname -> $ip"
         ((count++))
     done < "$hosts_file"
     
@@ -12585,7 +12585,7 @@ add_dnsmasq_record() {
     # Kaydı ekle
     echo "$ip_address    $hostname" >> "$hosts_file"
     
-    print_success "[OK] DNS kaydı eklendi: $hostname â†’ $ip_address"
+    print_success "[OK] DNS kaydı eklendi: $hostname -> $ip_address"
     
     # dnsmasq'u yeniden başlat
     systemctl restart dnsmasq
@@ -12678,7 +12678,7 @@ view_dnsmasq_hosts() {
         return 1
     fi
     
-    echo -e "${CYAN}â•â•â• dnsmasq Hosts Dosyası â•â•â•${NC}"
+    echo -e "${CYAN}=== dnsmasq Hosts Dosyası ===${NC}"
     echo ""
     cat "$hosts_file"
     echo ""
@@ -13260,13 +13260,13 @@ PYTHON_FIX
     [ -f "$reverse_zone" ] && echo -e "${GREEN}Reverse Zone:${NC} $reverse_zone"
     echo ""
     echo -e "${CYAN}Yararlı Komutlar:${NC}"
-    echo "â€¢ DNS test: ${GREEN}dig @$server_ip $domain_name${NC}"
-    echo "â€¢ Reverse DNS test: ${GREEN}dig @$server_ip -x $server_ip${NC}"
-    echo "â€¢ Zone dosyası düzenle: ${GREEN}nano $forward_zone${NC}"
-    echo "â€¢ Yapılandırma kontrolü: ${GREEN}named-checkconf${NC}"
-    echo "â€¢ Servis durumu: ${GREEN}systemctl status named${NC}"
-    echo "â€¢ Servis yeniden başlat: ${GREEN}systemctl restart named${NC}"
-    echo "â€¢ Log görüntüle: ${GREEN}journalctl -u named -f${NC}"
+    echo "* DNS test: ${GREEN}dig @$server_ip $domain_name${NC}"
+    echo "* Reverse DNS test: ${GREEN}dig @$server_ip -x $server_ip${NC}"
+    echo "* Zone dosyası düzenle: ${GREEN}nano $forward_zone${NC}"
+    echo "* Yapılandırma kontrolü: ${GREEN}named-checkconf${NC}"
+    echo "* Servis durumu: ${GREEN}systemctl status named${NC}"
+    echo "* Servis yeniden başlat: ${GREEN}systemctl restart named${NC}"
+    echo "* Log görüntüle: ${GREEN}journalctl -u named -f${NC}"
     echo ""
     echo -e "${YELLOW}NOT:${NC} Nginx'te yeni domain eklediğinizde, DNS kayıtlarını manuel olarak eklemeniz gerekebilir."
     echo "   Veya 'Nginx Domain'lerini DNS'e Ekle' seçeneğini kullanabilirsiniz."
@@ -13404,12 +13404,12 @@ EOF
     echo -e "${GREEN}Hosts Dosyası:${NC} $dnsmasq_hosts"
     echo ""
     echo -e "${CYAN}Yararlı Komutlar:${NC}"
-    echo "â€¢ DNS test: ${GREEN}dig @$server_ip $domain_name${NC}"
-    echo "â€¢ Hosts dosyası düzenle: ${GREEN}nano $dnsmasq_hosts${NC}"
-    echo "â€¢ Yapılandırma düzenle: ${GREEN}nano $dnsmasq_conf${NC}"
-    echo "â€¢ Servis durumu: ${GREEN}systemctl status dnsmasq${NC}"
-    echo "â€¢ Servis yeniden başlat: ${GREEN}systemctl restart dnsmasq${NC}"
-    echo "â€¢ Log görüntüle: ${GREEN}journalctl -u dnsmasq -f${NC}"
+    echo "* DNS test: ${GREEN}dig @$server_ip $domain_name${NC}"
+    echo "* Hosts dosyası düzenle: ${GREEN}nano $dnsmasq_hosts${NC}"
+    echo "* Yapılandırma düzenle: ${GREEN}nano $dnsmasq_conf${NC}"
+    echo "* Servis durumu: ${GREEN}systemctl status dnsmasq${NC}"
+    echo "* Servis yeniden başlat: ${GREEN}systemctl restart dnsmasq${NC}"
+    echo "* Log görüntüle: ${GREEN}journalctl -u dnsmasq -f${NC}"
     echo ""
     echo -e "${YELLOW}NOT:${NC} Nginx'te yeni domain eklediğinizde, DNS kayıtlarını manuel olarak eklemeniz gerekebilir."
     echo "   Veya 'Nginx Domain'lerini DNS'e Ekle' seçeneğini kullanabilirsiniz."
@@ -13447,18 +13447,18 @@ request_mysql_credentials() {
     
     # Önce şifresiz root erişimi dene
     if mysql -e "SELECT 1;" &>/dev/null 2>&1; then
-        print_success "[OK] Şifresiz root erişimi başarılı."
+        print_success "[OK] Şifresiz root erişimi başarılı."
         MYSQL_AUTH_REQUIRED=false
         MYSQL_USER="root"
         MYSQL_PASS=""
         return 0
     fi
     
-    # Şifresiz olmuyorsa kimlik bilgilerini iste
+    # Şifresiz olmuyorsa kimlik bilgilerini iste
     read -p "Kullanıcı adı [root]: " MYSQL_USER
     MYSQL_USER=${MYSQL_USER:-root}
     
-    read -sp "Şifre: " MYSQL_PASS
+    read -sp "Şifre: " MYSQL_PASS
     echo ""
     
     # Kimlik bilgilerini test et
@@ -13475,7 +13475,7 @@ request_mysql_credentials() {
             return 1
         fi
     else
-        # Şifresiz deneme
+        # Şifresiz deneme
         if mysql -u"$MYSQL_USER" -e "SELECT 1;" &>/dev/null 2>&1; then
             print_success "[OK] Bağlantı başarılı: ${MYSQL_USER}"
             MYSQL_AUTH_REQUIRED=true
@@ -13642,7 +13642,7 @@ delete_database() {
     fi
     
     # Onay al
-    print_warning "âš ï¸  DİKKAT: Bu işlem geri alınamaz!"
+    print_warning "[!] DIKKAT: Bu islem geri alinamaz!"
     echo -e "${RED}Veritabanı: ${db_name}${NC}"
     echo ""
     
@@ -13681,7 +13681,7 @@ list_mysql_users() {
     echo -e "${CYAN}Mevcut Kullanıcılar:${NC}"
     echo ""
     
-    mysql_cmd -e "SELECT User as 'Kullanıcı', Host as 'Host', plugin as 'Auth Plugin', password_expired as 'Şifre Süresi Dolmuş' FROM mysql.user WHERE User != '' ORDER BY User, Host;" 2>/dev/null
+    mysql_cmd -e "SELECT User as 'Kullanıcı', Host as 'Host', plugin as 'Auth Plugin', password_expired as 'Şifre Süresi Dolmuş' FROM mysql.user WHERE User != '' ORDER BY User, Host;" 2>/dev/null
     
     echo ""
     
@@ -13745,11 +13745,11 @@ create_database_user() {
         return 1
     fi
     
-    read -sp "Şifre: " password
+    read -sp "Şifre: " password
     echo ""
     
     if [ -z "$password" ]; then
-        print_error "Şifre boş olamaz!"
+        print_error "Şifre boş olamaz!"
         return 1
     fi
     
@@ -13856,7 +13856,7 @@ delete_mysql_user() {
     fi
     
     # Onay al
-    print_warning "âš ï¸  Kullanıcı silinecek: ${username}@${user_host}"
+    print_warning "[!] Kullanici silinecek: ${username}@${user_host}"
     
     if ! ask_yes_no "Silmek istediğinizden emin misiniz?"; then
         print_info "İşlem iptal edildi."
@@ -13876,7 +13876,7 @@ delete_mysql_user() {
 
 # Kullanıcı şifresini değiştir
 change_mysql_password() {
-    print_header "Kullanıcı Şifresi Değiştir"
+    print_header "Kullanıcı Şifresi Değiştir"
     
     if ! check_mysql_connection; then
         return 1
@@ -13895,25 +13895,25 @@ change_mysql_password() {
     echo ""
     
     if [ -z "$new_password" ]; then
-        print_error "Şifre boş olamaz!"
+        print_error "Şifre boş olamaz!"
         return 1
     fi
     
-    read -sp "Şifre tekrar: " new_password_confirm
+    read -sp "Şifre tekrar: " new_password_confirm
     echo ""
     
     if [ "$new_password" != "$new_password_confirm" ]; then
-        print_error "Şifreler eşleşmiyor!"
+        print_error "Şifreler eşleşmiyor!"
         return 1
     fi
     
-    print_info "Şifre değiştiriliyor..."
+    print_info "Şifre değiştiriliyor..."
     
     if mysql_cmd -e "ALTER USER '${username}'@'${user_host}' IDENTIFIED BY '${new_password}';" 2>/dev/null; then
         mysql_cmd -e "FLUSH PRIVILEGES;" 2>/dev/null
-        print_success "[OK] Şifre başarıyla değiştirildi: ${username}@${user_host}"
+        print_success "[OK] Şifre başarıyla değiştirildi: ${username}@${user_host}"
     else
-        print_error "Şifre değiştirilirken hata oluştu!"
+        print_error "Şifre değiştirilirken hata oluştu!"
         return 1
     fi
 }
@@ -14016,7 +14016,7 @@ configure_mysql_remote_access() {
     
     echo -e "${CYAN}Mevcut Durum:${NC}"
     echo -e "Config Dosyası: ${config_file}"
-    echo -e "Bind Address: ${current_bind:-0.0.0.0 (tüm IP'ler)}"
+    echo -e "Bind Address: ${current_bind:-0.0.0.0}"
     echo ""
     
     echo -e "${YELLOW}Remote erişim ayarları:${NC}"
@@ -14035,7 +14035,7 @@ configure_mysql_remote_access() {
             print_success "MySQL sadece localhost'tan erişilebilir yapıldı."
             ;;
         2)
-            print_warning "âš ï¸  DİKKAT: Tüm IP'lere açmak güvenlik riski oluşturur!"
+            print_warning "[!] DIKKAT: Tum IPlere acmak guvenlik riski olusturur!"
             if ask_yes_no "Devam etmek istediğinizden emin misiniz?"; then
                 set_mysql_config_value "bind-address" "0.0.0.0"
                 print_success "MySQL tüm IP'lerden erişilebilir yapıldı."
@@ -14066,7 +14066,7 @@ configure_mysql_remote_access() {
     if [ "$remote_choice" != "0" ]; then
         echo ""
         print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
-        if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+        if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
             systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
             print_success "MySQL yeniden başlatıldı."
         fi
@@ -14105,7 +14105,7 @@ configure_mysql_port() {
     
     echo ""
     print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
-    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
         systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
         print_success "MySQL yeniden başlatıldı."
         
@@ -14271,7 +14271,7 @@ configure_mysql_logs() {
                 mysql_cmd -e "SET GLOBAL general_log = 0;" 2>/dev/null
                 print_success "General log kapatıldı."
             else
-                print_warning "âš ï¸  General log performansı etkileyebilir!"
+                print_warning "[!] General log performansi etkileyebilir!"
                 if ask_yes_no "Devam etmek istiyor musunuz?"; then
                     mysql_cmd -e "SET GLOBAL general_log = 1;" 2>/dev/null
                     print_success "General log açıldı."
@@ -14359,7 +14359,7 @@ configure_mysql_charset() {
     print_success "Karakter seti ayarlandı: ${charset} / ${collation}"
     print_warning "MySQL'i yeniden başlatmanız gerekir."
     
-    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
         systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
         print_success "MySQL yeniden başlatıldı."
     fi
@@ -14493,7 +14493,7 @@ optimize_mysql_performance() {
             echo "innodb_buffer_pool_size = ${buffer_size}M" >> /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null
             
             print_warning "Değişikliğin etkili olması için MySQL'i yeniden başlatmanız gerekir."
-            if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+            if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
                 systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
                 print_success "MySQL yeniden başlatıldı."
             fi
@@ -14669,7 +14669,7 @@ configure_master_server() {
     
     echo ""
     print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
-    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
         systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
         sleep 2
         print_success "MySQL yeniden başlatıldı."
@@ -14692,11 +14692,11 @@ create_replication_user() {
     read -p "Kullanıcı adı [replication]: " repl_user
     repl_user=${repl_user:-replication}
     
-    read -sp "Şifre: " repl_pass
+    read -sp "Şifre: " repl_pass
     echo ""
     
     if [ -z "$repl_pass" ]; then
-        print_error "Şifre boş olamaz!"
+        print_error "Şifre boş olamaz!"
         return 1
     fi
     
@@ -14712,7 +14712,7 @@ create_replication_user() {
         print_success "[OK] Replication kullanıcısı oluşturuldu!"
         echo -e "${GREEN}Kullanıcı:${NC} ${repl_user}"
         echo -e "${GREEN}Host:${NC} ${repl_host}"
-        echo -e "${YELLOW}Şifre:${NC} ${repl_pass}"
+        echo -e "${YELLOW}Şifre:${NC} ${repl_pass}"
         echo ""
         echo -e "${CYAN}Bu bilgileri Slave sunucuda kullanacaksınız!${NC}"
     else
@@ -14765,14 +14765,14 @@ configure_slave_server() {
     
     echo ""
     print_warning "Değişikliklerin etkili olması için MySQL'i yeniden başlatmanız gerekir."
-    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
+    if ask_yes_no "Şimdi yeniden başlatmak ister misiniz?"; then
         systemctl restart mariadb 2>/dev/null || systemctl restart mysql 2>/dev/null
         sleep 2
         print_success "MySQL yeniden başlatıldı."
     fi
     
     echo ""
-    if ask_yes_no "Şimdi Master sunucuya bağlanmak ister misiniz?"; then
+    if ask_yes_no "Şimdi Master sunucuya bağlanmak ister misiniz?"; then
         setup_slave_connection
     fi
 }
@@ -14804,7 +14804,7 @@ setup_slave_connection() {
     echo ""
     
     if [ -z "$repl_pass" ]; then
-        print_error "Şifre boş olamaz!"
+        print_error "Şifre boş olamaz!"
         return 1
     fi
     
@@ -14899,7 +14899,7 @@ manage_replication() {
             print_success "Replication durduruldu."
             ;;
         3)
-            print_warning "âš ï¸  Bu işlem tüm replication ayarlarını sıfırlar!"
+            print_warning "[!] Bu islem tum replication ayarlarini sifirlar!"
             if ask_yes_no "Devam etmek istiyor musunuz?"; then
                 mysql_cmd -e "STOP SLAVE;" 2>/dev/null
                 mysql_cmd -e "RESET SLAVE ALL;" 2>/dev/null
@@ -15039,7 +15039,7 @@ mysql_management_menu() {
         echo "  4. Kullanici Listesi"
         echo "  5. Yeni Kullanici Olustur"
         echo "  6. Kullanici Sil"
-        echo "  7) Kullanıcı Şifresi Değiştir"
+        echo "  7) Kullanıcı Şifresi Değiştir"
         echo "  8) Kullanıcı Yetkilerini Göster"
         echo ""
         echo -e "${CYAN}Sunucu Yapılandırma:${NC}"
@@ -15056,7 +15056,7 @@ mysql_management_menu() {
         echo ""
         echo -e "${CYAN}Oturum Yönetimi:${NC}"
         echo " 15) Kimlik Bilgilerini Değiştir"
-        echo " 16) Oturumu Kapat (Şifreyi Temizle)"
+        echo " 16) Oturumu Kapat (Şifreyi Temizle)"
         echo ""
         echo "  0) Ana Menüye Dön"
         echo ""
@@ -15120,7 +15120,7 @@ mysql_management_menu() {
                 MYSQL_USER=""
                 MYSQL_PASS=""
                 MYSQL_AUTH_REQUIRED=false
-                print_success "Oturum kapatıldı. Şifre bellekten temizlendi."
+                print_success "Oturum kapatıldı. Şifre bellekten temizlendi."
                 sleep 2
                 continue
                 ;;
@@ -15176,24 +15176,24 @@ request_redis_credentials() {
     
     # Önce şifresiz dene
     if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" PING 2>/dev/null | grep -q "PONG"; then
-        print_success "[OK] Şifresiz bağlantı başarılı."
+        print_success "[OK] Şifresiz bağlantı başarılı."
         REDIS_AUTH_REQUIRED=false
         REDIS_PASS=""
         return 0
     fi
     
-    # Şifre iste
+    # Şifre iste
     read -sp "Redis Sifresi - bos birakabilirsiniz: " REDIS_PASS
     echo ""
     
-    # Şifre ile test et
+    # Şifre ile test et
     if [ -n "$REDIS_PASS" ]; then
         if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" PING 2>/dev/null | grep -q "PONG"; then
             print_success "[OK] Bağlantı başarılı: ${REDIS_HOST}:${REDIS_PORT}"
             REDIS_AUTH_REQUIRED=true
             return 0
         else
-            print_error "Bağlantı başarısız! Şifre veya bağlantı bilgileri hatalı."
+            print_error "Bağlantı başarısız! Şifre veya bağlantı bilgileri hatalı."
             REDIS_HOST="127.0.0.1"
             REDIS_PORT="6379"
             REDIS_PASS=""
@@ -15201,7 +15201,7 @@ request_redis_credentials() {
             return 1
         fi
     else
-        print_error "Bağlantı başarısız! Şifre gerekiyor."
+        print_error "Bağlantı başarısız! Şifre gerekiyor."
         return 1
     fi
 }
@@ -15433,14 +15433,14 @@ manage_redis_keys() {
             print_info "Toplam key sayısı: ${total_keys}"
             ;;
         9)
-            print_warning "âš ï¸  Mevcut veritabanındaki TÜM key'ler silinecek!"
+            print_warning "[!] Mevcut veritabanindaki TUM keyler silinecek!"
             if ask_yes_no "Devam etmek istiyor musunuz?"; then
                 redis_cmd FLUSHDB
                 print_success "Veritabanı temizlendi."
             fi
             ;;
         10)
-            print_warning "âš ï¸  TÜM veritabanlarındaki TÜM key'ler silinecek!"
+            print_warning "[!] TUM veritabanlarindaki TUM keyler silinecek!"
             if ask_yes_no "Devam etmek istiyor musunuz?"; then
                 redis_cmd FLUSHALL
                 print_success "Tüm veritabanları temizlendi."
@@ -15466,13 +15466,13 @@ configure_redis_server() {
     echo "Config Dosyası: ${config_file}"
     echo "Bind Address: ${bind_addr:-127.0.0.1}"
     echo "Port: ${port:-6379}"
-    echo "Şifre: $([ -n "$requirepass" ] && echo "Ayarlı" || echo "Yok")"
+    echo "Şifre: $([ -n "$requirepass" ] && echo "Ayarlı" || echo "Yok")"
     echo ""
     
     echo -e "${CYAN}Yapılandırma Seçenekleri:${NC}"
     echo "  1) Remote Erişim Ayarları (Bind Address)"
     echo "  2) Port Ayarları"
-    echo "  3) Şifre Ayarla/Kaldır (requirepass)"
+    echo "  3) Şifre Ayarla/Kaldır (requirepass)"
     echo "  4) Max Memory Ayarla"
     echo "  5) Max Memory Policy Ayarla"
     echo "  6) Max Clients Ayarla"
@@ -15497,7 +15497,7 @@ configure_redis_server() {
             
             case $bind_choice in
                 2)
-                    print_warning "âš ï¸  Tüm IP'lere açmak güvenlik riski!"
+                    print_warning "[!] Tum IPlere acmak guvenlik riski!"
                     if ask_yes_no "Devam etmek istiyormusunuz?"; then
                         set_redis_config_value "bind" "0.0.0.0"
                         print_success "Redis tüm IP'lerden erişilebilir yapıldı."
@@ -15527,8 +15527,8 @@ configure_redis_server() {
             print_success "Port ayarlandı: ${new_port}"
             ;;
         3)
-            echo "1) Şifre ayarla"
-            echo "2) Şifreyi kaldır"
+            echo "1) Şifre ayarla"
+            echo "2) Şifreyi kaldır"
             read -p "Seçim: " pass_choice
             
             if [ "$pass_choice" = "1" ]; then
@@ -15537,14 +15537,14 @@ configure_redis_server() {
                 if [ -n "$new_pass" ]; then
                     set_redis_config_value "requirepass" "$new_pass"
                     redis_cmd CONFIG SET requirepass "$new_pass"
-                    print_success "Şifre ayarlandı."
+                    print_success "Şifre ayarlandı."
                     REDIS_PASS="$new_pass"
                     REDIS_AUTH_REQUIRED=true
                 fi
             else
                 set_redis_config_value "requirepass" '""'
                 redis_cmd CONFIG SET requirepass ""
-                print_success "Şifre kaldırıldı."
+                print_success "Şifre kaldırıldı."
                 REDIS_PASS=""
                 REDIS_AUTH_REQUIRED=false
             fi
@@ -15696,7 +15696,7 @@ configure_redis_persistence() {
             print_success "AOF rewrite başlatıldı."
             ;;
         5)
-            print_warning "âš ï¸  Tüm persistence kapatılacak! Veri kaybı riski!"
+            print_warning "[!] Tum persistence kapatilacak! Veri kaybi riski!"
             if ask_yes_no "Devam etmek istiyor musunuz?"; then
                 redis_cmd CONFIG SET save ""
                 redis_cmd CONFIG SET appendonly no
@@ -15747,7 +15747,7 @@ configure_redis_replication() {
             read -p "Master Port [6379]: " master_port
             master_port=${master_port:-6379}
             
-            read -sp "Master Şifresi (varsa): " master_pass
+            read -sp "Master Şifresi (varsa): " master_pass
             echo ""
             
             if [ -n "$master_pass" ]; then
@@ -15808,7 +15808,7 @@ redis_management_menu() {
         echo "  3. Sunucu Istatistikleri"
         echo ""
         echo -e "${CYAN}Sunucu Yapılandırma:${NC}"
-        echo "  4) Sunucu Ayarları (Port, Bind, Şifre)"
+        echo "  4) Sunucu Ayarları (Port, Bind, Şifre)"
         echo "  5) Persistence Ayarları (RDB, AOF)"
         echo "  6) Replication Ayarları (Master-Slave)"
         echo ""
@@ -15884,7 +15884,7 @@ redis_management_menu() {
 }
 
 # ==========================================
-# SERVİS SAĞLIK KONTROLÜ FONKSİYONLARI
+# SERVİS SAĞLIK KONTROLÜ FONKSİYONLARI
 # ==========================================
 
 # Global servis kontrol değişkenleri
@@ -15957,7 +15957,7 @@ check_port() {
 
 # Nginx kontrolü
 check_nginx_health() {
-    echo -e "\n${BLUE}â”â”â” Nginx Web Sunucusu â”â”â”${NC}"
+    echo -e "\n${BLUE}#### Nginx Web Sunucusu ####${NC}"
     
     if check_service_status "nginx" "Nginx Service"; then
         # Port kontrolü
@@ -15987,7 +15987,7 @@ check_nginx_health() {
 
 # PHP-FPM kontrolü
 check_php_fpm_health() {
-    echo -e "\n${BLUE}â”â”â” PHP-FPM â”â”â”${NC}"
+    echo -e "\n${BLUE}#### PHP-FPM ####${NC}"
     
     local php_versions=$(ls -1 /etc/php/ 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$')
     
@@ -16020,7 +16020,7 @@ check_php_fpm_health() {
 
 # MariaDB/MySQL kontrolü
 check_mariadb_health() {
-    echo -e "\n${BLUE}â”â”â” MariaDB/MySQL Veritabanı â”â”â”${NC}"
+    echo -e "\n${BLUE}#### MariaDB/MySQL Veritabanı ####${NC}"
     
     local service_found=false
     
@@ -16069,7 +16069,7 @@ check_mariadb_health() {
 
 # Redis kontrolü
 check_redis_health() {
-    echo -e "\n${BLUE}â”â”â” Redis Cache Sunucusu â”â”â”${NC}"
+    echo -e "\n${BLUE}#### Redis Cache Sunucusu ####${NC}"
     
     local service_found=false
     
@@ -16122,7 +16122,7 @@ check_redis_health() {
 
 # MongoDB kontrolü
 check_mongodb_health() {
-    echo -e "\n${BLUE}â”â”â” MongoDB NoSQL Veritabanı â”â”â”${NC}"
+    echo -e "\n${BLUE}#### MongoDB NoSQL Veritabanı ####${NC}"
     
     local service_found=false
     
@@ -16165,7 +16165,7 @@ check_mongodb_health() {
 
 # Docker kontrolü
 check_docker_health() {
-    echo -e "\n${BLUE}â”â”â” Docker Container Platformu â”â”â”${NC}"
+    echo -e "\n${BLUE}#### Docker Container Platformu ####${NC}"
     
     if check_service_status "docker" "Docker"; then
         # Docker version
@@ -16191,7 +16191,7 @@ check_docker_health() {
 
 # DNS kontrolü
 check_dns_health() {
-    echo -e "\n${BLUE}â”â”â” DNS Sunucusu â”â”â”${NC}"
+    echo -e "\n${BLUE}#### DNS Sunucusu ####${NC}"
     
     local service_found=false
     
@@ -16233,7 +16233,7 @@ check_dns_health() {
 
 # VPN kontrolü
 check_vpn_health() {
-    echo -e "\n${BLUE}â”â”â” VPN Servisleri â”â”â”${NC}"
+    echo -e "\n${BLUE}#### VPN Servisleri ####${NC}"
     
     local vpn_found=false
     
@@ -16277,7 +16277,7 @@ check_vpn_health() {
 
 # Firewall kontrolü
 check_firewall_health() {
-    echo -e "\n${BLUE}â”â”â” Güvenlik Servisleri â”â”â”${NC}"
+    echo -e "\n${BLUE}#### Güvenlik Servisleri ####${NC}"
     
     # UFW
     if command -v ufw &>/dev/null; then
@@ -16315,7 +16315,7 @@ check_firewall_health() {
 
 # SSL/Certbot kontrolü
 check_ssl_health() {
-    echo -e "\n${BLUE}â”â”â” SSL Sertifika Yönetimi â”â”â”${NC}"
+    echo -e "\n${BLUE}#### SSL Sertifika Yönetimi ####${NC}"
     
     if command -v certbot &>/dev/null; then
         print_success "Certbot: ${GREEN}Yüklü${NC}"
@@ -16343,7 +16343,7 @@ check_ssl_health() {
 
 # Sistem kaynakları kontrolü
 check_system_resources() {
-    echo -e "\n${BLUE}â”â”â” Sistem Kaynakları â”â”â”${NC}"
+    echo -e "\n${BLUE}#### Sistem Kaynakları ####${NC}"
     
     # CPU kullanımı
     local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
@@ -16370,7 +16370,7 @@ check_system_resources() {
 
 # Network kontrolü
 check_network_health() {
-    echo -e "\n${BLUE}â”â”â” Network Bağlantıları â”â”â”${NC}"
+    echo -e "\n${BLUE}#### Network Bağlantıları ####${NC}"
     
     # Listening portlar (sadece ilk 20)
     echo -e "${CYAN}Dinlenen Portlar (ilk 20):${NC}"
@@ -16390,7 +16390,7 @@ show_service_summary() {
     echo -e "${CYAN}Toplam Kontrol Edilen Servisler:${NC} ${TOTAL_SERVICES}"
     echo -e "${GREEN}[OK] Çalışan Servisler:${NC} ${RUNNING_SERVICES}"
     echo -e "${RED}[X] Durmuş/Hatalı Servisler:${NC} ${STOPPED_SERVICES}"
-    echo -e "${YELLOW}âš  Yüklü Olmayan Servisler:${NC} ${NOT_INSTALLED_SERVICES}"
+    echo -e "${YELLOW}[!]  Yüklü Olmayan Servisler:${NC} ${NOT_INSTALLED_SERVICES}"
     
     # Başarı oranı hesapla
     if [ $TOTAL_SERVICES -gt 0 ]; then
@@ -16399,13 +16399,13 @@ show_service_summary() {
         echo -e "${CYAN}Sistem Sağlığı:${NC} ${success_rate}%"
         
         if (( $(echo "$success_rate >= 90" | bc -l 2>/dev/null || echo "0") )); then
-            echo -e "${GREEN}â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–‘ Mükemmel${NC}"
+            echo -e "${GREEN}[#########-] Mukemmel${NC}"
         elif (( $(echo "$success_rate >= 70" | bc -l 2>/dev/null || echo "0") )); then
-            echo -e "${YELLOW}â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘â–‘ İyi${NC}"
+            echo -e "${YELLOW}[#######---] Iyi${NC}"
         elif (( $(echo "$success_rate >= 50" | bc -l 2>/dev/null || echo "0") )); then
-            echo -e "${YELLOW}â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘ Orta${NC}"
+            echo -e "${YELLOW}[#####-----] Orta${NC}"
         else
-            echo -e "${RED}â–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘â–‘â–‘ Zayıf${NC}"
+            echo -e "${RED}[###-------] Zayif${NC}"
         fi
     fi
     
@@ -16417,7 +16417,7 @@ show_service_summary() {
 service_health_check_menu() {
     while true; do
         clear
-        print_header "SERVİS SAĞLIK KONTROL PANELİ"
+        print_header "SERVİS SAĞLIK KONTROL PANELİ"
         
         echo -e "${CYAN}Kontrol edilecek servisleri seçin:${NC}"
         echo ""
@@ -16848,7 +16848,7 @@ run_new_installation() {
         return 1
     fi
     
-    # KURULUM BAŞLANGICI
+    # KURULUM BAŞLANGICI
     print_header "Kurulum Başlatılıyor..."
     
     # Sistem güncellemeleri
@@ -16905,9 +16905,9 @@ run_new_installation() {
     
     echo ""
     echo -e "${YELLOW}ÖNEMLİ NOTLAR:${NC}"
-    [ "$INSTALL_PHP" = true ] && echo "â€¢ /var/www/$ALAN_ADI/info.php dosyasını üretimde silin"
-    [ "$INSTALL_PHPMYADMIN" = true ] && echo "â€¢ phpMyAdmin erişimini güvence altına alın"
-    [ "$INSTALL_SSL" = true ] && echo "â€¢ SSL sertifikası otomatik yenilenecek"
+    [ "$INSTALL_PHP" = true ] && echo "* /var/www/$ALAN_ADI/info.php dosyasını üretimde silin"
+    [ "$INSTALL_PHPMYADMIN" = true ] && echo "* phpMyAdmin erişimini güvence altına alın"
+    [ "$INSTALL_SSL" = true ] && echo "* SSL sertifikası otomatik yenilenecek"
     
     print_success "Modüler kurulum başarıyla tamamlandı!"
 }
