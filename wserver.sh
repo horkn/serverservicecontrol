@@ -8026,19 +8026,586 @@ openvpn_management_menu() {
 install_phpmyadmin() {
     print_info "phpMyAdmin kuruluyor..."
     
-    # MySQL root şifresi kontrolü
-    if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
-        print_error "MySQL root şifresi tanımlı değil!"
-        ask_password "MySQL root şifresini girin" MYSQL_ROOT_PASSWORD
+    # Zaten kurulu mu kontrol et
+    if dpkg -l | grep -q "phpmyadmin"; then
+        print_warning "phpMyAdmin zaten kurulu!"
+        if ! ask_yes_no "Yeniden yapilandirmak ister misiniz?"; then
+            return 0
+        fi
+    else
+        # MySQL root şifresi kontrolü
+        if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+            print_warning "MySQL root şifresi tanımlı değil!"
+            ask_password "MySQL root şifresini girin" MYSQL_ROOT_PASSWORD
+        fi
+        
+        debconf-set-selections <<< "phpmyadmin phpmyadmin/reconfigure-webserver multiselect nginx"
+        debconf-set-selections <<< "phpmyadmin phpmyadmin/dbconfig-install boolean true"
+        debconf-set-selections <<< "phpmyadmin phpmyadmin/mysql/admin-pass password $MYSQL_ROOT_PASSWORD"
+        debconf-set-selections <<< "phpmyadmin phpmyadmin/mysql/app-pass password ''"
+        
+        apt install -y phpmyadmin
+        
+        if [ $? -ne 0 ]; then
+            print_error "phpMyAdmin kurulumu basarisiz!"
+            return 1
+        fi
+        
+        print_success "phpMyAdmin paketi kuruldu"
     fi
     
-    debconf-set-selections <<< "phpmyadmin phpmyadmin/reconfigure-webserver multiselect nginx"
-    debconf-set-selections <<< "phpmyadmin phpmyadmin/dbconfig-install boolean true"
-    debconf-set-selections <<< "phpmyadmin phpmyadmin/mysql/admin-pass password $MYSQL_ROOT_PASSWORD"
-    debconf-set-selections <<< "phpmyadmin phpmyadmin/mysql/app-pass password ''"
+    # Nginx yapilandirma secenegi
+    echo ""
+    echo -e "${CYAN}Nginx Yapilandirmasi:${NC}"
+    echo "1) Hizli Kurulum - Direkt IP ile erisim (http://IP/phpmyadmin)"
+    echo "2) Ozel Yapilandirma - Diger secenekleri gor"
+    echo ""
     
-    apt install -y phpmyadmin
-    print_success "phpMyAdmin kurulumu tamamlandı"
+    read -p "Seciminiz [1]: " setup_choice
+    setup_choice=${setup_choice:-1}
+    
+    if [ "$setup_choice" = "1" ]; then
+        # Hizli kurulum - direkt IP
+        quick_setup_phpmyadmin
+    else
+        # Ozel yapilandirma menusu
+        configure_phpmyadmin_nginx
+    fi
+    
+    print_success "phpMyAdmin kurulumu tamamlandi"
+}
+
+# phpMyAdmin Hizli Kurulum - Direkt IP Erisimi
+quick_setup_phpmyadmin() {
+    print_info "phpMyAdmin hizli kurulum basliyor..."
+    
+    # phpMyAdmin dizini
+    local pma_path="/usr/share/phpmyadmin"
+    if [ ! -d "$pma_path" ]; then
+        pma_path="/var/lib/phpmyadmin"
+    fi
+    
+    if [ ! -d "$pma_path" ]; then
+        print_error "phpMyAdmin dizini bulunamadi!"
+        return 1
+    fi
+    
+    # PHP-FPM socket bul
+    local php_socket=""
+    for version in 8.4 8.3 8.2 8.1 8.0 7.4; do
+        if [ -S "/var/run/php/php${version}-fpm.sock" ]; then
+            php_socket="/var/run/php/php${version}-fpm.sock"
+            break
+        fi
+    done
+    
+    if [ -z "$php_socket" ]; then
+        print_error "PHP-FPM socket bulunamadi!"
+        return 1
+    fi
+    
+    # Direkt IP yapilandirmasi
+    setup_phpmyadmin_direct_ip "$pma_path" "$php_socket"
+}
+
+# phpMyAdmin Nginx yapilandirmasi
+configure_phpmyadmin_nginx() {
+    print_header "phpMyAdmin Nginx Yapilandirmasi"
+    
+    # phpMyAdmin dizini kontrol
+    local pma_path=""
+    if [ -d "/usr/share/phpmyadmin" ]; then
+        pma_path="/usr/share/phpmyadmin"
+    elif [ -d "/var/lib/phpmyadmin" ]; then
+        pma_path="/var/lib/phpmyadmin"
+    else
+        print_error "phpMyAdmin dizini bulunamadi!"
+        print_info "Lutfen once phpMyAdmin kurun: apt install phpmyadmin"
+        return 1
+    fi
+    
+    print_info "phpMyAdmin dizini: $pma_path"
+    
+    # PHP-FPM socket bul
+    local php_socket=""
+    for version in 8.4 8.3 8.2 8.1 8.0 7.4; do
+        if [ -S "/var/run/php/php${version}-fpm.sock" ]; then
+            php_socket="/var/run/php/php${version}-fpm.sock"
+            print_info "PHP-FPM socket: $php_socket"
+            break
+        fi
+    done
+    
+    if [ -z "$php_socket" ]; then
+        print_error "PHP-FPM socket bulunamadi!"
+        return 1
+    fi
+    
+    # Yapilandirma secenekleri
+    echo ""
+    echo -e "${CYAN}phpMyAdmin Erisim Secenekleri:${NC}"
+    echo "1) Direkt IP ile erisim (http://SUNUCU_IP/phpmyadmin) - ONERILEN"
+    echo "2) Mevcut siteye /phpmyadmin olarak ekle"
+    echo "3) Ayri subdomain olustur (ornek: pma.domain.com)"
+    echo "4) Ozel port ile erisim (ornek: :8080/phpmyadmin)"
+    echo "0) Iptal"
+    echo ""
+    
+    read -p "Seciminiz [1]: " pma_choice
+    pma_choice=${pma_choice:-1}
+    
+    case $pma_choice in
+        1)
+            setup_phpmyadmin_direct_ip "$pma_path" "$php_socket"
+            ;;
+        2)
+            setup_phpmyadmin_location "$pma_path" "$php_socket"
+            ;;
+        3)
+            setup_phpmyadmin_subdomain "$pma_path" "$php_socket"
+            ;;
+        4)
+            setup_phpmyadmin_port "$pma_path" "$php_socket"
+            ;;
+        0)
+            print_info "Iptal edildi"
+            return 0
+            ;;
+        *)
+            setup_phpmyadmin_direct_ip "$pma_path" "$php_socket"
+            ;;
+    esac
+}
+
+# phpMyAdmin - Direkt IP ile erisim (en basit yontem)
+setup_phpmyadmin_direct_ip() {
+    local pma_path="$1"
+    local php_socket="$2"
+    
+    local server_ip=$(hostname -I | awk '{print $1}')
+    
+    print_info "Sunucu IP: $server_ip"
+    print_info "phpMyAdmin direkt IP erisimi yapilandiriliyor..."
+    
+    # Symbolic link olustur
+    ln -sf "$pma_path" /var/www/html/phpmyadmin 2>/dev/null
+    
+    # Default nginx config'e ekle veya yeni olustur
+    local default_conf="/etc/nginx/sites-available/default"
+    local pma_conf="/etc/nginx/conf.d/phpmyadmin.conf"
+    
+    # Ayri config dosyasi olustur (daha temiz)
+    cat > "$pma_conf" <<EOF
+# phpMyAdmin - Direkt IP Erisimi
+# Erisim: http://$server_ip/phpmyadmin
+
+location /phpmyadmin {
+    alias $pma_path;
+    index index.php index.html;
+    
+    location ~ \.php\$ {
+        include fastcgi_params;
+        fastcgi_pass unix:$php_socket;
+        fastcgi_param SCRIPT_FILENAME \$request_filename;
+        fastcgi_intercept_errors on;
+    }
+    
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)\$ {
+        expires max;
+        log_not_found off;
+    }
+}
+EOF
+    
+    print_success "phpMyAdmin config olusturuldu: $pma_conf"
+    
+    # Nginx test ve reload
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        print_success "[OK] Nginx yeniden yuklendi"
+        
+        echo ""
+        echo -e "${GREEN}======================================================${NC}"
+        echo -e "${GREEN}       phpMyAdmin BASARIYLA YAPILANDIRILDI!${NC}"
+        echo -e "${GREEN}======================================================${NC}"
+        echo ""
+        echo -e "  Erisim URL: ${CYAN}http://${server_ip}/phpmyadmin${NC}"
+        echo ""
+        echo -e "  Kullanici: ${YELLOW}MySQL kullanici adiniz${NC}"
+        echo -e "  Sifre:     ${YELLOW}MySQL sifreniz${NC}"
+        echo ""
+        echo -e "${GREEN}======================================================${NC}"
+        echo ""
+        print_warning "GUVENLIK UYARISI:"
+        echo "  * Production ortamda IP kisitlamasi eklemeniz onerilir"
+        echo "  * Dosya: $pma_conf"
+        echo "  * Ornek: allow 192.168.1.0/24; deny all;"
+    else
+        print_error "Nginx yapilandirma hatasi!"
+        nginx -t
+        rm -f "$pma_conf"
+        return 1
+    fi
+}
+
+# phpMyAdmin - Mevcut siteye location olarak ekle
+setup_phpmyadmin_location() {
+    local pma_path="$1"
+    local php_socket="$2"
+    
+    print_info "Mevcut Nginx siteleri:"
+    echo ""
+    
+    local sites=()
+    local i=1
+    for conf in /etc/nginx/sites-enabled/*; do
+        if [ -f "$conf" ] && [ "$(basename $conf)" != "default" ]; then
+            local server_name=$(grep -m1 "server_name" "$conf" | awk '{print $2}' | tr -d ';')
+            echo "  $i) $server_name ($conf)"
+            sites+=("$conf")
+            ((i++))
+        fi
+    done
+    
+    if [ ${#sites[@]} -eq 0 ]; then
+        print_warning "Aktif site bulunamadi. Default site kullanilacak."
+        sites+=("/etc/nginx/sites-enabled/default")
+    fi
+    
+    echo ""
+    read -p "Site secin [1]: " site_choice
+    site_choice=${site_choice:-1}
+    
+    local selected_conf="${sites[$((site_choice-1))]}"
+    
+    if [ ! -f "$selected_conf" ]; then
+        print_error "Gecersiz secim!"
+        return 1
+    fi
+    
+    # Symbolic link olustur
+    ln -sf "$pma_path" /var/www/phpmyadmin 2>/dev/null
+    
+    # Location blogu ekle
+    local location_block="
+    # phpMyAdmin
+    location /phpmyadmin {
+        alias $pma_path;
+        index index.php;
+        
+        location ~ \.php\$ {
+            include fastcgi_params;
+            fastcgi_pass unix:$php_socket;
+            fastcgi_param SCRIPT_FILENAME \$request_filename;
+        }
+        
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico)\$ {
+            expires max;
+            log_not_found off;
+        }
+    }
+"
+    
+    # Kontrol - zaten ekli mi?
+    if grep -q "location /phpmyadmin" "$selected_conf"; then
+        print_warning "phpMyAdmin location zaten mevcut: $selected_conf"
+    else
+        # Son } isaretinden once ekle
+        sed -i "/^}/i\\$location_block" "$selected_conf"
+        print_success "phpMyAdmin location eklendi: $selected_conf"
+    fi
+    
+    # Nginx test ve reload
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        print_success "[OK] Nginx yeniden yuklendi"
+        
+        local server_name=$(grep -m1 "server_name" "$selected_conf" | awk '{print $2}' | tr -d ';')
+        echo ""
+        echo -e "${GREEN}================================================${NC}"
+        echo -e "${GREEN}  phpMyAdmin Erisim Bilgileri${NC}"
+        echo -e "${GREEN}================================================${NC}"
+        echo -e "URL: ${CYAN}http://${server_name}/phpmyadmin${NC}"
+        echo -e "veya: ${CYAN}https://${server_name}/phpmyadmin${NC}"
+        echo -e "${GREEN}================================================${NC}"
+    else
+        print_error "Nginx yapilandirma hatasi!"
+        nginx -t
+    fi
+}
+
+# phpMyAdmin - Ayri subdomain
+setup_phpmyadmin_subdomain() {
+    local pma_path="$1"
+    local php_socket="$2"
+    
+    read -p "Subdomain (ornek: pma.domain.com): " pma_domain
+    
+    if [ -z "$pma_domain" ]; then
+        print_error "Domain bos olamaz!"
+        return 1
+    fi
+    
+    local conf_file="/etc/nginx/sites-available/phpmyadmin"
+    
+    cat > "$conf_file" <<EOF
+server {
+    listen 80;
+    server_name $pma_domain;
+    root $pma_path;
+    index index.php;
+    
+    # Guvenlik
+    location ~ /\. {
+        deny all;
+    }
+    
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+    
+    location ~ \.php\$ {
+        include fastcgi_params;
+        fastcgi_pass unix:$php_socket;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_intercept_errors on;
+    }
+    
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico)\$ {
+        expires max;
+        log_not_found off;
+    }
+}
+EOF
+    
+    ln -sf "$conf_file" /etc/nginx/sites-enabled/
+    
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        print_success "[OK] phpMyAdmin subdomain yapilandirildi"
+        
+        echo ""
+        echo -e "${GREEN}================================================${NC}"
+        echo -e "${GREEN}  phpMyAdmin Erisim Bilgileri${NC}"
+        echo -e "${GREEN}================================================${NC}"
+        echo -e "URL: ${CYAN}http://${pma_domain}${NC}"
+        echo -e "${YELLOW}NOT: DNS kaydini eklemeyi unutmayin!${NC}"
+        echo -e "${GREEN}================================================${NC}"
+    else
+        print_error "Nginx yapilandirma hatasi!"
+        nginx -t
+    fi
+}
+
+# phpMyAdmin - Ozel port
+setup_phpmyadmin_port() {
+    local pma_path="$1"
+    local php_socket="$2"
+    
+    read -p "Port numarasi [8080]: " pma_port
+    pma_port=${pma_port:-8080}
+    
+    local conf_file="/etc/nginx/sites-available/phpmyadmin-${pma_port}"
+    
+    cat > "$conf_file" <<EOF
+server {
+    listen $pma_port;
+    server_name _;
+    root $pma_path;
+    index index.php;
+    
+    # Guvenlik - sadece localhost
+    # allow 127.0.0.1;
+    # deny all;
+    
+    location ~ /\. {
+        deny all;
+    }
+    
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+    
+    location ~ \.php\$ {
+        include fastcgi_params;
+        fastcgi_pass unix:$php_socket;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_intercept_errors on;
+    }
+    
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico)\$ {
+        expires max;
+        log_not_found off;
+    }
+}
+EOF
+    
+    ln -sf "$conf_file" /etc/nginx/sites-enabled/
+    
+    # Firewall
+    if command -v ufw &>/dev/null; then
+        if ask_yes_no "UFW'de $pma_port portunu acmak ister misiniz?"; then
+            ufw allow $pma_port/tcp comment 'phpMyAdmin'
+            print_success "Firewall: $pma_port/tcp acildi"
+        fi
+    fi
+    
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        print_success "[OK] phpMyAdmin port $pma_port yapilandirildi"
+        
+        local server_ip=$(hostname -I | awk '{print $1}')
+        echo ""
+        echo -e "${GREEN}================================================${NC}"
+        echo -e "${GREEN}  phpMyAdmin Erisim Bilgileri${NC}"
+        echo -e "${GREEN}================================================${NC}"
+        echo -e "URL: ${CYAN}http://${server_ip}:${pma_port}${NC}"
+        echo -e "${GREEN}================================================${NC}"
+    else
+        print_error "Nginx yapilandirma hatasi!"
+        nginx -t
+    fi
+}
+
+# phpMyAdmin Durum Kontrolu
+check_phpmyadmin_status() {
+    print_header "phpMyAdmin Durumu"
+    
+    # Kurulu mu?
+    if dpkg -l | grep -q "phpmyadmin"; then
+        print_success "[OK] phpMyAdmin kurulu"
+        local version=$(dpkg -l | grep phpmyadmin | awk '{print $3}')
+        echo -e "  Versiyon: ${CYAN}$version${NC}"
+    else
+        print_error "[X] phpMyAdmin kurulu degil"
+        echo ""
+        if ask_yes_no "phpMyAdmin kurmak ister misiniz?"; then
+            install_phpmyadmin
+        fi
+        return
+    fi
+    
+    # Dizin kontrol
+    local pma_path=""
+    if [ -d "/usr/share/phpmyadmin" ]; then
+        pma_path="/usr/share/phpmyadmin"
+    elif [ -d "/var/lib/phpmyadmin" ]; then
+        pma_path="/var/lib/phpmyadmin"
+    fi
+    echo -e "  Dizin: ${CYAN}$pma_path${NC}"
+    
+    # Nginx yapilandirmasi kontrol
+    echo ""
+    echo -e "${CYAN}Nginx Yapilandirmasi:${NC}"
+    
+    local found=false
+    for conf in /etc/nginx/sites-enabled/*; do
+        if [ -f "$conf" ] && grep -q "phpmyadmin\|phpMyAdmin" "$conf"; then
+            local server_name=$(grep -m1 "server_name" "$conf" | awk '{print $2}' | tr -d ';')
+            local listen_port=$(grep -m1 "listen" "$conf" | awk '{print $2}' | tr -d ';')
+            echo -e "  [OK] Yapilandirma: ${GREEN}$(basename $conf)${NC}"
+            echo -e "      Server: $server_name"
+            echo -e "      Port: $listen_port"
+            found=true
+        fi
+    done
+    
+    if [ "$found" = false ]; then
+        print_warning "[!] Nginx yapilandirmasi bulunamadi"
+        echo ""
+        if ask_yes_no "Nginx yapilandirmasi olusturmak ister misiniz?"; then
+            configure_phpmyadmin_nginx
+        fi
+    fi
+    
+    # Erisim URL'leri
+    echo ""
+    echo -e "${CYAN}Olasi Erisim URL'leri:${NC}"
+    local server_ip=$(hostname -I | awk '{print $1}')
+    
+    for conf in /etc/nginx/sites-enabled/*; do
+        if [ -f "$conf" ]; then
+            local server_name=$(grep -m1 "server_name" "$conf" | awk '{print $2}' | tr -d ';')
+            local listen_port=$(grep -m1 "listen" "$conf" | awk '{print $2}' | tr -d ';')
+            
+            if grep -q "location /phpmyadmin" "$conf"; then
+                echo -e "  * http://${server_name}/phpmyadmin"
+            fi
+            
+            if grep -q "root.*phpmyadmin" "$conf"; then
+                if [ "$listen_port" != "80" ] && [ "$listen_port" != "443" ]; then
+                    echo -e "  * http://${server_ip}:${listen_port}"
+                else
+                    echo -e "  * http://${server_name}"
+                fi
+            fi
+        fi
+    done
+}
+
+# phpMyAdmin Yonetim Menusu
+phpmyadmin_management_menu() {
+    while true; do
+        clear
+        print_header "phpMyAdmin YONETIMI"
+        
+        # Durum
+        if dpkg -l | grep -q "phpmyadmin"; then
+            echo -e "${GREEN}[OK] phpMyAdmin: Kurulu${NC}"
+        else
+            echo -e "${RED}[X] phpMyAdmin: Kurulu Degil${NC}"
+        fi
+        echo ""
+        
+        echo -e "${CYAN}Kurulum ve Yapilandirma:${NC}"
+        echo "  1) phpMyAdmin Kur/Guncelle"
+        echo "  2) Nginx Yapilandirmasi"
+        echo "  3) Durum ve Erisim Bilgileri"
+        echo ""
+        echo -e "${CYAN}Guvenlik:${NC}"
+        echo "  4) Erisim URL'sini Degistir"
+        echo "  5) IP Kisitlamasi Ekle/Kaldir"
+        echo ""
+        echo "  0) Geri Don"
+        echo ""
+        
+        read -p "Seciminiz [0-5]: " pma_choice
+        
+        case $pma_choice in
+            1)
+                install_phpmyadmin
+                ;;
+            2)
+                configure_phpmyadmin_nginx
+                ;;
+            3)
+                check_phpmyadmin_status
+                ;;
+            4)
+                configure_phpmyadmin_nginx
+                ;;
+            5)
+                print_info "IP kisitlamasi icin Nginx yapilandirma dosyasini duzenleyin"
+                print_info "Dosya: /etc/nginx/sites-available/phpmyadmin*"
+                echo ""
+                echo "Ornek (sadece localhost):"
+                echo "  allow 127.0.0.1;"
+                echo "  allow 192.168.1.0/24;"
+                echo "  deny all;"
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "Gecersiz secim!"
+                sleep 2
+                ;;
+        esac
+        
+        echo ""
+        echo -ne "${CYAN}Devam etmek icin Enter'a basin...${NC}"
+        read -r
+    done
 }
 
 install_ssl() {
@@ -15054,14 +15621,17 @@ mysql_management_menu() {
         echo " 13) Yedekleme (Backup) - Tüm Veritabanları"
         echo " 14) Geri Yükleme (Restore)"
         echo ""
+        echo -e "${CYAN}Web Arayuzu:${NC}"
+        echo " 17) phpMyAdmin Yonetimi"
+        echo ""
         echo -e "${CYAN}Oturum Yönetimi:${NC}"
-        echo " 15) Kimlik Bilgilerini Değiştir"
-        echo " 16) Oturumu Kapat (Şifreyi Temizle)"
+        echo " 18) Kimlik Bilgilerini Değiştir"
+        echo " 19) Oturumu Kapat (Şifreyi Temizle)"
         echo ""
         echo "  0) Ana Menüye Dön"
         echo ""
         
-        read -p "Seçiminiz [0-16]: " mysql_choice
+        read -p "Seçiminiz [0-19]: " mysql_choice
         
         case $mysql_choice in
             1)
@@ -15106,7 +15676,10 @@ mysql_management_menu() {
             14)
                 restore_database
                 ;;
-            15)
+            17)
+                phpmyadmin_management_menu
+                ;;
+            18)
                 # Kimlik bilgilerini sıfırla ve tekrar iste
                 MYSQL_USER=""
                 MYSQL_PASS=""
@@ -15115,7 +15688,7 @@ mysql_management_menu() {
                 sleep 2
                 continue
                 ;;
-            16)
+            19)
                 # Oturumu kapat
                 MYSQL_USER=""
                 MYSQL_PASS=""
