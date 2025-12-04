@@ -14602,7 +14602,7 @@ configure_master_server() {
     echo ""
     
     # Server ID belirle
-    read -p "Server ID (benzersiz olmalı) [1]: " server_id
+    read -p "Server ID - benzersiz olmalı [1]: " server_id
     server_id=${server_id:-1}
     
     # Binary log dosya adı
@@ -14610,7 +14610,7 @@ configure_master_server() {
     log_bin_name=${log_bin_name:-mysql-bin}
     
     # Binary log saklanma süresi
-    read -p "Binary log saklanma süresi (gün) [7]: " expire_days
+    read -p "Binary log saklanma suresi - gun [7]: " expire_days
     expire_days=${expire_days:-7}
     
     # Hangi veritabanları replike edilecek?
@@ -14625,11 +14625,11 @@ configure_master_server() {
     local binlog_filter=""
     case $db_choice in
         2)
-            read -p "Replike edilecek veritabanları (virgülle ayırın): " include_dbs
+            read -p "Replike edilecek veritabanlari - virgul ile ayirin: " include_dbs
             binlog_filter="binlog-do-db"
             ;;
         3)
-            read -p "Replike edilMEyecek veritabanları (virgülle ayırın): " exclude_dbs
+            read -p "Replike edilMEyecek veritabanlari - virgul ile ayirin: " exclude_dbs
             binlog_filter="binlog-ignore-db"
             ;;
     esac
@@ -14700,7 +14700,7 @@ create_replication_user() {
         return 1
     fi
     
-    read -p "Erişim kaynağı (IP veya %) [%]: " repl_host
+    read -p "Erisim kaynagi - IP veya % [%]: " repl_host
     repl_host=${repl_host:-"%"}
     
     print_info "Replication kullanıcısı oluşturuluyor..."
@@ -14735,7 +14735,7 @@ configure_slave_server() {
     echo ""
     
     # Server ID belirle
-    read -p "Server ID (Master'dan farklı olmalı) [2]: " server_id
+    read -p "Server ID - Masterdan farkli olmali [2]: " server_id
     server_id=${server_id:-2}
     
     # Relay log
@@ -14744,7 +14744,7 @@ configure_slave_server() {
     
     # Read-only mode
     echo ""
-    if ask_yes_no "Slave'i read-only (salt okunur) yapmak ister misiniz? (Önerilen)"; then
+    if ask_yes_no "Slave'i read-only yapmak ister misiniz? - Onerilen"; then
         read_only=1
     else
         read_only=0
@@ -14810,9 +14810,9 @@ setup_slave_connection() {
     
     echo ""
     echo "Master binary log bilgileri:"
-    echo "(Master sunucuda 'SHOW MASTER STATUS' çıktısından alın)"
-    read -p "Binary log dosyası (örn: mysql-bin.000001): " master_log_file
-    read -p "Position (örn: 154): " master_log_pos
+    echo "Master sunucuda 'SHOW MASTER STATUS' ciktisini kullanin"
+    read -p "Binary log dosyasi - ornek: mysql-bin.000001: " master_log_file
+    read -p "Position - ornek: 154: " master_log_pos
     
     if [ -z "$master_log_file" ] || [ -z "$master_log_pos" ]; then
         print_error "Binary log dosyası ve position gerekli!"
@@ -14877,10 +14877,10 @@ manage_replication() {
     echo "Slave_SQL_Running: ${sql_running}"
     echo ""
     
-    echo "1) Replication'ı Başlat (START SLAVE)"
-    echo "2) Replication'ı Durdur (STOP SLAVE)"
-    echo "3) Replication'ı Sıfırla (RESET SLAVE)"
-    echo "4) Slave konumunu atla (Hata varsa)"
+    echo "1) Replicationi Baslat - START SLAVE"
+    echo "2) Replicationi Durdur - STOP SLAVE"
+    echo "3) Replicationi Sifirla - RESET SLAVE"
+    echo "4) Slave konumunu atla - Hata varsa"
     echo "5) Detaylı durum göster"
     echo "0) Geri Dön"
     echo ""
@@ -14927,7 +14927,7 @@ manage_replication() {
 mysql_replication_menu() {
     while true; do
         clear
-        print_header "MYSQL REPLICATION (MASTER-SLAVE) YÖNETİMİ"
+        print_header "MYSQL REPLICATION MASTER-SLAVE YONETIMI"
         
         # Hızlı durum özeti
         local is_master=$(mysql_cmd -N -e "SELECT @@log_bin;" 2>/dev/null)
@@ -14935,7 +14935,7 @@ mysql_replication_menu() {
         
         echo -e "${CYAN}Mevcut Durum:${NC}"
         if [ "$is_master" = "1" ]; then
-            echo -e "${GREEN}âœ“ Master: Aktif (Binary log açık)${NC}"
+            echo -e "${GREEN}âœ" Master: Aktif - Binary log acik${NC}"
         else
             echo -e "${YELLOW}â—‹ Master: Pasif${NC}"
         fi
@@ -15349,8 +15349,8 @@ manage_redis_keys() {
     echo "6) Key Expire Ayarla"
     echo "7) Veritabanı Seç"
     echo "8) Tüm Key'leri Say"
-    echo "9) Tüm Veritabanını Temizle (FLUSHDB)"
-    echo "10) Tüm Veritabanlarını Temizle (FLUSHALL)"
+    echo "9) Tum Veritabanini Temizle - FLUSHDB"
+    echo "10) Tum Veritabanlarini Temizle - FLUSHALL"
     echo "0) Geri Dön"
     echo ""
     
@@ -15358,7 +15358,7 @@ manage_redis_keys() {
     
     case $key_choice in
         1)
-            read -p "Pattern (* = tümü) [*]: " pattern
+            read -p "Pattern - * = tumu [*]: " pattern
             pattern=${pattern:-*}
             
             echo -e "\n${CYAN}Eşleşen Key'ler:${NC}"
@@ -15366,7 +15366,7 @@ manage_redis_keys() {
             
             local count=$(redis_cmd KEYS "$pattern" | wc -l)
             echo ""
-            print_info "Toplam ${count} key bulundu (ilk 100 gösteriliyor)"
+            print_info "Toplam ${count} key bulundu - ilk 100 gosteriliyor"
             ;;
         2)
             read -p "Key adı: " key_name
@@ -15390,10 +15390,10 @@ manage_redis_keys() {
             fi
             ;;
         4)
-            read -p "Key adı (virgülle ayırarak birden fazla): " keys_to_delete
+            read -p "Key adi - virgul ile ayirarak birden fazla: " keys_to_delete
             if [ -n "$keys_to_delete" ]; then
                 redis_cmd DEL $keys_to_delete
-                print_success "Key(ler) silindi."
+                print_success "Keyler silindi."
             fi
             ;;
         5)
@@ -15406,7 +15406,7 @@ manage_redis_keys() {
                 echo -e "${CYAN}Type:${NC} ${key_type}"
                 
                 if [ "$key_ttl" = "-1" ]; then
-                    echo -e "${CYAN}TTL:${NC} Süresiz (no expiration)"
+                    echo -e "${CYAN}TTL:${NC} Suresiz - no expiration"
                 elif [ "$key_ttl" = "-2" ]; then
                     echo -e "${CYAN}TTL:${NC} Key mevcut değil"
                 else
@@ -15424,7 +15424,7 @@ manage_redis_keys() {
             fi
             ;;
         7)
-            read -p "Veritabanı numarası (0-15) [0]: " db_num
+            read -p "Veritabani numarasi 0-15 [0]: " db_num
             db_num=${db_num:-0}
             
             redis_cmd SELECT "$db_num"
@@ -15555,7 +15555,7 @@ configure_redis_server() {
             local current_maxmem=$(redis_cmd CONFIG GET maxmemory | tail -1)
             echo "Mevcut max memory: ${current_maxmem} bytes"
             
-            read -p "Yeni max memory (örn: 256mb, 1gb): " new_maxmem
+            read -p "Yeni max memory - ornek: 256mb, 1gb: " new_maxmem
             if [ -n "$new_maxmem" ]; then
                 redis_cmd CONFIG SET maxmemory "$new_maxmem"
                 set_redis_config_value "maxmemory" "$new_maxmem"
@@ -15592,7 +15592,7 @@ configure_redis_server() {
             print_success "Max clients ayarlandı: ${max_clients}"
             ;;
         7)
-            read -p "Timeout (saniye, 0=süresiz) [0]: " timeout
+            read -p "Timeout saniye - 0=suresiz [0]: " timeout
             timeout=${timeout:-0}
             
             redis_cmd CONFIG SET timeout "$timeout"
@@ -15647,8 +15647,8 @@ configure_redis_persistence() {
     
     echo ""
     echo -e "${CYAN}Persistence Türleri:${NC}"
-    echo "RDB (Snapshot): Belirli aralıklarla disk'e yazma"
-    echo "AOF (Append Only File): Her komutu log'a yazma"
+    echo "RDB Snapshot: Belirli araliklarla diske yazma"
+    echo "AOF Append Only File: Her komutu loga yazma"
     echo ""
     
     echo "1) RDB Ayarları"
@@ -15666,8 +15666,8 @@ configure_redis_persistence() {
             echo "RDB snapshot ayarları:"
             echo "Mevcut: $(get_redis_config_value 'save')"
             echo ""
-            echo "Örnek: save 900 1 (900 saniyede en az 1 değişiklik)"
-            read -p "RDB save kuralı ekle (örn: 900 1): " save_rule
+            echo "Ornek: save 900 1 - 900 saniyede en az 1 degisiklik"
+            read -p "RDB save kurali ekle - ornek: 900 1: " save_rule
             
             if [ -n "$save_rule" ]; then
                 redis_cmd CONFIG SET save "$save_rule"
@@ -15710,7 +15710,7 @@ configure_redis_persistence() {
 
 # Redis replication yönetimi
 configure_redis_replication() {
-    print_header "Redis Replication (Master-Slave)"
+    print_header "Redis Replication Master-Slave"
     
     if ! check_redis_connection; then
         return 1
@@ -15734,10 +15734,10 @@ configure_redis_replication() {
     fi
     
     echo ""
-    echo "1) Slave Olarak Yapılandır (Master'a bağlan)"
-    echo "2) Master Olarak Yapılandır (Slave bağlantısını kes)"
-    echo "3) Replication Durumunu Göster"
-    echo "4) Slave'den Master'a yükselt (SLAVEOF NO ONE)"
+    echo "1) Slave Olarak Yapilandir - Mastera baglan"
+    echo "2) Master Olarak Yapilandir - Slave baglantisini kes"
+    echo "3) Replication Durumunu Goster"
+    echo "4) Slaveden Mastera yukselt - SLAVEOF NO ONE"
     echo "0) Geri Dön"
     echo ""
     
