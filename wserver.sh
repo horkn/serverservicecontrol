@@ -9586,20 +9586,54 @@ create_ssl_multi_subdomain() {
     echo "  -> TEK SSL sertifikasi ile TUM subdomain'leri kaplayacagiz"
     echo ""
     
-    # Domain listesi al
-    print_info "TUM subdomain'leri sirayla girin:"
+    # Base domain sor
+    echo ""
+    print_info "Once base domain'i girin (ornek: domain.com):"
+    read -p "Base domain: " base_domain
+    
+    if [ -z "$base_domain" ]; then
+        print_error "Base domain gerekli!"
+        return 1
+    fi
+    
+    # Base domain'de nokta var mı kontrol et
+    if ! echo "$base_domain" | grep -q '\.'; then
+        print_error "Base domain en az bir nokta icermeli (ornek: domain.com)"
+        return 1
+    fi
+    
+    echo ""
+    print_info "Simdi subdomain'leri girin:"
+    echo -e "${CYAN}Ornek 1:${NC} admin yazarsaniz -> admin.$base_domain olur"
+    echo -e "${CYAN}Ornek 2:${NC} admin.$base_domain yazarsaniz -> oldugu gibi kullanilir"
     echo ""
     
     local domains=()
     local certbot_domains=""
     
     while true; do
-        read -p "Subdomain (bos = bitir): " subdomain
-        [ -z "$subdomain" ] && break
+        read -p "Subdomain (bos = bitir): " subdomain_input
+        [ -z "$subdomain_input" ] && break
         
-        domains+=("$subdomain")
-        certbot_domains="$certbot_domains -d $subdomain"
-        print_success "  [+] $subdomain"
+        # Eger nokta varsa tam domain, yoksa subdomain kismi
+        local full_domain=""
+        if echo "$subdomain_input" | grep -q '\.'; then
+            # Tam domain adi girilmis
+            full_domain="$subdomain_input"
+        else
+            # Sadece subdomain kismi girilmis
+            full_domain="${subdomain_input}.${base_domain}"
+        fi
+        
+        # Domain gecerliligini kontrol et (en az bir nokta olmali)
+        if ! echo "$full_domain" | grep -q '\.'; then
+            print_error "  [X] Gecersiz domain: $full_domain (en az bir nokta gerekli)"
+            continue
+        fi
+        
+        domains+=("$full_domain")
+        certbot_domains="$certbot_domains -d $full_domain"
+        print_success "  [+] $full_domain"
     done
     
     if [ ${#domains[@]} -eq 0 ]; then
@@ -9609,8 +9643,7 @@ create_ssl_multi_subdomain() {
     
     # Ana domain - ilk girilen
     local main_domain="${domains[0]}"
-    local base_domain=$(echo $main_domain | rev | cut -d. -f1-2 | rev)
-    local cert_name="multi-$base_domain"
+    local cert_name="multi-${base_domain}"
     
     echo ""
     print_success "Toplam ${#domains[@]} subdomain tek sertifikada:"
