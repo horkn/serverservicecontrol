@@ -9568,7 +9568,176 @@ renew_ssl() {
     fi
 }
 
+# Multi-Subdomain SSL - Tek sertifika ile birden fazla subdomain
+create_ssl_multi_subdomain() {
+    print_header "Multi-Subdomain SSL (SAN Certificate)"
+    
+    echo ""
+    echo -e "${CYAN}==================================================${NC}"
+    echo -e "${CYAN}  AYNI DIZIN KULLANAN SUBDOMAIN'LER ICIN${NC}"
+    echo -e "${CYAN}==================================================${NC}"
+    echo ""
+    echo -e "${YELLOW}Sorun:${NC}"
+    echo "  admin.domain.com, merchant.domain.com, user.domain.com"
+    echo "  -> Hepsi ayni dizini kullaniyor: /var/www/html"
+    echo "  -> Ayri SSL olusturunca birbirini eziyor!"
+    echo ""
+    echo -e "${GREEN}Cozum:${NC}"
+    echo "  -> TEK SSL sertifikasi ile TUM subdomain'leri kaplayacagiz"
+    echo ""
+    
+    # Domain listesi al
+    print_info "TUM subdomain'leri sirayla girin:"
+    echo ""
+    
+    local domains=()
+    local certbot_domains=""
+    
+    while true; do
+        read -p "Subdomain (bos = bitir): " subdomain
+        [ -z "$subdomain" ] && break
+        
+        domains+=("$subdomain")
+        certbot_domains="$certbot_domains -d $subdomain"
+        print_success "  [+] $subdomain"
+    done
+    
+    if [ ${#domains[@]} -eq 0 ]; then
+        print_error "Hic subdomain girilmedi!"
+        return 1
+    fi
+    
+    # Ana domain - ilk girilen
+    local main_domain="${domains[0]}"
+    local base_domain=$(echo $main_domain | rev | cut -d. -f1-2 | rev)
+    local cert_name="multi-$base_domain"
+    
+    echo ""
+    print_success "Toplam ${#domains[@]} subdomain tek sertifikada:"
+    for d in "${domains[@]}"; do
+        echo "  * $d"
+    done
+    echo ""
+    print_info "Sertifika adi: $cert_name"
+    echo ""
+    
+    if [ -z "$EMAIL" ]; then
+        ask_input "E-posta adresinizi girin" EMAIL
+    fi
+    
+    # DNS challenge kullan
+    print_warning "Multi-subdomain icin DNS-01 challenge kullanilmali"
+    echo ""
+    
+    echo -e "${CYAN}Challenge Yontemi:${NC}"
+    echo "1) Manuel DNS (Her subdomain icin TXT kaydi ekleyeceksiniz)"
+    echo "2) Otomatik DNS (BIND9 ile otomatik TXT kaydi)"
+    echo ""
+    
+    read -p "Seciminiz [2]: " dns_method
+    dns_method=${dns_method:-2}
+    
+    if [ "$dns_method" = "2" ]; then
+        # Otomatik DNS challenge
+        create_ssl_dns_auto "$main_domain" "$certbot_domains" "$EMAIL" "$cert_name"
+    else
+        # Manuel DNS challenge
+        create_ssl_dns_manual "$main_domain" "$certbot_domains" "$EMAIL" "$cert_name"
+    fi
+    
+    # Basarili ise her subdomain icin Nginx yapilandirmasi
+    if [ -d "/etc/letsencrypt/live/$cert_name" ]; then
+        echo ""
+        print_success "[OK] Multi-subdomain sertifikasi olusturuldu!"
+        print_info "Subdomain'ler icin Nginx yapilandirmasi guncelleniyor..."
+        echo ""
+        
+        for subdomain in "${domains[@]}"; do
+            local nginx_conf="/etc/nginx/sites-available/$subdomain"
+            
+            if [ -f "$nginx_conf" ]; then
+                print_info "  Guncelleniyor: $subdomain"
+                
+                # Mevcut SSL satirlarini kaldir
+                sed -i '/ssl_certificate/d' "$nginx_conf"
+                sed -i '/listen 443/d' "$nginx_conf"
+                sed -i '/ssl_protocols/d' "$nginx_conf"
+                sed -i '/ssl_ciphers/d' "$nginx_conf"
+                
+                # Yeni SSL satirlarini ekle - AYNI sertifikayi kullan
+                sed -i "/listen 80;/a\    listen 443 ssl http2;\n    ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_ciphers HIGH:!aNULL:!MD5;" "$nginx_conf"
+                
+                print_success "  [OK] $subdomain"
+            else
+                print_warning "  [!] Config yok: $nginx_conf - elle olusturmaniz gerekecek"
+            fi
+        done
+        
+        # Nginx test ve reload
+        echo ""
+        if nginx -t 2>&1 | grep -q "syntax is ok"; then
+            systemctl reload nginx
+            print_success "[OK] Nginx reload edildi"
+            
+            echo ""
+            echo -e "${GREEN}==================================================${NC}"
+            echo -e "${GREEN}  SSL BASARIYLA TUM SUBDOMAIN'LERE KURULDU!${NC}"
+            echo -e "${GREEN}==================================================${NC}"
+            echo ""
+            echo -e "Sertifika: ${CYAN}/etc/letsencrypt/live/$cert_name/${NC}"
+            echo ""
+            echo -e "${GREEN}Aktif HTTPS URL'ler:${NC}"
+            for d in "${domains[@]}"; do
+                echo -e "  ${CYAN}https://$d${NC}"
+            done
+            echo ""
+            echo -e "${GREEN}==================================================${NC}"
+            echo ""
+            print_warning "ONEMLI NOTLAR:"
+            echo "  * Yenileme: certbot renew --cert-name $cert_name"
+            echo "  * TUM subdomain'ler AYNI sertifikayi kullanir"
+            echo "  * Yeni subdomain eklemek icin sertifikayi yeniden olusturun:"
+            echo "    certbot delete --cert-name $cert_name"
+            echo "    Sonra bu menuyu tekrar calistirin"
+        else
+            print_error "Nginx config hatasi!"
+            nginx -t
+            return 1
+        fi
+    else
+        print_error "Sertifika olusturulamadi!"
+        return 1
+    fi
+}
+
 create_ssl() {
+    print_header "SSL Sertifikası Oluşturma"
+    
+    echo ""
+    echo -e "${CYAN}SSL Tipi Secin:${NC}"
+    echo "1) Tekil Domain SSL (tek domain/subdomain)"
+    echo "2) Multi-Subdomain SSL (admin+merchant+user tek sertifika - ONERILEN)"
+    echo "3) Wildcard SSL (*.domain.com - tum subdomain'ler)"
+    echo "0) Iptal"
+    echo ""
+    
+    read -p "Seciminiz [1]: " ssl_type_choice
+    ssl_type_choice=${ssl_type_choice:-1}
+    
+    case $ssl_type_choice in
+        2)
+            create_ssl_multi_subdomain
+            return $?
+            ;;
+        3)
+            print_info "Wildcard SSL secildi - devam ediliyor..."
+            # Normal create_ssl devam edecek, wildcard sorulacak
+            ;;
+        0)
+            return 0
+            ;;
+    esac
+    
     print_header "SSL Sertifikası Oluşturma"
     
     echo ""
@@ -9800,6 +9969,9 @@ create_ssl_dns_manual() {
     local domain=$1
     local certbot_domains=$2
     local email=$3
+    local cert_name=$4  # Opsiyonel - belirtilmezse domain kullanilir
+    
+    [ -z "$cert_name" ] && cert_name="$domain"
     
     print_header "SSL - DNS-01 Challenge (Manuel)"
     
@@ -9826,8 +9998,8 @@ create_ssl_dns_manual() {
     echo ""
     read -p "Hazır olduğunuzda Enter'a basın..."
     
-    # Certbot DNS challenge
-    certbot certonly --manual --preferred-challenges dns --agree-tos --email $email $certbot_domains
+    # Certbot DNS challenge - cert-name ile
+    certbot certonly --manual --preferred-challenges dns --agree-tos --email $email --cert-name $cert_name $certbot_domains
     
     if [ $? -eq 0 ]; then
         print_success "SSL sertifikası başarıyla oluşturuldu!"
@@ -9853,6 +10025,9 @@ create_ssl_dns_auto() {
     local domain=$1
     local certbot_domains=$2
     local email=$3
+    local cert_name=$4  # Opsiyonel
+    
+    [ -z "$cert_name" ] && cert_name="$domain"
     
     print_header "SSL - DNS-01 Challenge (Otomatik - BIND9)"
     
@@ -9921,6 +10096,7 @@ create_ssl_dns_auto() {
     
     # Certbot çalıştır (LOKAL hook'lar ile)
     print_info "Certbot başlatılıyor..."
+    print_info "Sertifika adi: $cert_name"
     certbot certonly \
         --manual \
         --preferred-challenges dns \
@@ -9928,6 +10104,7 @@ create_ssl_dns_auto() {
         --manual-cleanup-hook /usr/local/bin/certbot-dns-local-cleanup.sh \
         --agree-tos \
         --email $email \
+        --cert-name $cert_name \
         $certbot_domains \
         --non-interactive
     
@@ -9941,7 +10118,7 @@ create_ssl_dns_auto() {
     # Aynı sunucuysa direkt Nginx'e kur
     if [ "$same_server" = true ]; then
         print_info "Sertifika Nginx'e kuruluyor (lokal)..."
-        install_ssl_to_nginx "$domain"
+        install_ssl_to_nginx "$domain" "$cert_name"
         return $?
     fi
     
@@ -10849,8 +11026,13 @@ install_ssl_to_remote_nginx() {
 
 install_ssl_to_nginx() {
     local domain=$1
+    local cert_name=$2  # Opsiyonel - sertifika adi
+    
+    [ -z "$cert_name" ] && cert_name="$domain"
     
     print_info "SSL sertifikası Nginx'e kuruluyor (lokal)..."
+    print_info "  Domain: $domain"
+    print_info "  Cert: /etc/letsencrypt/live/$cert_name/"
     
     local nginx_config="/etc/nginx/sites-available/$domain"
     
@@ -10865,8 +11047,8 @@ install_ssl_to_nginx() {
     # SSL zaten yapılandırılmış mı?
     if grep -q "ssl_certificate" "$nginx_config" 2>/dev/null; then
         print_info "SSL zaten yapılandırılmış, güncelleniyor..."
-        sed -i "s|ssl_certificate .*|ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;|" "$nginx_config"
-        sed -i "s|ssl_certificate_key .*|ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;|" "$nginx_config"
+        sed -i "s|ssl_certificate .*fullchain.*|ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;|" "$nginx_config"
+        sed -i "s|ssl_certificate_key .*privkey.*|ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;|" "$nginx_config"
     else
         # Yeni SSL bloğu ekle
         print_info "SSL yapılandırması ekleniyor..."
@@ -10880,8 +11062,8 @@ server {
     
     server_name $domain www.$domain;
     
-    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;
     
     # SSL ayarları
     ssl_protocols TLSv1.2 TLSv1.3;
