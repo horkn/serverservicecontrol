@@ -9670,7 +9670,41 @@ create_ssl_multi_subdomain() {
     read -p "Seciminiz [2]: " dns_method
     dns_method=${dns_method:-2}
     
+    # Uzak sunucu bilgilerini sakla (eger gerekirse)
+    local remote_web_ip=""
+    local remote_web_user=""
+    local remote_ssh_method=""
+    local remote_ssh_pass=""
+    local is_remote=false
+    
     if [ "$dns_method" = "2" ]; then
+        # Otomatik DNS challenge - uzak sunucu bilgilerini al
+        local current_ip=$(hostname -I | awk '{print $1}')
+        
+        if [ "$MULTI_SERVER_MODE" = true ] && [ -n "$WEB_SERVER_IP" ]; then
+            remote_web_ip="$WEB_SERVER_IP"
+        else
+            ask_input "Web sunucusu IP (Nginx'in calistigi yer)" remote_web_ip "$current_ip"
+        fi
+        
+        # Ayni sunucu mu kontrol et
+        if [ "$remote_web_ip" != "$current_ip" ] && [ "$remote_web_ip" != "127.0.0.1" ] && [ "$remote_web_ip" != "localhost" ]; then
+            is_remote=true
+            ask_input "Web sunucusu SSH kullanici adi" remote_web_user "root"
+            
+            echo ""
+            echo -e "${CYAN}SSH Baglanti Yontemi:${NC}"
+            echo "1) SSH Key (Onerilen)"
+            echo "2) Sifre ile (sshpass)"
+            echo ""
+            read -p "Seciminiz (1-2) [1]: " remote_ssh_method
+            remote_ssh_method=${remote_ssh_method:-1}
+            
+            if [ "$remote_ssh_method" = "2" ]; then
+                ask_password "Web sunucusu $remote_web_user sifresi" remote_ssh_pass
+            fi
+        fi
+        
         # Otomatik DNS challenge
         create_ssl_dns_auto "$main_domain" "$certbot_domains" "$EMAIL" "$cert_name"
     else
@@ -9685,32 +9719,97 @@ create_ssl_multi_subdomain() {
         print_info "Subdomain'ler icin Nginx yapilandirmasi guncelleniyor..."
         echo ""
         
-        for subdomain in "${domains[@]}"; do
-            local nginx_conf="/etc/nginx/sites-available/$subdomain"
+        if [ "$is_remote" = true ]; then
+            # UZAK SUNUCUDA Nginx config guncellemesi
+            print_info "Uzak sunucuda Nginx config'leri guncelleniyor: $remote_web_user@$remote_web_ip"
+            echo ""
             
-            if [ -f "$nginx_conf" ]; then
+            # SSH komutunu belirle
+            local ssh_cmd="ssh -o StrictHostKeyChecking=no"
+            
+            if [ "$remote_ssh_method" = "2" ] && [ -n "$remote_ssh_pass" ]; then
+                local pass_file="/tmp/.web_ssh_pass_$$"
+                printf '%s\n' "$remote_ssh_pass" > "$pass_file"
+                chmod 600 "$pass_file"
+                ssh_cmd="sshpass -f $pass_file ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+            fi
+            
+            for subdomain in "${domains[@]}"; do
                 print_info "  Guncelleniyor: $subdomain"
                 
-                # Mevcut SSL satirlarini kaldir
-                sed -i '/ssl_certificate/d' "$nginx_conf"
-                sed -i '/listen 443/d' "$nginx_conf"
-                sed -i '/ssl_protocols/d' "$nginx_conf"
-                sed -i '/ssl_ciphers/d' "$nginx_conf"
+                # Uzak sunucuda config dosyasi var mi kontrol et
+                local config_exists=$($ssh_cmd $remote_web_user@$remote_web_ip "test -f /etc/nginx/sites-available/$subdomain && echo 'EXISTS' || echo 'NOT_EXISTS'" 2>/dev/null)
                 
-                # Yeni SSL satirlarini ekle - AYNI sertifikayi kullan
-                sed -i "/listen 80;/a\    listen 443 ssl http2;\n    ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_ciphers HIGH:!aNULL:!MD5;" "$nginx_conf"
-                
-                print_success "  [OK] $subdomain"
+                if echo "$config_exists" | grep -q "EXISTS"; then
+                    # Uzak sunucuda SSL satirlarini guncelle
+                    $ssh_cmd $remote_web_user@$remote_web_ip "
+                        NGINX_CONF=\"/etc/nginx/sites-available/$subdomain\"
+                        
+                        # Mevcut SSL satirlarini kaldir
+                        sed -i '/ssl_certificate/d' \"\$NGINX_CONF\"
+                        sed -i '/listen 443/d' \"\$NGINX_CONF\"
+                        sed -i '/ssl_protocols/d' \"\$NGINX_CONF\"
+                        sed -i '/ssl_ciphers/d' \"\$NGINX_CONF\"
+                        
+                        # Yeni SSL satirlarini ekle - AYNI sertifikayi kullan
+                        sed -i '/listen 80;/a\    listen 443 ssl http2;\n    ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_ciphers HIGH:!aNULL:!MD5;' \"\$NGINX_CONF\"
+                    " 2>/dev/null
+                    
+                    if [ $? -eq 0 ]; then
+                        print_success "  [OK] $subdomain"
+                    else
+                        print_warning "  [!] $subdomain guncellenemedi"
+                    fi
+                else
+                    print_warning "  [!] Config yok: /etc/nginx/sites-available/$subdomain (uzak sunucuda)"
+                fi
+            done
+            
+            # Uzak sunucuda Nginx test ve reload
+            echo ""
+            print_info "Uzak sunucuda Nginx test ediliyor..."
+            local nginx_test=$($ssh_cmd $remote_web_user@$remote_web_ip "nginx -t 2>&1" 2>/dev/null)
+            
+            if echo "$nginx_test" | grep -q "syntax is ok"; then
+                $ssh_cmd $remote_web_user@$remote_web_ip "systemctl reload nginx" 2>/dev/null
+                print_success "[OK] Uzak sunucuda Nginx reload edildi"
             else
-                print_warning "  [!] Config yok: $nginx_conf - elle olusturmaniz gerekecek"
+                print_error "Uzak sunucuda Nginx config hatasi!"
+                echo "$nginx_test"
             fi
-        done
-        
-        # Nginx test ve reload
-        echo ""
-        if nginx -t 2>&1 | grep -q "syntax is ok"; then
-            systemctl reload nginx
-            print_success "[OK] Nginx reload edildi"
+            
+            # Sifre dosyasini temizle
+            if [ "$remote_ssh_method" = "2" ] && [ -n "$pass_file" ] && [ -f "$pass_file" ]; then
+                rm -f "$pass_file"
+            fi
+        else
+            # LOKAL SUNUCUDA Nginx config guncellemesi
+            for subdomain in "${domains[@]}"; do
+                local nginx_conf="/etc/nginx/sites-available/$subdomain"
+                
+                if [ -f "$nginx_conf" ]; then
+                    print_info "  Guncelleniyor: $subdomain"
+                    
+                    # Mevcut SSL satirlarini kaldir
+                    sed -i '/ssl_certificate/d' "$nginx_conf"
+                    sed -i '/listen 443/d' "$nginx_conf"
+                    sed -i '/ssl_protocols/d' "$nginx_conf"
+                    sed -i '/ssl_ciphers/d' "$nginx_conf"
+                    
+                    # Yeni SSL satirlarini ekle - AYNI sertifikayi kullan
+                    sed -i "/listen 80;/a\    listen 443 ssl http2;\n    ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_ciphers HIGH:!aNULL:!MD5;" "$nginx_conf"
+                    
+                    print_success "  [OK] $subdomain"
+                else
+                    print_warning "  [!] Config yok: $nginx_conf - elle olusturmaniz gerekecek"
+                fi
+            done
+            
+            # Nginx test ve reload
+            echo ""
+            if nginx -t 2>&1 | grep -q "syntax is ok"; then
+                systemctl reload nginx
+                print_success "[OK] Nginx reload edildi"
             
             echo ""
             echo -e "${GREEN}==================================================${NC}"
