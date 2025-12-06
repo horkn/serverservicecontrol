@@ -9805,7 +9805,9 @@ create_ssl_multi_subdomain() {
             if [ "$remote_ssh_method" = "2" ] && [ -n "$pass_file" ] && [ -f "$pass_file" ]; then
                 rm -f "$pass_file"
             fi
-        else
+        fi
+        
+        if [ "$is_remote" != true ]; then
             # LOKAL SUNUCUDA Nginx config guncellemesi
             for subdomain in "${domains[@]}"; do
                 local nginx_conf="/etc/nginx/sites-available/$subdomain"
@@ -9859,6 +9861,7 @@ create_ssl_multi_subdomain() {
                 nginx -t
                 return 1
             fi
+        fi
     else
         print_error "Sertifika olusturulamadi!"
         return 1
