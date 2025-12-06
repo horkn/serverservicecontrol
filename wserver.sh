@@ -9773,9 +9773,32 @@ create_ssl_multi_subdomain() {
             if echo "$nginx_test" | grep -q "syntax is ok"; then
                 $ssh_cmd $remote_web_user@$remote_web_ip "systemctl reload nginx" 2>/dev/null
                 print_success "[OK] Uzak sunucuda Nginx reload edildi"
+                
+                echo ""
+                echo -e "${GREEN}==================================================${NC}"
+                echo -e "${GREEN}  SSL BASARIYLA TUM SUBDOMAIN'LERE KURULDU!${NC}"
+                echo -e "${GREEN}==================================================${NC}"
+                echo ""
+                echo -e "Sertifika: ${CYAN}/etc/letsencrypt/live/$cert_name/${NC}"
+                echo -e "Uzak Sunucu: ${CYAN}$remote_web_user@$remote_web_ip${NC}"
+                echo ""
+                echo -e "${GREEN}Aktif HTTPS URL'ler:${NC}"
+                for d in "${domains[@]}"; do
+                    echo -e "  ${CYAN}https://$d${NC}"
+                done
+                echo ""
+                echo -e "${GREEN}==================================================${NC}"
+                echo ""
+                print_warning "ONEMLI NOTLAR:"
+                echo "  * Yenileme: certbot renew --cert-name $cert_name"
+                echo "  * TUM subdomain'ler AYNI sertifikayi kullanir"
+                echo "  * Yeni subdomain eklemek icin sertifikayi yeniden olusturun:"
+                echo "    certbot delete --cert-name $cert_name"
+                echo "    Sonra bu menuyu tekrar calistirin"
             else
                 print_error "Uzak sunucuda Nginx config hatasi!"
                 echo "$nginx_test"
+                return 1
             fi
             
             # Sifre dosyasini temizle
@@ -9810,32 +9833,32 @@ create_ssl_multi_subdomain() {
             if nginx -t 2>&1 | grep -q "syntax is ok"; then
                 systemctl reload nginx
                 print_success "[OK] Nginx reload edildi"
-            
-            echo ""
-            echo -e "${GREEN}==================================================${NC}"
-            echo -e "${GREEN}  SSL BASARIYLA TUM SUBDOMAIN'LERE KURULDU!${NC}"
-            echo -e "${GREEN}==================================================${NC}"
-            echo ""
-            echo -e "Sertifika: ${CYAN}/etc/letsencrypt/live/$cert_name/${NC}"
-            echo ""
-            echo -e "${GREEN}Aktif HTTPS URL'ler:${NC}"
-            for d in "${domains[@]}"; do
-                echo -e "  ${CYAN}https://$d${NC}"
-            done
-            echo ""
-            echo -e "${GREEN}==================================================${NC}"
-            echo ""
-            print_warning "ONEMLI NOTLAR:"
-            echo "  * Yenileme: certbot renew --cert-name $cert_name"
-            echo "  * TUM subdomain'ler AYNI sertifikayi kullanir"
-            echo "  * Yeni subdomain eklemek icin sertifikayi yeniden olusturun:"
-            echo "    certbot delete --cert-name $cert_name"
-            echo "    Sonra bu menuyu tekrar calistirin"
-        else
-            print_error "Nginx config hatasi!"
-            nginx -t
-            return 1
-        fi
+                
+                echo ""
+                echo -e "${GREEN}==================================================${NC}"
+                echo -e "${GREEN}  SSL BASARIYLA TUM SUBDOMAIN'LERE KURULDU!${NC}"
+                echo -e "${GREEN}==================================================${NC}"
+                echo ""
+                echo -e "Sertifika: ${CYAN}/etc/letsencrypt/live/$cert_name/${NC}"
+                echo ""
+                echo -e "${GREEN}Aktif HTTPS URL'ler:${NC}"
+                for d in "${domains[@]}"; do
+                    echo -e "  ${CYAN}https://$d${NC}"
+                done
+                echo ""
+                echo -e "${GREEN}==================================================${NC}"
+                echo ""
+                print_warning "ONEMLI NOTLAR:"
+                echo "  * Yenileme: certbot renew --cert-name $cert_name"
+                echo "  * TUM subdomain'ler AYNI sertifikayi kullanir"
+                echo "  * Yeni subdomain eklemek icin sertifikayi yeniden olusturun:"
+                echo "    certbot delete --cert-name $cert_name"
+                echo "    Sonra bu menuyu tekrar calistirin"
+            else
+                print_error "Nginx config hatasi!"
+                nginx -t
+                return 1
+            fi
     else
         print_error "Sertifika olusturulamadi!"
         return 1
