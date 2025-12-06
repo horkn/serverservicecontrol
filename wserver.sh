@@ -9654,6 +9654,67 @@ create_ssl_multi_subdomain() {
     print_info "Sertifika adi: $cert_name"
     echo ""
     
+    # Mevcut sertifika var mi kontrol et
+    local existing_cert=false
+    local existing_domains=""
+    
+    if [ -d "/etc/letsencrypt/live/$cert_name" ]; then
+        existing_cert=true
+        print_warning "=================================================="
+        print_warning "  MEVCUT SERTIFIKA TESPIT EDILDI!"
+        print_warning "=================================================="
+        echo ""
+        print_info "Sertifika: /etc/letsencrypt/live/$cert_name/"
+        
+        # Mevcut sertifikadaki domain'leri oku
+        if [ -f "/etc/letsencrypt/live/$cert_name/fullchain.pem" ]; then
+            existing_domains=$(openssl x509 -in /etc/letsencrypt/live/$cert_name/fullchain.pem -text -noout 2>/dev/null | grep -A1 "Subject Alternative Name" | grep "DNS:" | sed 's/DNS://g' | tr ',' '\n' | sed 's/^ *//' | tr '\n' ' ')
+            if [ -n "$existing_domains" ]; then
+                echo ""
+                print_info "Mevcut sertifikadaki domain'ler:"
+                for d in $existing_domains; do
+                    echo "  * $d"
+                done
+            fi
+        fi
+        
+        echo ""
+        echo -e "${CYAN}Ne yapmak istersiniz?${NC}"
+        echo "1) Mevcut sertifikaya YENI subdomain'leri EKLE (ONERILEN)"
+        echo "2) YENI sertifika olustur (mevcut sertifika silinir!)"
+        echo "0) Iptal"
+        echo ""
+        
+        read -p "Seciminiz [1]: " cert_choice
+        cert_choice=${cert_choice:-1}
+        
+        case $cert_choice in
+            1)
+                print_info "Mevcut sertifika genisletilecek..."
+                # Mevcut domain'leri de ekle
+                for d in $existing_domains; do
+                    if [[ ! " ${domains[@]} " =~ " ${d} " ]]; then
+                        domains+=("$d")
+                        certbot_domains="$certbot_domains -d $d"
+                        print_info "  [+] Mevcut domain eklendi: $d"
+                    fi
+                done
+                ;;
+            2)
+                print_warning "YENI sertifika olusturulacak, mevcut sertifika silinecek!"
+                if ! ask_yes_no "Emin misiniz?"; then
+                    return 0
+                fi
+                # Mevcut sertifikayi sil
+                certbot delete --cert-name "$cert_name" --non-interactive 2>/dev/null || true
+                existing_cert=false
+                ;;
+            0)
+                return 0
+                ;;
+        esac
+    fi
+    
     if [ -z "$EMAIL" ]; then
         ask_input "E-posta adresinizi girin" EMAIL
     fi
@@ -9706,10 +9767,10 @@ create_ssl_multi_subdomain() {
         fi
         
         # Otomatik DNS challenge
-        create_ssl_dns_auto "$main_domain" "$certbot_domains" "$EMAIL" "$cert_name"
+        create_ssl_dns_auto "$main_domain" "$certbot_domains" "$EMAIL" "$cert_name" "$existing_cert"
     else
         # Manuel DNS challenge
-        create_ssl_dns_manual "$main_domain" "$certbot_domains" "$EMAIL" "$cert_name"
+        create_ssl_dns_manual "$main_domain" "$certbot_domains" "$EMAIL" "$cert_name" "$existing_cert"
     fi
     
     # Basarili ise her subdomain icin Nginx yapilandirmasi
@@ -10128,8 +10189,10 @@ create_ssl_dns_manual() {
     local certbot_domains=$2
     local email=$3
     local cert_name=$4  # Opsiyonel - belirtilmezse domain kullanilir
+    local expand_cert=$5  # true ise mevcut sertifikayi genislet
     
     [ -z "$cert_name" ] && cert_name="$domain"
+    [ -z "$expand_cert" ] && expand_cert="false"
     
     print_header "SSL - DNS-01 Challenge (Manuel)"
     
@@ -10157,7 +10220,15 @@ create_ssl_dns_manual() {
     read -p "Hazır olduğunuzda Enter'a basın..."
     
     # Certbot DNS challenge - cert-name ile
-    certbot certonly --manual --preferred-challenges dns --agree-tos --email $email --cert-name $cert_name $certbot_domains
+    local certbot_cmd="certbot certonly --manual --preferred-challenges dns --agree-tos --email $email --cert-name $cert_name"
+    
+    # Eger mevcut sertifika genisletilecekse --expand ekle
+    if [ "$expand_cert" = "true" ]; then
+        certbot_cmd="$certbot_cmd --expand"
+        print_info "Mevcut sertifika genisletiliyor..."
+    fi
+    
+    $certbot_cmd $certbot_domains
     
     if [ $? -eq 0 ]; then
         print_success "SSL sertifikası başarıyla oluşturuldu!"
@@ -10184,8 +10255,10 @@ create_ssl_dns_auto() {
     local certbot_domains=$2
     local email=$3
     local cert_name=$4  # Opsiyonel
+    local expand_cert=$5  # true ise mevcut sertifikayi genislet
     
     [ -z "$cert_name" ] && cert_name="$domain"
+    [ -z "$expand_cert" ] && expand_cert="false"
     
     print_header "SSL - DNS-01 Challenge (Otomatik - BIND9)"
     
@@ -10255,6 +10328,15 @@ create_ssl_dns_auto() {
     # Certbot çalıştır (LOKAL hook'lar ile)
     print_info "Certbot başlatılıyor..."
     print_info "Sertifika adi: $cert_name"
+    
+    # Eger mevcut sertifika genisletilecekse --expand ekle
+    if [ "$expand_cert" = "true" ]; then
+        print_info "Mevcut sertifika genisletiliyor (--expand)..."
+    fi
+    
+    local certbot_expand=""
+    [ "$expand_cert" = "true" ] && certbot_expand="--expand"
+    
     certbot certonly \
         --manual \
         --preferred-challenges dns \
@@ -10263,6 +10345,7 @@ create_ssl_dns_auto() {
         --agree-tos \
         --email $email \
         --cert-name $cert_name \
+        $certbot_expand \
         $certbot_domains \
         --non-interactive
     
