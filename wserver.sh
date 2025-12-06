@@ -10449,7 +10449,7 @@ create_ssl_dns_auto() {
         print_info "SSL sertifikası Web sunucusuna kurulacak..."
         
         # SSL dosyalarını Web sunucusuna kopyala ve kur
-        install_ssl_to_remote_nginx "$domain" "$web_server_ip" "$web_server_user" "$ssh_password" "$ssh_method"
+        install_ssl_to_remote_nginx "$domain" "$web_server_ip" "$web_server_user" "$ssh_password" "$ssh_method" "$cert_name"
     fi
 }
 
@@ -10886,17 +10886,20 @@ install_ssl_to_remote_nginx() {
     local remote_user=$3
     local remote_pass=$4
     local ssh_method=$5
+    local cert_name=$6  # Opsiyonel - belirtilmezse domain kullanilir
+    
+    [ -z "$cert_name" ] && cert_name="$domain"
     
     print_header "SSL Sertifikasını Web Sunucusuna Kurma"
     
     echo ""
-    print_info "Sertifika: /etc/letsencrypt/live/$domain/"
+    print_info "Sertifika: /etc/letsencrypt/live/$cert_name/"
     print_info "Hedef: $remote_user@$remote_ip"
     echo ""
     
     # Sertifika dizini var mı
-    if [ ! -d "/etc/letsencrypt/live/$domain" ]; then
-        print_error "Sertifika dizini bulunamadı!"
+    if [ ! -d "/etc/letsencrypt/live/$cert_name" ]; then
+        print_error "Sertifika dizini bulunamadı: /etc/letsencrypt/live/$cert_name"
         return 1
     fi
     
@@ -10993,8 +10996,8 @@ install_ssl_to_remote_nginx() {
         
         # Dizin oluştur
         $ssh_cmd $remote_user@$remote_ip "
-            mkdir -p /etc/letsencrypt/live/$domain 2>&1
-            chmod 755 /etc/letsencrypt/live/$domain 2>&1
+            mkdir -p /etc/letsencrypt/live/$cert_name 2>&1
+            chmod 755 /etc/letsencrypt/live/$cert_name 2>&1
             echo '[OK] Dizin oluşturuldu (root)'
         "
     else
@@ -11012,8 +11015,8 @@ install_ssl_to_remote_nginx() {
                     exit 1
                 fi
                 
-                echo '$remote_pass' | sudo -S mkdir -p /etc/letsencrypt/live/$domain
-                echo '$remote_pass' | sudo -S chmod 755 /etc/letsencrypt/live/$domain
+                echo '$remote_pass' | sudo -S mkdir -p /etc/letsencrypt/live/$cert_name
+                echo '$remote_pass' | sudo -S chmod 755 /etc/letsencrypt/live/$cert_name
                 echo '[OK] Dizin oluşturuldu'
             "
         else
@@ -11029,8 +11032,8 @@ install_ssl_to_remote_nginx() {
             fi
             
             $ssh_cmd $remote_user@$remote_ip "
-                sudo mkdir -p /etc/letsencrypt/live/$domain
-                sudo chmod 755 /etc/letsencrypt/live/$domain
+                sudo mkdir -p /etc/letsencrypt/live/$cert_name
+                sudo chmod 755 /etc/letsencrypt/live/$cert_name
                 echo '[OK] Dizin oluşturuldu (sudo NOPASSWD)'
             "
         fi
@@ -11059,27 +11062,27 @@ install_ssl_to_remote_nginx() {
     
     if [ "$remote_user" = "root" ]; then
         # Root - direkt /etc/letsencrypt'e kopyala
-        $scp_cmd -r /etc/letsencrypt/live/$domain/* $remote_user@$remote_ip:/etc/letsencrypt/live/$domain/
+        $scp_cmd -r /etc/letsencrypt/live/$cert_name/* $remote_user@$remote_ip:/etc/letsencrypt/live/$cert_name/
     else
         # Root değil - önce home'a, sonra sudo ile taşı
         print_info "Home dizinine kopyalanıyor, sonra sudo ile taşınacak..."
         
-        $scp_cmd -r /etc/letsencrypt/live/$domain/* $remote_user@$remote_ip:/tmp/ssl-$domain/
+        $scp_cmd -r /etc/letsencrypt/live/$cert_name/* $remote_user@$remote_ip:/tmp/ssl-$cert_name/
         
         if [ "$ssh_method" = "2" ] && [ -n "$remote_pass" ]; then
             # Şifre ile sudo
             $ssh_cmd $remote_user@$remote_ip "
-                echo '$remote_pass' | sudo -S cp -r /tmp/ssl-$domain/* /etc/letsencrypt/live/$domain/
-                echo '$remote_pass' | sudo -S chmod 644 /etc/letsencrypt/live/$domain/*
-                rm -rf /tmp/ssl-$domain
+                echo '$remote_pass' | sudo -S cp -r /tmp/ssl-$cert_name/* /etc/letsencrypt/live/$cert_name/
+                echo '$remote_pass' | sudo -S chmod 644 /etc/letsencrypt/live/$cert_name/*
+                rm -rf /tmp/ssl-$cert_name
                 echo '[OK] Sertifikalar taşındı'
             "
         else
             # Key ile sudo
             $ssh_cmd $remote_user@$remote_ip "
-                sudo cp -r /tmp/ssl-$domain/* /etc/letsencrypt/live/$domain/
-                sudo chmod 644 /etc/letsencrypt/live/$domain/*
-                rm -rf /tmp/ssl-$domain
+                sudo cp -r /tmp/ssl-$cert_name/* /etc/letsencrypt/live/$cert_name/
+                sudo chmod 644 /etc/letsencrypt/live/$cert_name/*
+                rm -rf /tmp/ssl-$cert_name
                 echo '[OK] Sertifikalar taşındı'
             "
         fi
@@ -11105,8 +11108,12 @@ install_ssl_to_remote_nginx() {
             # SSL ekle
             if ! grep -q 'ssl_certificate' \"\$NGINX_CONFIG\"; then
                 sed -i '/listen 80;/a\    listen 443 ssl;' \"\$NGINX_CONFIG\"
-                echo '    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;' >> \"\$NGINX_CONFIG\"
-                echo '    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;' >> \"\$NGINX_CONFIG\"
+                echo '    ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;' >> \"\$NGINX_CONFIG\"
+                echo '    ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;' >> \"\$NGINX_CONFIG\"
+            else
+                # Mevcut SSL satirlarini guncelle
+                sed -i \"s|ssl_certificate .*fullchain.*|ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;|\" \"\$NGINX_CONFIG\"
+                sed -i \"s|ssl_certificate_key .*privkey.*|ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;|\" \"\$NGINX_CONFIG\"
             fi
             
             nginx -t && nginx -s reload
@@ -11130,8 +11137,12 @@ install_ssl_to_remote_nginx() {
                 # Nginx config güncelle
                 if ! grep -q 'ssl_certificate' \"\$NGINX_CONFIG\" 2>/dev/null; then
                     echo '$remote_pass' | sudo -S sed -i '/listen 80;/a\    listen 443 ssl;' \"\$NGINX_CONFIG\"
-                    echo '    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;' | sudo tee -a \"\$NGINX_CONFIG\" >/dev/null
-                    echo '    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;' | sudo tee -a \"\$NGINX_CONFIG\" >/dev/null
+                    echo '    ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;' | sudo tee -a \"\$NGINX_CONFIG\" >/dev/null
+                    echo '    ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;' | sudo tee -a \"\$NGINX_CONFIG\" >/dev/null
+                else
+                    # Mevcut SSL satirlarini guncelle
+                    echo '$remote_pass' | sudo -S sed -i \"s|ssl_certificate .*fullchain.*|ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;|\" \"\$NGINX_CONFIG\"
+                    echo '$remote_pass' | sudo -S sed -i \"s|ssl_certificate_key .*privkey.*|ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;|\" \"\$NGINX_CONFIG\"
                 fi
                 
                 # Nginx reload
@@ -11152,7 +11163,19 @@ install_ssl_to_remote_nginx() {
             fi
             
             $ssh_cmd $remote_user@$remote_ip "
-                sudo sed -i '/listen 80;/a\    listen 443 ssl;' /etc/nginx/sites-available/$domain
+                NGINX_CONFIG=\"/etc/nginx/sites-available/$domain\"
+                
+                # SSL ekle
+                if ! sudo grep -q 'ssl_certificate' \"\$NGINX_CONFIG\" 2>/dev/null; then
+                    sudo sed -i '/listen 80;/a\    listen 443 ssl;' \"\$NGINX_CONFIG\"
+                    echo '    ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;' | sudo tee -a \"\$NGINX_CONFIG\" >/dev/null
+                    echo '    ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;' | sudo tee -a \"\$NGINX_CONFIG\" >/dev/null
+                else
+                    # Mevcut SSL satirlarini guncelle
+                    sudo sed -i \"s|ssl_certificate .*fullchain.*|ssl_certificate /etc/letsencrypt/live/$cert_name/fullchain.pem;|\" \"\$NGINX_CONFIG\"
+                    sudo sed -i \"s|ssl_certificate_key .*privkey.*|ssl_certificate_key /etc/letsencrypt/live/$cert_name/privkey.pem;|\" \"\$NGINX_CONFIG\"
+                fi
+                
                 sudo nginx -t && sudo nginx -s reload
                 echo '[OK] Nginx yapılandırıldı'
             "
